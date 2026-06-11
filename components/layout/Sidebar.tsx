@@ -30,7 +30,7 @@ const navGroups = [
         ),
       },
       {
-        label: "수행기관 관리",
+        label: "기관 관리",
         href: "/institutions",
         icon: (
           <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
@@ -39,17 +39,7 @@ const navGroups = [
         ),
       },
       {
-        label: "기업 관리",
-        href: "/companies",
-        icon: (
-          <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
-            <path d="M6 6V5a3 3 0 0 1 3-3h2a3 3 0 0 1 3 3v1h2a2 2 0 0 1 2 2v3.57A22.952 22.952 0 0 1 10 13a22.95 22.95 0 0 1-8-1.43V8a2 2 0 0 1 2-2h2zm2-1a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1H8V5zm1 5a1 1 0 0 1 1-1h.01a1 1 0 1 1 0 2H10a1 1 0 0 1-1-1z" />
-            <path d="M2 13.692V16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2.308A24.974 24.974 0 0 1 10 15a24.98 24.98 0 0 1-8-1.308z" />
-          </svg>
-        ),
-      },
-      {
-        label: "기업분류 관리",
+        label: "유형별 수수료 기준",
         href: "/company-class",
         icon: (
           <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
@@ -175,6 +165,19 @@ const navGroups = [
             <path
               fillRule="evenodd"
               d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16zm1-12a1 1 0 1 0-2 0v4a1 1 0 0 0 .293.707l2.828 2.829a1 1 0 1 0 1.415-1.415L11 9.586V6z"
+              clipRule="evenodd"
+            />
+          </svg>
+        ),
+      },
+      {
+        label: "전체 변경이력",
+        href: "/audit-log",
+        icon: (
+          <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+            <path
+              fillRule="evenodd"
+              d="M3 4a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1zm0 4a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1zm0 4a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1zm0 4a1 1 0 0 1 1-1h4a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1z"
               clipRule="evenodd"
             />
           </svg>
