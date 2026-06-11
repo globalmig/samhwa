@@ -1,6 +1,6 @@
 import StatCard from "@/components/dashboard/StatCard";
 import FeeTable from "@/components/dashboard/FeeTable";
-import { summary, projectFeeRows, institutionRows, agencyBreakdown } from "@/lib/mock";
+import { summary, projectFeeRows, institutionSummaryRows, agencyBreakdown, type InstitutionSummaryRow } from "@/lib/mock";
 
 function fmt(n: number) {
   if (n >= 100_000_000) return `${(n / 100_000_000).toFixed(1)}억`;
@@ -156,7 +156,7 @@ export default function DashboardPage() {
           <div className="bg-white rounded-xl border border-slate-200 p-5 flex-1">
             <h2 className="text-sm font-semibold text-slate-800 mb-4">주요 수행기관 현황</h2>
             <div className="space-y-3">
-              {institutionRows.map((inst) => (
+              {institutionSummaryRows.map((inst: InstitutionSummaryRow) => (
                 <div
                   key={inst.name}
                   className="flex items-start justify-between py-2.5 border-b border-slate-50 last:border-0"

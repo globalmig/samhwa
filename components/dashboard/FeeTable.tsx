@@ -73,13 +73,13 @@ export default function FeeTable({ rows }: FeeTableProps) {
                   {row.termYear}년 / {row.termNumber}연차
                 </td>
                 <td className="py-3 px-4 text-center text-xs text-slate-600">
-                  {row.institutionCount}개
+                  {row.memberCount}개
                 </td>
                 <td className="py-3 px-4 text-right text-xs text-slate-700 whitespace-nowrap">
                   {fmt(row.totalBudget)}
                 </td>
                 <td className="py-3 px-4 text-right text-xs text-slate-700 whitespace-nowrap">
-                  {fmt(row.standardFee)}
+                  {fmt(row.calculatedFee)}
                 </td>
                 <td className="py-3 px-4 text-right text-xs font-medium text-slate-800 whitespace-nowrap">
                   {fmt(row.billedFee)}
