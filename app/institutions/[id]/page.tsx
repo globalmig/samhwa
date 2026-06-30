@@ -1,24 +1,10 @@
 "use client";
 
-import React, { use, useState, useMemo } from "react";
+import React, { use } from "react";
 import Link from "next/link";
-import { FiEdit2, FiCheck, FiX } from "react-icons/fi";
-import { useStore, updateInstitution, updateTermFee } from "@/lib/store";
-import { type InstitutionType } from "@/lib/mock";
-import { fmtWon, fmtDate } from "@/lib/utils";
+import { useStore } from "@/lib/store";
+import { fmtWon } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
-
-const TYPE_LIST: InstitutionType[] = ["대기업", "중견기업", "중소기업", "스타트업", "대학", "정부출연연구소", "공공기관"];
-
-const TYPE_COLOR: Record<string, "blue" | "purple" | "green" | "amber" | "slate" | "red"> = {
-  대기업: "red",
-  중견기업: "purple",
-  중소기업: "blue",
-  스타트업: "amber",
-  대학: "green",
-  정부출연연구소: "slate",
-  공공기관: "slate",
-};
 
 const ROLE_MAP = {
   LEAD: { label: "주관기관", color: "blue" as const },
@@ -32,25 +18,30 @@ const ACTION_MAP = {
 };
 
 const FEE_STATUS_MAP = {
-  BILLED: { label: "청구완료", color: "green" as const },
-  CONFIRMED: { label: "확정", color: "blue" as const },
-  DRAFT: { label: "초안", color: "slate" as const },
+  BILLED:    { label: "청구완료", color: "green"  as const },
+  CONFIRMED: { label: "확정",    color: "blue"   as const },
+  DRAFT:     { label: "초안",    color: "slate"  as const },
+  SCHEDULED: { label: "예정",    color: "amber"  as const },
 };
 
-const selectCls = "text-sm border border-slate-200 rounded-lg px-3 py-1.5 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400";
-
-// 기관유형 → companyClass 이름 매핑 (fees 페이지와 동일)
-const TYPE_TO_CLASS: Record<string, string> = {
-  대기업: "대기업", 중견기업: "중견기업", 중소기업: "중소기업", 스타트업: "스타트업",
-  대학: "대학/연구소", 정부출연연구소: "대학/연구소", 공공기관: "대학/연구소",
+type Classification = {
+  agencyName: string;
+  agencyShortName: string;
+  category1: string;
+  category2: string;
 };
+
+function normalizeClassification(raw?: string | null): Pick<Classification, "category1" | "category2"> {
+  const value = raw ?? "일반";
+  if (value.includes("자율")) return { category1: "자율성트랙", category2: "자율성트랙" };
+  if (value.includes("최우수") || value.includes("(S)") || value === "S") return { category1: "S", category2: "최우수" };
+  if (value.includes("우수") || /[ABC]/.test(value)) return { category1: "A~C", category2: "우수" };
+  return { category1: "일반", category2: "일반" };
+}
 
 export default function InstitutionDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const { institutions, projects, projectMembers, termFees, auditLog, companyClasses } = useStore();
-
-  const [typeEditing, setTypeEditing] = useState(false);
-  const [newType, setNewType] = useState<InstitutionType>("중소기업");
+  const { institutions, projects, projectMembers, termFees, auditLog, fundingAgencies } = useStore();
 
   const inst = institutions.find((i) => i.id === id);
 
@@ -68,58 +59,34 @@ export default function InstitutionDetailPage({ params }: { params: Promise<{ id
   const participantProjects = myMemberships.filter((m) => m.role === "PARTICIPANT");
   const relatedFees = termFees.filter((f) => f.institutionId === id);
   const history = auditLog.filter((e) => e.entityType === "institution" && e.entityId === id);
+  const projectsById = new Map(projects.map((project) => [project.id, project]));
+  const projectsByNumber = new Map(projects.map((project) => [project.projectNumber, project]));
+  const agenciesById = new Map(fundingAgencies.map((agency) => [agency.id, agency]));
 
-  // 유형 변경 이력만 추출
-  const typeHistory = useMemo(
-    () => history.filter((e) => e.changedFields?.type),
-    [history]
-  );
+  function getClassification(projectId: string, rawGrade?: string | null): Classification {
+    const project = projectsById.get(projectId);
+    const agency = project ? agenciesById.get(project.agencyId) : undefined;
+    const classification = normalizeClassification(rawGrade);
+    return {
+      agencyName: agency?.name ?? project?.agency ?? "미지정 전담기관",
+      agencyShortName: agency?.shortName ?? project?.agency ?? "미지정",
+      category1: classification.category1,
+      category2: classification.category2,
+    };
+  }
 
-  // 연차별로 사용된 기관 유형 (TermFee 기준)
-  const termTypeRows = useMemo(
-    () =>
-      [...relatedFees]
-        .sort((a, b) => a.termYear - b.termYear || a.termNumber - b.termNumber)
-        .map((f) => ({ termYear: f.termYear, termNumber: f.termNumber, institutionType: f.institutionType, feeRate: f.feeRate, projectNumber: f.projectNumber })),
-    [relatedFees]
-  );
+  function getFeeClassification(projectNumber: string): Classification {
+    const project = projectsByNumber.get(projectNumber);
+    const member = myMemberships.find((m) => m.projectNumber === projectNumber);
+    if (!project) {
+      const classification = normalizeClassification(member?.institutionGrade);
+      return { agencyName: "미지정 전담기관", agencyShortName: "미지정", ...classification };
+    }
+    return getClassification(project.id, member?.institutionGrade);
+  }
 
   const totalCalculatedFee = relatedFees.reduce((s, f) => s + f.calculatedFee, 0);
   const totalAppliedFee = relatedFees.reduce((s, f) => s + f.appliedFee, 0);
-
-  function startTypeEdit() {
-    if (!inst) return;
-    setNewType(inst.type as InstitutionType);
-    setTypeEditing(true);
-  }
-
-  function saveTypeChange() {
-    updateInstitution(id, { type: newType });
-
-    // 요율 맵 빌드
-    const rateMap: Record<string, number> = {};
-    companyClasses.forEach((c) => { rateMap[c.name] = c.feeRate; });
-    const newRate = rateMap[TYPE_TO_CLASS[newType] ?? newType];
-
-    // 현재 연차 이상(현재·미래)이면서 미청구(DRAFT·CONFIRMED)인 연차만 갱신
-    // 과거 연차(termNumber < project.currentTerm)는 이미 합의된 금액이므로 변경 안 함
-    relatedFees
-      .filter((f) => {
-        if (f.status === "BILLED") return false;
-        const proj = projects.find((p) => p.projectNumber === f.projectNumber);
-        return proj ? f.termNumber >= proj.currentTerm : false;
-      })
-      .forEach((f) => {
-        const rate = newRate ?? f.feeRate;
-        updateTermFee(f.id, {
-          institutionType: newType,
-          feeRate: rate,
-          calculatedFee: Math.round((f.budget * rate) / 100),
-        });
-      });
-
-    setTypeEditing(false);
-  }
 
   return (
     <div className="space-y-4">
@@ -158,101 +125,59 @@ export default function InstitutionDetailPage({ params }: { params: Promise<{ id
         </div>
       </div>
 
-      {/* 기관 유형 관리 */}
+      {/* 과제별 구분 내용 */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
           <div>
-            <h3 className="text-sm font-semibold text-slate-800">기관 유형 관리</h3>
-            <p className="text-xs text-slate-400 mt-0.5">유형에 따라 수수료율이 결정됩니다. 변경 시 이력이 자동 기록됩니다.</p>
+            <h3 className="text-sm font-semibold text-slate-800">과제별 구분 내용</h3>
+            <p className="text-xs text-slate-400 mt-0.5">기관 고정 유형이 아니라, 참여한 과제의 전담기관 기준으로 구분1/구분2를 확인합니다.</p>
           </div>
         </div>
 
-        {/* 현재 유형 + 변경 UI */}
-        <div className="px-5 py-4 flex items-center gap-4 border-b border-slate-100">
-          <div className="text-xs text-slate-400 w-20 shrink-0">현재 유형</div>
-          {typeEditing ? (
-            <div className="flex items-center gap-2">
-              <select
-                value={newType}
-                onChange={(e) => setNewType(e.target.value as InstitutionType)}
-                className={selectCls}
-                autoFocus
-              >
-                {TYPE_LIST.map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
-              <button
-                onClick={saveTypeChange}
-                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
-              >
-                <FiCheck size={13} /> 저장
-              </button>
-              <button
-                onClick={() => setTypeEditing(false)}
-                className="flex items-center gap-1 px-3 py-1.5 text-xs text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
-              >
-                <FiX size={13} /> 취소
-              </button>
-            </div>
+        <div className="overflow-x-auto">
+          {myMemberships.length === 0 ? (
+            <div className="px-5 py-8 text-center text-sm text-slate-400">참여 과제 구분 내용이 없습니다.</div>
           ) : (
-            <div className="flex items-center gap-3">
-              <StatusBadge label={inst.type} color={TYPE_COLOR[inst.type] ?? "slate"} />
-              <button
-                onClick={startTypeEdit}
-                className="flex items-center gap-1 px-3 py-1.5 text-xs text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
-              >
-                <FiEdit2 size={12} /> 유형 변경
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* 연차별 적용 유형 */}
-        {termTypeRows.length > 0 && (
-          <div className="px-5 py-4 border-b border-slate-100">
-            <p className="text-xs font-medium text-slate-600 mb-3">연차별 수수료 산정 시 적용 유형</p>
-            <div className="flex flex-wrap gap-2">
-              {termTypeRows.map((r, i) => (
-                <div key={i} className="flex items-center gap-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
-                  <span className="text-slate-500">{r.termYear}년 {r.termNumber}연차</span>
-                  <span className="text-slate-300">·</span>
-                  <StatusBadge label={r.institutionType} color={TYPE_COLOR[r.institutionType] ?? "slate"} />
-                  <span className="text-slate-300">·</span>
-                  <span className="text-blue-700 font-medium">{r.feeRate}%</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* 유형 변경 이력 */}
-        <div className="px-5 py-4">
-          <p className="text-xs font-medium text-slate-600 mb-3">유형 변경 이력</p>
-          {typeHistory.length === 0 ? (
-            <p className="text-xs text-slate-400">유형 변경 이력이 없습니다</p>
-          ) : (
-            <table className="w-full text-xs">
+            <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-slate-100 text-slate-500">
-                  <th className="text-left pb-2 pr-4 font-medium whitespace-nowrap">변경 일시</th>
-                  <th className="text-left pb-2 pr-4 font-medium whitespace-nowrap">이전 유형</th>
-                  <th className="text-left pb-2 pr-4 font-medium whitespace-nowrap">변경 후</th>
-                  <th className="text-left pb-2 font-medium whitespace-nowrap">수행자</th>
+                <tr className="bg-slate-50 border-b border-slate-100">
+                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-500">과제번호</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-500">전담기관</th>
+                  <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">구분1</th>
+                  <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">구분2</th>
+                  <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">역할</th>
+                  <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">배정 예산</th>
+                  <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">요율</th>
+                  <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">산정 수수료</th>
                 </tr>
               </thead>
               <tbody>
-                {typeHistory.map((e) => {
-                  const before = e.changedFields?.type?.before as string | undefined;
-                  const after  = e.changedFields?.type?.after  as string | undefined;
+                {myMemberships.map((m) => {
+                  const classification = getClassification(m.projectId, m.institutionGrade);
+                  const project = projectsById.get(m.projectId);
                   return (
-                    <tr key={e.id} className="border-b border-slate-50 last:border-0">
-                      <td className="py-2 pr-4 font-mono text-slate-500 whitespace-nowrap">{e.performedAt}</td>
-                      <td className="py-2 pr-4">
-                        {before ? <StatusBadge label={before} color={TYPE_COLOR[before] ?? "slate"} /> : <span className="text-slate-300">-</span>}
+                    <tr key={m.id} className="border-b border-slate-50 hover:bg-slate-50">
+                      <td className="px-4 py-3">
+                        {project ? (
+                          <Link href={`/projects/${project.id}`} className="font-mono text-xs text-blue-600 hover:underline">{m.projectNumber}</Link>
+                        ) : (
+                          <span className="font-mono text-xs text-slate-500">{m.projectNumber}</span>
+                        )}
                       </td>
-                      <td className="py-2 pr-4">
-                        {after ? <StatusBadge label={after} color={TYPE_COLOR[after] ?? "slate"} /> : <span className="text-slate-300">-</span>}
+                      <td className="px-4 py-3">
+                        <p className="font-medium text-slate-700">{classification.agencyShortName}</p>
+                        <p className="text-xs text-slate-400 mt-0.5">{classification.agencyName}</p>
                       </td>
-                      <td className="py-2 text-slate-700">{e.performedBy}</td>
+                      <td className="px-4 py-3 text-center">
+                        <span className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700">{classification.category1}</span>
+                      </td>
+                      <td className="px-4 py-3 text-center text-sm text-slate-700">{classification.category2}</td>
+                      <td className="px-4 py-3 text-center">
+                        <StatusBadge label={ROLE_MAP[m.role].label} color={ROLE_MAP[m.role].color} />
+                      </td>
+                      <td className="px-4 py-3 text-right text-sm text-slate-700">{fmtWon(m.budget)}</td>
+                      <td className="px-4 py-3 text-right text-xs text-slate-600">{m.feeRate}%</td>
+                      <td className="px-4 py-3 text-right font-medium text-slate-800">{fmtWon(m.calculatedFee)}</td>
                     </tr>
                   );
                 })}
@@ -338,7 +263,8 @@ export default function InstitutionDetailPage({ params }: { params: Promise<{ id
               <tr className="bg-slate-50 border-b border-slate-100">
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500">과제번호</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500">연차</th>
-                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">적용 유형</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">구분1</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">구분2</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-slate-500">예산</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-slate-500">요율</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-slate-500">산정액</th>
@@ -347,22 +273,26 @@ export default function InstitutionDetailPage({ params }: { params: Promise<{ id
               </tr>
             </thead>
             <tbody>
-              {relatedFees.map((f) => (
-                <tr key={f.id} className="border-b border-slate-50 hover:bg-slate-50">
-                  <td className="px-4 py-3 font-mono text-xs text-slate-600">{f.projectNumber}</td>
-                  <td className="px-4 py-3 text-center text-xs text-slate-600">{f.termYear}년 {f.termNumber}연차</td>
-                  <td className="px-4 py-3 text-center">
-                    <StatusBadge label={f.institutionType} color={TYPE_COLOR[f.institutionType] ?? "slate"} />
-                  </td>
-                  <td className="px-4 py-3 text-right text-xs text-slate-600">{fmtWon(f.budget)}</td>
-                  <td className="px-4 py-3 text-right text-xs text-slate-600">{f.feeRate}%</td>
-                  <td className="px-4 py-3 text-right text-sm text-slate-700">{fmtWon(f.calculatedFee)}</td>
-                  <td className="px-4 py-3 text-right font-medium text-slate-800">{fmtWon(f.appliedFee)}</td>
-                  <td className="px-4 py-3 text-center">
-                    <StatusBadge label={FEE_STATUS_MAP[f.status].label} color={FEE_STATUS_MAP[f.status].color} />
-                  </td>
-                </tr>
-              ))}
+              {relatedFees.map((f) => {
+                const classification = getFeeClassification(f.projectNumber);
+                return (
+                  <tr key={f.id} className="border-b border-slate-50 hover:bg-slate-50">
+                    <td className="px-4 py-3 font-mono text-xs text-slate-600">{f.projectNumber}</td>
+                    <td className="px-4 py-3 text-center text-xs text-slate-600">{f.termYear}년 {f.termNumber}연차</td>
+                    <td className="px-4 py-3 text-center">
+                      <span className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700">{classification.category1}</span>
+                    </td>
+                    <td className="px-4 py-3 text-center text-sm text-slate-700">{classification.category2}</td>
+                    <td className="px-4 py-3 text-right text-xs text-slate-600">{fmtWon(f.budget)}</td>
+                    <td className="px-4 py-3 text-right text-xs text-slate-600">{f.feeRate}%</td>
+                    <td className="px-4 py-3 text-right text-sm text-slate-700">{fmtWon(f.calculatedFee)}</td>
+                    <td className="px-4 py-3 text-right font-medium text-slate-800">{fmtWon(f.appliedFee)}</td>
+                    <td className="px-4 py-3 text-center">
+                      <StatusBadge label={FEE_STATUS_MAP[f.status].label} color={FEE_STATUS_MAP[f.status].color} />
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
