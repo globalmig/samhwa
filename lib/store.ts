@@ -1,30 +1,40 @@
 import { useSyncExternalStore } from "react";
+import { getCurrentUser } from "./auth";
+import { calcTermFee, resolvePolicy, normalizeGrade, type CalcMember } from "./fee-calculator";
 import {
   institutions as initialInstitutions,
   projects as initialProjects,
   projectMembers as initialProjectMembers,
-  companyClasses as initialClasses,
   feePolicies as initialFeePolicies,
   termFees as initialTermFees,
+  termFeeCalcs as initialTermFeeCalcs,
   unclaimedFees as initialUnclaimed,
   receivables as initialReceivables,
   settlements as initialSettlements,
   taxInvoices as initialInvoices,
   emailDispatches as initialEmails,
   systemUsers as initialUsers,
+  projectIssues as initialIssues,
+  fundingAgencies as initialFundingAgencies,
   type Institution,
   type Project,
   type ProjectMember,
-  type CompanyClass,
   type FeePolicy,
   type TermFee,
+  type TermFeeCalc,
+  type FeeOverride,
   type UnclaimedFee,
   type Receivable,
   type Settlement,
   type TaxInvoice,
   type EmailDispatch,
   type SystemUser,
+  type ProjectIssue,
+  type FundingAgency,
+  type AgencyGuideTab,
 } from "./mock";
+
+export type { TermFeeCalc, FeeOverride };
 
 // ============================================================
 // Audit
@@ -41,11 +51,13 @@ export interface AuditEntry {
   performedAt: string;
 }
 
+export { type FundingAgency };
+
 export const ENTITY_NAMES: Record<string, string> = {
+  fundingAgency: "전담기관",
   institution: "기관",
   project: "과제",
   projectMember: "참여기관",
-  companyClass: "기관유형수수료",
   feePolicy: "수수료정책",
   termFee: "연차수수료",
   unclaimed: "미청구액",
@@ -53,6 +65,7 @@ export const ENTITY_NAMES: Record<string, string> = {
   settlement: "정산",
   taxInvoice: "세금계산서",
   user: "사용자",
+  projectIssue: "이슈/메모",
 };
 
 // ============================================================
@@ -60,35 +73,158 @@ export const ENTITY_NAMES: Record<string, string> = {
 // ============================================================
 
 interface StoreState {
+  fundingAgencies: FundingAgency[];
   institutions: Institution[];
   projects: Project[];
   projectMembers: ProjectMember[];
-  companyClasses: CompanyClass[];
   feePolicies: FeePolicy[];
   termFees: TermFee[];
+  termFeeCalcs: TermFeeCalc[];
   unclaimedFees: UnclaimedFee[];
   receivables: Receivable[];
   settlements: Settlement[];
   taxInvoices: TaxInvoice[];
   emailDispatches: EmailDispatch[];
   users: SystemUser[];
+  projectIssues: ProjectIssue[];
   auditLog: AuditEntry[];
+  agencyGuides: Record<string, AgencyGuideTab[]>;
 }
 
+const INITIAL_AUDIT_LOG: AuditEntry[] = [
+  {
+    id: "audit-init-001",
+    entityType: "project",
+    entityId: "p-001",
+    entityLabel: "초분산 탄성 에너지 저장 소재 기반 인공근육 시스템 개발",
+    action: "CREATE",
+    performedBy: "김관리",
+    performedAt: "2024-03-05 09:12:00",
+  },
+  {
+    id: "audit-init-002",
+    entityType: "project",
+    entityId: "p-002",
+    entityLabel: "고성능 전고체 배터리 핵심소재 개발 및 실증",
+    action: "CREATE",
+    performedBy: "김관리",
+    performedAt: "2024-03-10 10:30:00",
+  },
+  {
+    id: "audit-init-003",
+    entityType: "projectMember",
+    entityId: "pm-001",
+    entityLabel: "삼화전자(주) — RS-2024-00214837",
+    action: "UPDATE",
+    changedFields: {
+      institutionGrade: { before: "일반", after: "A~C" },
+      budget: { before: 450000000, after: 520000000 },
+    },
+    performedBy: "이회계",
+    performedAt: "2024-04-02 14:05:00",
+  },
+  {
+    id: "audit-init-004",
+    entityType: "termFee",
+    entityId: "tf-p001-2024-1",
+    entityLabel: "RS-2024-00214837 · 2024년 1연차",
+    action: "UPDATE",
+    changedFields: {
+      status: { before: "DRAFT", after: "CONFIRMED" },
+      appliedFee: { before: 0, after: 18200000 },
+    },
+    performedBy: "김관리",
+    performedAt: "2024-05-15 11:20:00",
+  },
+  {
+    id: "audit-init-005",
+    entityType: "taxInvoice",
+    entityId: "inv-2024-001",
+    entityLabel: "RS-2024-00214837 · 2024년 1연차 세금계산서",
+    action: "CREATE",
+    performedBy: "김관리",
+    performedAt: "2024-05-20 09:45:00",
+  },
+  {
+    id: "audit-init-006",
+    entityType: "receivable",
+    entityId: "rv-2024-001",
+    entityLabel: "RS-2024-00214837 · 2024년 1연차 수금",
+    action: "UPDATE",
+    changedFields: {
+      paidAmount: { before: 0, after: 10010000 },
+      status: { before: "PENDING", after: "PARTIAL" },
+    },
+    performedBy: "이회계",
+    performedAt: "2024-07-08 13:30:00",
+  },
+  {
+    id: "audit-init-007",
+    entityType: "projectIssue",
+    entityId: "pi-001",
+    entityLabel: "RS-2024-00214837 이슈 등록",
+    action: "CREATE",
+    performedBy: "김관리",
+    performedAt: "2024-11-20 14:30:00",
+  },
+  {
+    id: "audit-init-008",
+    entityType: "project",
+    entityId: "p-001",
+    entityLabel: "초분산 탄성 에너지 저장 소재 기반 인공근육 시스템 개발",
+    action: "UPDATE",
+    changedFields: {
+      status: { before: "ACTIVE", after: "ACTIVE" },
+      currentTerm: { before: 1, after: 2 },
+    },
+    performedBy: "김관리",
+    performedAt: "2025-01-10 10:00:00",
+  },
+  {
+    id: "audit-init-009",
+    entityType: "projectIssue",
+    entityId: "pi-003",
+    entityLabel: "RS-2024-00198321 이슈",
+    action: "UPDATE",
+    changedFields: {
+      status: { before: "OPEN", after: "IN_PROGRESS" },
+      priority: { before: "HIGH", after: "HIGH" },
+    },
+    performedBy: "이회계",
+    performedAt: "2025-02-14 16:55:00",
+  },
+  {
+    id: "audit-init-010",
+    entityType: "unclaimed",
+    entityId: "unc-001",
+    entityLabel: "RS-2024-00214837 · 2024년 1연차 미청구액",
+    action: "UPDATE",
+    changedFields: {
+      carriedOver: { before: false, after: true },
+      status: { before: "PENDING", after: "CARRIED_OVER" },
+    },
+    performedBy: "김관리",
+    performedAt: "2025-03-03 09:20:00",
+  },
+];
+
 let _state: StoreState = {
+  fundingAgencies: [...initialFundingAgencies],
   institutions: [...initialInstitutions],
   projects: [...initialProjects],
+  projectIssues: [...initialIssues],
   projectMembers: [...initialProjectMembers],
-  companyClasses: [...initialClasses],
   feePolicies: [...initialFeePolicies],
   termFees: [...initialTermFees],
+  termFeeCalcs: [...initialTermFeeCalcs],
   unclaimedFees: [...initialUnclaimed],
   receivables: [...initialReceivables],
   settlements: [...initialSettlements],
   taxInvoices: [...initialInvoices],
   emailDispatches: [...initialEmails],
   users: [...initialUsers],
-  auditLog: [],
+  auditLog: [...INITIAL_AUDIT_LOG],
+  agencyGuides: {},
 };
 
 const _listeners = new Set<() => void>();
@@ -138,10 +274,39 @@ function record(
     entityLabel,
     action,
     changedFields,
-    performedBy: "김관리",
+    performedBy: getCurrentUser()?.name ?? "시스템",
     performedAt: new Date().toISOString().replace("T", " ").slice(0, 19),
   };
   _state = { ..._state, auditLog: [entry, ..._state.auditLog] };
+}
+
+// ============================================================
+// FUNDING AGENCIES (전담기관)
+// ============================================================
+
+export function addFundingAgency(data: Omit<FundingAgency, "id">): FundingAgency {
+  const item: FundingAgency = { ...data, id: genId("fa") };
+  _state = { ..._state, fundingAgencies: [..._state.fundingAgencies, item] };
+  record("fundingAgency", item.id, item.name, "CREATE");
+  notify();
+  return item;
+}
+
+export function updateFundingAgency(id: string, data: Partial<FundingAgency>): void {
+  const before = _state.fundingAgencies.find((a) => a.id === id);
+  if (!before) return;
+  const after = { ...before, ...data };
+  _state = { ..._state, fundingAgencies: _state.fundingAgencies.map((a) => (a.id === id ? after : a)) };
+  record("fundingAgency", id, after.name, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
+  notify();
+}
+
+export function deleteFundingAgency(id: string): void {
+  const item = _state.fundingAgencies.find((a) => a.id === id);
+  if (!item) return;
+  _state = { ..._state, fundingAgencies: _state.fundingAgencies.filter((a) => a.id !== id) };
+  record("fundingAgency", id, item.name, "DELETE");
+  notify();
 }
 
 // ============================================================
@@ -236,28 +401,7 @@ export function deleteProjectMember(id: string): void {
 }
 
 // ============================================================
-// COMPANY CLASSES (기관 유형별 수수료율)
-// ============================================================
-
-export function addCompanyClass(data: Omit<CompanyClass, "id">): CompanyClass {
-  const item: CompanyClass = { ...data, id: genId("cls") };
-  _state = { ..._state, companyClasses: [..._state.companyClasses, item] };
-  record("companyClass", item.id, item.name, "CREATE");
-  notify();
-  return item;
-}
-
-export function updateCompanyClass(id: string, data: Partial<CompanyClass>): void {
-  const before = _state.companyClasses.find((c) => c.id === id);
-  if (!before) return;
-  const after = { ...before, ...data };
-  _state = { ..._state, companyClasses: _state.companyClasses.map((c) => (c.id === id ? after : c)) };
-  record("companyClass", id, after.name, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
-  notify();
-}
-
-// ============================================================
-// FEE POLICIES (수수료 정책 엔진)
+// FEE POLICIES (수수료 기준 정책 — 버전 이력 포함)
 // ============================================================
 
 export function addFeePolicy(data: Omit<FeePolicy, "id">): FeePolicy {
@@ -274,6 +418,48 @@ export function updateFeePolicy(id: string, data: Partial<FeePolicy>): void {
   const after = { ...before, ...data };
   _state = { ..._state, feePolicies: _state.feePolicies.map((p) => (p.id === id ? after : p)) };
   record("feePolicy", id, after.name, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
+  notify();
+}
+
+// ============================================================
+// TERM FEE CALCS (과제단위 수수료 산정 내역)
+// ============================================================
+
+export function addTermFeeCalc(data: Omit<TermFeeCalc, "id">): TermFeeCalc {
+  const item: TermFeeCalc = { ...data, id: genId("tfc") };
+  _state = { ..._state, termFeeCalcs: [..._state.termFeeCalcs, item] };
+  record("termFeeCalc", item.id, `${item.projectNumber} · ${item.termYear}년 ${item.termNumber}연차`, "CREATE");
+  notify();
+  return item;
+}
+
+export function updateTermFeeCalc(id: string, data: Partial<TermFeeCalc>): void {
+  const before = _state.termFeeCalcs.find((f) => f.id === id);
+  if (!before) return;
+  const after = { ...before, ...data, updatedAt: new Date().toISOString().slice(0, 10) };
+  _state = { ..._state, termFeeCalcs: _state.termFeeCalcs.map((f) => (f.id === id ? after : f)) };
+  record("termFeeCalc", id, `${after.projectNumber} · ${after.termYear}년 ${after.termNumber}연차`, "UPDATE",
+    diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
+  notify();
+}
+
+export function addTermFeeCalcOverride(
+  id: string,
+  override: FeeOverride,
+): void {
+  const before = _state.termFeeCalcs.find((f) => f.id === id);
+  if (!before) return;
+  const after = { ...before, overrides: [...before.overrides, override], updatedAt: new Date().toISOString().slice(0, 10) };
+  _state = { ..._state, termFeeCalcs: _state.termFeeCalcs.map((f) => (f.id === id ? after : f)) };
+  record("termFeeCalc", id, `${after.projectNumber} 오버라이드 추가`, "UPDATE");
+  notify();
+}
+
+export function deleteTermFeeCalc(id: string): void {
+  const item = _state.termFeeCalcs.find((f) => f.id === id);
+  if (!item) return;
+  _state = { ..._state, termFeeCalcs: _state.termFeeCalcs.filter((f) => f.id !== id) };
+  record("termFeeCalc", id, item.projectNumber, "DELETE");
   notify();
 }
 
@@ -362,6 +548,33 @@ export function updateSettlement(id: string, data: Partial<Settlement>): void {
 }
 
 // ============================================================
+// PROJECT ISSUES (이슈/메모)
+// ============================================================
+
+export function addProjectIssue(data: Omit<ProjectIssue, "id">): ProjectIssue {
+  const item: ProjectIssue = { ...data, id: genId("pi") };
+  _state = { ..._state, projectIssues: [..._state.projectIssues, item] };
+  record("projectIssue", item.id, `${item.projectNumber} 이슈`, "CREATE");
+  notify();
+  return item;
+}
+
+export function updateProjectIssue(id: string, changes: Partial<Omit<ProjectIssue, "id">>): void {
+  _state = {
+    ..._state,
+    projectIssues: _state.projectIssues.map((i) => (i.id === id ? { ...i, ...changes } : i)),
+  };
+  record("projectIssue", id, "이슈 업데이트", "UPDATE");
+  notify();
+}
+
+export function deleteProjectIssue(id: string): void {
+  _state = { ..._state, projectIssues: _state.projectIssues.filter((i) => i.id !== id) };
+  record("projectIssue", id, "이슈 삭제", "DELETE");
+  notify();
+}
+
+// ============================================================
 // TAX INVOICES
 // ============================================================
 
@@ -380,6 +593,17 @@ export function updateTaxInvoice(id: string, data: Partial<TaxInvoice>): void {
   _state = { ..._state, taxInvoices: _state.taxInvoices.map((t) => (t.id === id ? after : t)) };
   record("taxInvoice", id, after.invoiceNumber, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   notify();
+}
+
+// ============================================================
+// EMAIL DISPATCHES
+// ============================================================
+
+export function addEmailDispatch(data: Omit<EmailDispatch, "id">): EmailDispatch {
+  const item: EmailDispatch = { ...data, id: genId("em") };
+  _state = { ..._state, emailDispatches: [..._state.emailDispatches, item] };
+  notify();
+  return item;
 }
 
 // ============================================================
@@ -408,6 +632,198 @@ export function deleteUser(id: string): void {
   if (!item) return;
   _state = { ..._state, users: _state.users.filter((u) => u.id !== id) };
   record("user", id, item.name, "DELETE");
+  notify();
+}
+
+// ============================================================
+// AGENCY GUIDES (전담기관 운용 안내)
+// ============================================================
+
+export function updateAgencyGuide(shortName: string, tabs: AgencyGuideTab[]): void {
+  _state = { ..._state, agencyGuides: { ..._state.agencyGuides, [shortName]: tabs } };
+  record("fundingAgency", shortName, `${shortName} 운용 안내`, "UPDATE");
+  notify();
+}
+
+// ============================================================
+// 연차 수수료 자동 산정
+// ============================================================
+
+export function autoGenerateTermFees(projectId: string): void {
+  const project = _state.projects.find((p) => p.id === projectId);
+  if (!project) return;
+
+  const members = _state.projectMembers.filter((m) => m.projectId === projectId);
+  const policy = resolvePolicy(project.agencyId, _state.feePolicies);
+  if (!policy) return;
+
+  const today = new Date().toISOString().slice(0, 10);
+  const startDate = new Date(project.startDate);
+
+  // 협약 유형 파악
+  const isBatch = !project.agreementType || project.agreementType === "BATCH";
+  const stages = project.stages ?? [];
+
+  // 연차 → 단계 매핑 헬퍼
+  function getStageNumber(termNumber: number): number {
+    if (isBatch) return 0;
+    const stage = stages.find((s) => termNumber >= s.startTermNumber && termNumber <= s.endTermNumber);
+    return stage?.stageNumber ?? 1;
+  }
+
+  // 각 단계의 마지막 연차 = 정산(SETTLEMENT)
+  const totalTerms = project.totalTerms;
+  function isSettlementTerm(termNumber: number): boolean {
+    if (isBatch) return termNumber === totalTerms;
+    const stageNum = getStageNumber(termNumber);
+    const stage = stages.find((s) => s.stageNumber === stageNum);
+    return stage ? termNumber === stage.endTermNumber : termNumber === totalTerms;
+  }
+
+  // 자동 생성 항목만 제거 (CONFIRMED/BILLED는 유지)
+  const keptFees = _state.termFees.filter(
+    (tf) => tf.projectNumber !== project.projectNumber ||
+      (!tf.isAutoGenerated && (tf.status === "CONFIRMED" || tf.status === "BILLED"))
+  );
+  const keptCalcs = _state.termFeeCalcs.filter(
+    (c) => !(c.projectNumber === project.projectNumber && c.status === "DRAFT")
+  );
+
+  const newFees: TermFee[] = [];
+  const newCalcs: TermFeeCalc[] = [];
+
+  // 단계별 미청구 누적 (단계가 바뀌면 리셋 — 정산 시 이전 단계 미청구 반영)
+  const stageUnclaimed: Record<number, number> = {};
+
+  for (let termNumber = 1; termNumber <= project.totalTerms; termNumber++) {
+    const termStartDate = new Date(startDate);
+    termStartDate.setFullYear(startDate.getFullYear() + termNumber - 1);
+    const termStartStr = termStartDate.toISOString().slice(0, 10);
+    const termYear = termStartDate.getFullYear();
+
+    const isActive = termStartStr <= today;
+    const feeStatus: TermFee["status"] = isActive ? "DRAFT" : "SCHEDULED";
+    const stageNumber = getStageNumber(termNumber);
+    const workType: "ANNUAL" | "SETTLEMENT" = isSettlementTerm(termNumber) ? "SETTLEMENT" : "ANNUAL";
+
+    // 단계 내 누적 미청구 계산
+    const carriedOverUnclaimed = stageUnclaimed[stageNumber] ?? 0;
+
+    // 이 연차에 예산이 있는 기관만 추출
+    const calcMembers: CalcMember[] = [];
+    for (const m of members) {
+      const ab = m.annualBudgets?.find((b) => b.termNumber === termNumber);
+      if (!ab || ab.cashBudget <= 0) continue;
+      calcMembers.push({
+        institutionId: m.institutionId,
+        institutionName: m.institutionName,
+        role: m.role,
+        grade: normalizeGrade(m.institutionGrade ?? "일반"),
+        settlementType: m.settlementType ?? "위탁정산",
+        cashBudget: ab.cashBudget,
+        inKindBudget: ab.inKindBudget,
+      });
+    }
+    if (calcMembers.length === 0) continue;
+
+    const result = calcTermFee({
+      members: calcMembers,
+      workType,
+      policy,
+      projectType: project.projectType ?? "GENERAL",
+      carriedOverUnclaimed,
+    });
+
+    // 면제기관 ID 집합
+    const exemptIds = new Set(result.exemptBreakdown.map((e) => e.institutionId));
+    const nonExemptMembers = calcMembers.filter((m) => !exemptIds.has(m.institutionId));
+    const totalNonExemptCash = nonExemptMembers.reduce((s, m) => s + m.cashBudget, 0);
+
+    // 기관별 TermFee 생성
+    for (const cm of calcMembers) {
+      const member = members.find((m) => m.institutionId === cm.institutionId);
+      const ab = member?.annualBudgets?.find((b) => b.termNumber === termNumber);
+
+      let instCalcFee: number;
+      let instAppliedFee: number;
+
+      if (exemptIds.has(cm.institutionId)) {
+        const ed = result.exemptBreakdown.find((e) => e.institutionId === cm.institutionId);
+        instCalcFee = ed?.calculatedFee ?? 0;
+        instAppliedFee = ed?.billingFee ?? 0;
+      } else {
+        const ratio = totalNonExemptCash > 0 ? cm.cashBudget / totalNonExemptCash : 0;
+        instCalcFee = Math.round(result.generalFee * ratio);
+        instAppliedFee = Math.round(result.generalBillingFee * ratio);
+      }
+
+      newFees.push({
+        id: genId("tf"),
+        projectNumber: project.projectNumber,
+        projectName: project.projectName,
+        termYear,
+        termNumber,
+        institutionId: cm.institutionId,
+        institutionName: cm.institutionName,
+        institutionType: member?.institutionType ?? "",
+        budget: (ab?.cashBudget ?? 0) + (ab?.inKindBudget ?? 0),
+        feeRate: policy.standardRate,
+        calculatedFee: instCalcFee,
+        appliedFee: instAppliedFee,
+        status: feeStatus,
+        isAutoGenerated: true,
+      });
+    }
+
+    // TermFeeCalc 생성
+    newCalcs.push({
+      id: genId("tfc"),
+      projectId: project.id,
+      projectNumber: project.projectNumber,
+      projectName: project.projectName,
+      agencyId: project.agencyId,
+      termYear,
+      termNumber,
+      stageNumber,
+      workType,
+      totalCashBudget: result.totalCashBudget,
+      coInstCount: result.coInstCount,
+      baseFee: result.baseFee,
+      addonFee: result.addonFee,
+      standardFee: result.standardFee,
+      nonExemptCashBudget: result.nonExemptCashBudget,
+      nonExemptCoInstCount: result.nonExemptCoInstCount,
+      nonExemptBaseFee: result.nonExemptBaseFee,
+      nonExemptAddonFee: result.nonExemptAddonFee,
+      generalFee: result.generalFee,
+      exemptFeeTotal: result.exemptFeeTotal,
+      exemptBreakdown: result.exemptBreakdown,
+      calculatedFee: result.calculatedFee,
+      generalCalcFee: result.generalCalcFee,
+      generalBillingFee: result.generalBillingFee,
+      generalUnclaimedFee: result.generalUnclaimedFee,
+      carriedOverUnclaimed: result.carriedOverUnclaimed,
+      totalBillingFee: result.totalBillingFee,
+      overrides: [],
+      status: "DRAFT",
+      createdAt: new Date().toISOString().slice(0, 10),
+    });
+
+    // 다음 연차로 단계 내 미청구 누적 (정산 연차면 해당 단계 미청구 리셋)
+    if (isActive) {
+      if (workType === "SETTLEMENT") {
+        stageUnclaimed[stageNumber] = 0;
+      } else {
+        stageUnclaimed[stageNumber] = (stageUnclaimed[stageNumber] ?? 0) + result.generalUnclaimedFee;
+      }
+    }
+  }
+
+  _state = {
+    ..._state,
+    termFees: [...keptFees, ...newFees],
+    termFeeCalcs: [...keptCalcs, ...newCalcs],
+  };
   notify();
 }
 
