@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 type Variant = "default" | "warning" | "danger" | "success";
 
 interface StatCardProps {
@@ -8,13 +10,14 @@ interface StatCardProps {
   changeType?: "up" | "down" | "neutral";
   variant?: Variant;
   icon: React.ReactNode;
+  href?: string;
 }
 
-const variantStyles: Record<Variant, { icon: string; badge: string }> = {
-  default: { icon: "bg-blue-50 text-blue-600", badge: "bg-blue-50 text-blue-600" },
-  warning: { icon: "bg-amber-50 text-amber-600", badge: "bg-amber-50 text-amber-600" },
-  danger: { icon: "bg-red-50 text-red-600", badge: "bg-red-50 text-red-600" },
-  success: { icon: "bg-emerald-50 text-emerald-600", badge: "bg-emerald-50 text-emerald-600" },
+const variantStyles: Record<Variant, { icon: string }> = {
+  default: { icon: "bg-blue-50 text-blue-600" },
+  warning: { icon: "bg-amber-50 text-amber-600" },
+  danger: { icon: "bg-red-50 text-red-600" },
+  success: { icon: "bg-emerald-50 text-emerald-600" },
 };
 
 export default function StatCard({
@@ -25,11 +28,16 @@ export default function StatCard({
   changeType = "neutral",
   variant = "default",
   icon,
+  href,
 }: StatCardProps) {
   const style = variantStyles[variant];
 
-  return (
-    <div className="bg-white rounded-xl border border-slate-200 p-5 flex flex-col gap-4">
+  const inner = (
+    <div
+      className={`bg-white rounded-xl border border-slate-200 p-5 flex flex-col gap-4 ${
+        href ? "transition-all hover:border-blue-300 hover:shadow-sm cursor-pointer" : ""
+      }`}
+    >
       <div className="flex items-start justify-between">
         <div className={`p-2.5 rounded-lg ${style.icon}`}>{icon}</div>
         {change && (
@@ -55,4 +63,14 @@ export default function StatCard({
       </div>
     </div>
   );
+
+  if (href) {
+    return (
+      <Link href={href} className="block">
+        {inner}
+      </Link>
+    );
+  }
+
+  return inner;
 }

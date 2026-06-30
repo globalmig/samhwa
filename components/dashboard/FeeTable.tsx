@@ -5,7 +5,7 @@ const STATUS_LABEL: Record<string, { label: string; style: string }> = {
   CONFIRMED: { label: "확정", style: "bg-emerald-50 text-emerald-700" },
   DRAFT: { label: "임시", style: "bg-slate-100 text-slate-500" },
   UNCLAIMED: { label: "미청구", style: "bg-amber-50 text-amber-700" },
-  OVERDUE: { label: "연체", style: "bg-red-50 text-red-700" },
+  OVERDUE: { label: "미수", style: "bg-red-50 text-red-700" },
 };
 
 function fmt(n: number) {
