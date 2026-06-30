@@ -1,12 +1,14 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import Link from "next/link";
 import { FiEdit2, FiTrash2 } from "react-icons/fi";
 import { useStore, addUser, updateUser, deleteUser } from "@/lib/store";
 import { type SystemUser } from "@/lib/mock";
 import { fmtDate } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
+import { useCanWrite } from "@/lib/permissions";
 
 const ROLE_MAP: Record<SystemUser["role"], { label: string; color: "red" | "blue" | "purple" | "slate"; desc: string }> = {
   ADMIN: { label: "시스템 관리자", color: "red", desc: "전체 권한" },
@@ -73,8 +75,10 @@ function UserForm({ initial, onSubmit, onClose }: { initial: Omit<SystemUser, "i
 }
 
 export default function AdminUsersPage() {
+  const canEdit = useCanWrite('users');
   const { users } = useStore();
-  const [search, setSearch] = useState("");
+  const [filterName, setFilterName]   = useState("");
+  const [filterEmail, setFilterEmail] = useState("");
   const [roleFilter, setRoleFilter] = useState("ALL");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [modal, setModal] = useState<ModalState | null>(null);
@@ -85,9 +89,10 @@ export default function AdminUsersPage() {
         (u) =>
           (roleFilter === "ALL" || u.role === roleFilter) &&
           (statusFilter === "ALL" || u.status === statusFilter) &&
-          (search === "" || u.name.includes(search) || u.email.includes(search))
+          (filterName  === "" || u.name.includes(filterName)) &&
+          (filterEmail === "" || u.email.includes(filterEmail))
       ),
-    [users, search, roleFilter, statusFilter]
+    [users, filterName, filterEmail, roleFilter, statusFilter]
   );
 
   function handleSubmit(data: Omit<SystemUser, "id">) {
@@ -106,10 +111,12 @@ export default function AdminUsersPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-xs text-slate-500">사용자 · 권한 관리 · 전체 {users.length}명</p>
-        <button onClick={() => setModal({ mode: "add" })} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
-          <svg viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5"><path d="M10.75 4.75a.75.75 0 0 0-1.5 0v4.5h-4.5a.75.75 0 0 0 0 1.5h4.5v4.5a.75.75 0 0 0 1.5 0v-4.5h4.5a.75.75 0 0 0 0-1.5h-4.5v-4.5z" /></svg>
-          새 사용자 추가
-        </button>
+        {canEdit && (
+          <button onClick={() => setModal({ mode: "add" })} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
+            <svg viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5"><path d="M10.75 4.75a.75.75 0 0 0-1.5 0v4.5h-4.5a.75.75 0 0 0 0 1.5h4.5v4.5a.75.75 0 0 0 1.5 0v-4.5h4.5a.75.75 0 0 0 0-1.5h-4.5v-4.5z" /></svg>
+            새 사용자 추가
+          </button>
+        )}
       </div>
 
       <div className="grid grid-cols-4 gap-3">
@@ -138,12 +145,25 @@ export default function AdminUsersPage() {
         </div>
       </div>
 
-      <div className="bg-white rounded-xl border border-slate-200 px-4 py-3 flex items-center gap-3">
-        <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400 shrink-0">
-          <path fillRule="evenodd" d="M9 3.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zM2 9a7 7 0 1 1 12.452 4.391l3.328 3.329a.75.75 0 1 1-1.06 1.06l-3.329-3.328A7 7 0 0 1 2 9z" clipRule="evenodd" />
-        </svg>
-        <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="이름, 이메일 검색..." className="flex-1 text-sm outline-none text-slate-700 placeholder-slate-400" />
-        <div className="flex items-center gap-2 shrink-0">
+      <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100">
+        <div className="px-4 py-3 grid grid-cols-2 gap-3">
+          {[
+            { label: "이름",   value: filterName,  onChange: setFilterName  },
+            { label: "이메일", value: filterEmail, onChange: setFilterEmail },
+          ].map(({ label, value, onChange }) => (
+            <div key={label}>
+              <p className="text-[10px] font-medium text-slate-400 mb-1">{label}</p>
+              <input
+                type="text"
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                placeholder={`${label} 검색...`}
+                className="w-full text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+              />
+            </div>
+          ))}
+        </div>
+        <div className="px-4 py-2.5 flex justify-end gap-2">
           <select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)} className="text-xs border border-slate-200 rounded-lg px-3 py-1.5 text-slate-600 bg-white">
             <option value="ALL">전체 역할</option>
             <option value="ADMIN">시스템 관리자</option>
@@ -179,10 +199,10 @@ export default function AdminUsersPage() {
               filtered.map((u) => (
                 <tr key={u.id} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
                   <td className="px-5 py-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-sm font-bold text-blue-600">{u.name[0]}</div>
-                      <span className="font-medium text-slate-800">{u.name}</span>
-                    </div>
+                    <Link href={`/admin/users/${u.id}`} className="flex items-center gap-3 group">
+                      <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-sm font-bold text-blue-600 shrink-0">{u.name[0]}</div>
+                      <span className="font-medium text-slate-800 group-hover:text-blue-600 group-hover:underline transition-colors">{u.name}</span>
+                    </Link>
                   </td>
                   <td className="px-5 py-4 text-sm text-slate-600">{u.email}</td>
                   <td className="px-5 py-4 text-center"><StatusBadge label={ROLE_MAP[u.role].label} color={ROLE_MAP[u.role].color} /></td>
@@ -192,14 +212,16 @@ export default function AdminUsersPage() {
                   <td className="px-5 py-4 text-center text-xs text-slate-500 whitespace-nowrap">{u.lastLoginAt ?? "-"}</td>
                   <td className="px-5 py-4 text-center text-xs text-slate-500 whitespace-nowrap">{fmtDate(u.registeredAt)}</td>
                   <td className="px-5 py-4 text-center">
-                    <div className="flex items-center justify-center gap-0.5">
-                      <button onClick={() => setModal({ mode: "edit", target: u })} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors" title="수정">
-                        <FiEdit2 size={14} />
-                      </button>
-                      <button onClick={() => handleDelete(u.id, u.name)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors" title="삭제">
-                        <FiTrash2 size={14} />
-                      </button>
-                    </div>
+                    {canEdit ? (
+                      <div className="flex items-center justify-center gap-0.5">
+                        <button onClick={() => setModal({ mode: "edit", target: u })} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors" title="수정">
+                          <FiEdit2 size={14} />
+                        </button>
+                        <button onClick={() => handleDelete(u.id, u.name)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors" title="삭제">
+                          <FiTrash2 size={14} />
+                        </button>
+                      </div>
+                    ) : <span className="text-xs text-slate-300">—</span>}
                   </td>
                 </tr>
               ))

@@ -528,8 +528,11 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         const sheets: ParsedSheet[] = matched.map(({ sheetName, def, wb }) => {
           const ws = wb.Sheets[sheetName];
           const raw = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: "" }) as unknown[][];
-          const headerRow = (raw[0] as unknown[]).map((c) => String(c ?? "").trim());
-          const dataRows = raw.slice(1).map((r) => {
+          // 양식 다운로드 파일의 1행(※필수/선택 안내)을 자동 건너뜀
+          const firstRow = (raw[0] as unknown[] ?? []).map((c) => String(c ?? "").trim());
+          const headerRowIdx = firstRow.some((c) => c.includes("필수") || c.includes("선택")) ? 1 : 0;
+          const headerRow = (raw[headerRowIdx] as unknown[] ?? []).map((c) => String(c ?? "").trim());
+          const dataRows = raw.slice(headerRowIdx + 1).map((r) => {
             const row: Record<string, string> = {};
             headerRow.forEach((h, i) => { row[h] = String((r as unknown[])[i] ?? "").trim(); });
             return row;
