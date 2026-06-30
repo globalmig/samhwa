@@ -327,7 +327,7 @@ export default function ResearcherPage({ params }: { params: Promise<{ name: str
                   <li key={issue.id} className="px-5 py-3 hover:bg-slate-50 transition-colors">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <p className="text-xs font-medium text-slate-700 truncate">{issue.title ?? issue.content}</p>
+                        <p className="text-xs font-medium text-slate-700 truncate">{issue.content}</p>
                         {project && (
                           <p className="text-[10px] text-slate-400 mt-0.5 truncate">{project.projectName}</p>
                         )}
