@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 import Sidebar from "@/components/layout/Sidebar";
 import Header from "@/components/layout/Header";
+import AuthGuard from "@/components/layout/AuthGuard";
+import LayoutShell from "@/components/layout/LayoutShell";
 
 export const metadata: Metadata = {
   title: "Samhwa ERP",
@@ -16,15 +18,9 @@ export default function RootLayout({
   return (
     <html lang="ko" className="h-full">
       <body className="h-full">
-        <div className="flex h-full">
-          <Sidebar />
-          <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-            <Header />
-            <main className="flex-1 overflow-y-auto bg-slate-50 p-6">
-              {children}
-            </main>
-          </div>
-        </div>
+        <AuthGuard>
+          <LayoutShell>{children}</LayoutShell>
+        </AuthGuard>
       </body>
     </html>
   );
