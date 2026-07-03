@@ -1650,8 +1650,19 @@ export default function FeesPage() {
           ))}
         </div>
 
-        {/* 드롭다운 필터 */}
-        <div className="px-4 py-3 flex items-center gap-3 flex-wrap">
+        {/* 상태 · 구분 필터 */}
+        <div className="px-4 py-3 flex items-center gap-2 flex-wrap">
+          <select
+            value={filterProjectStatus}
+            onChange={(e) => setFilterProjectStatus(e.target.value)}
+            className="text-xs border border-slate-200 rounded-lg px-3 py-1.5 text-slate-600 bg-white shrink-0 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+          >
+            <option value="ALL">전체 상태</option>
+            <option value="ACTIVE">진행중</option>
+            <option value="COMPLETED">완료</option>
+            <option value="SUSPENDED">중단</option>
+          </select>
+          <span className="w-px h-4 bg-slate-200" />
           <select value={filterAgency} onChange={(e) => setFilterAgency(e.target.value)}
             className="text-xs border border-slate-200 rounded-lg px-3 py-1.5 text-slate-600 bg-white shrink-0 focus:outline-none focus:ring-2 focus:ring-blue-500/30">
             <option value="ALL">전담기관 전체</option>
@@ -1674,7 +1685,7 @@ export default function FeesPage() {
             <option value="PENDING">대기</option>
             <option value="OVERDUE">연체</option>
           </select>
-          <label className="flex items-center gap-1.5 cursor-pointer ml-1">
+          <label className="flex items-center gap-1.5 cursor-pointer ml-1 shrink-0">
             <input type="checkbox" checked={filterOnlyReceivable}
               onChange={(e) => setFilterOnlyReceivable(e.target.checked)}
               className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30" />
@@ -1683,89 +1694,77 @@ export default function FeesPage() {
           {(filterAgency !== "ALL" || filterBillingType !== "ALL" || filterCollectionStatus !== "ALL" || filterOnlyReceivable) && (
             <button
               onClick={() => { setFilterAgency("ALL"); setFilterBillingType("ALL"); setFilterCollectionStatus("ALL"); setFilterOnlyReceivable(false); }}
-              className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1 rounded hover:bg-slate-100 transition-colors">
+              className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1 rounded hover:bg-slate-100 transition-colors ml-auto">
               초기화
             </button>
           )}
         </div>
 
-        {/* 과제상태 + 세금계산서 일자 기간 필터 */}
-        <div className="px-4 py-3 flex items-center gap-3 flex-wrap">
-          <select
-            value={filterProjectStatus}
-            onChange={(e) => setFilterProjectStatus(e.target.value)}
-            className="text-xs border border-slate-200 rounded-lg px-3 py-1.5 text-slate-600 bg-white shrink-0"
-          >
-            <option value="ALL">전체 상태</option>
-            <option value="ACTIVE">진행중</option>
-            <option value="COMPLETED">완료</option>
-            <option value="SUSPENDED">중단</option>
-          </select>
-          <span className="text-xs font-medium text-slate-500 shrink-0 w-24">세금계산서 일자</span>
-
-          {/* 날짜 입력 */}
-          <div className="flex items-center gap-2">
-            <DateInput value={invoiceDateFrom} onChange={setInvoiceDateFrom} className="w-28" />
-            <span className="text-slate-400 text-xs">~</span>
-            <DateInput value={invoiceDateTo} onChange={setInvoiceDateTo} className="w-28" />
-            {hasDateFilter && (
-              <button
-                onClick={clearDateRange}
-                className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1.5 rounded hover:bg-slate-100 transition-colors"
-              >
-                초기화
-              </button>
-            )}
+        {/* 기간 필터 */}
+        <div className="px-4 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+          {/* 세금계산서 일자 */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-slate-500">세금계산서 일자</span>
+              {hasDateFilter && (
+                <button
+                  onClick={clearDateRange}
+                  className="text-[11px] text-slate-400 hover:text-slate-600 px-1.5 py-0.5 rounded hover:bg-slate-100 transition-colors"
+                >
+                  초기화
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <DateInput value={invoiceDateFrom} onChange={setInvoiceDateFrom} className="w-28" />
+              <span className="text-slate-400 text-xs">~</span>
+              <DateInput value={invoiceDateTo} onChange={setInvoiceDateTo} className="w-28" />
+            </div>
+            <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+              {[
+                { label: "이번달",   fn: () => applyDateRange(...monthRange(0))   },
+                { label: "지난달",   fn: () => applyDateRange(...monthRange(-1))  },
+                { label: "2개월 전", fn: () => applyDateRange(...monthRange(-2))  },
+                { label: "이번분기", fn: () => applyDateRange(...quarterRange(0)) },
+                { label: "지난분기", fn: () => applyDateRange(...quarterRange(-1))},
+              ].map(({ label, fn }) => (
+                <button
+                  key={label}
+                  onClick={fn}
+                  className="text-xs px-2.5 py-1 rounded-md border border-slate-200 text-slate-600 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 transition-colors"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
 
-          {/* 단축 버튼 */}
-          <div className="flex items-center gap-1.5 flex-wrap">
-            {[
-              { label: "이번달",   fn: () => applyDateRange(...monthRange(0))   },
-              { label: "지난달",   fn: () => applyDateRange(...monthRange(-1))  },
-              { label: "2개월 전", fn: () => applyDateRange(...monthRange(-2))  },
-              { label: "이번분기", fn: () => applyDateRange(...quarterRange(0)) },
-              { label: "지난분기", fn: () => applyDateRange(...quarterRange(-1))},
-            ].map(({ label, fn }) => (
-              <button
-                key={label}
-                onClick={fn}
-                className="text-xs px-2.5 py-1 rounded-md border border-slate-200 text-slate-600 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 transition-colors"
-              >
-                {label}
-              </button>
-            ))}
+          {/* 당해종료일 */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-slate-500">당해종료일</span>
+              {hasTermEndDateFilter && (
+                <button
+                  onClick={clearTermEndDateRange}
+                  className="text-[11px] text-slate-400 hover:text-slate-600 px-1.5 py-0.5 rounded hover:bg-slate-100 transition-colors"
+                >
+                  초기화
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <DateInput value={termEndDateFrom} onChange={setTermEndDateFrom} className="w-28" />
+              <span className="text-slate-400 text-xs">~</span>
+              <DateInput value={termEndDateTo} onChange={setTermEndDateTo} className="w-28" />
+            </div>
           </div>
-
-          {hasDateFilter && (
-            <span className="text-xs text-blue-600 font-medium ml-auto">
-              {filtered.length}건 해당
-            </span>
-          )}
         </div>
 
-        {/* 당해종료일 기간 필터 */}
-        <div className="px-4 py-3 flex items-center gap-3 flex-wrap">
-          <span className="text-xs font-medium text-slate-500 shrink-0 w-24">당해종료일</span>
-          <div className="flex items-center gap-2">
-            <DateInput value={termEndDateFrom} onChange={setTermEndDateFrom} className="w-28" />
-            <span className="text-slate-400 text-xs">~</span>
-            <DateInput value={termEndDateTo} onChange={setTermEndDateTo} className="w-28" />
-            {hasTermEndDateFilter && (
-              <button
-                onClick={clearTermEndDateRange}
-                className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1.5 rounded hover:bg-slate-100 transition-colors"
-              >
-                초기화
-              </button>
-            )}
+        {(hasDateFilter || hasTermEndDateFilter) && (
+          <div className="px-4 py-2 flex justify-end">
+            <span className="text-xs text-blue-600 font-medium">{filtered.length}건 해당</span>
           </div>
-          {hasTermEndDateFilter && (
-            <span className="text-xs text-blue-600 font-medium ml-auto">
-              {filtered.length}건 해당
-            </span>
-          )}
-        </div>
+        )}
       </div>
 
       {/* 다중 선택 일괄 처리 */}
