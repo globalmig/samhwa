@@ -95,7 +95,7 @@
 CREATE TYPE user_role AS ENUM (
   'SYSTEM_ADMIN',   -- 시스템 관리자
   'ACCOUNTING',     -- 회계 담당자
-  'SETTLEMENT',     -- 정산 담당자
+  'SETTLEMENT',     -- 전문기관담당자
   'GENERAL'         -- 일반 사용자
 );
 

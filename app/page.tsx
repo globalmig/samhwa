@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useStore } from "@/lib/store";
+import { useStore, getUnissuedInvoiceGroups } from "@/lib/store";
 import { agencyFeeRows, summary } from "@/lib/mock";
 
 function fmt(n: number) {
@@ -23,15 +23,14 @@ const AGENCY_COLORS = ["bg-blue-500", "bg-orange-400", "bg-violet-500", "bg-emer
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { receivables, projectIssues, settlements, unclaimedFees, projects } = useStore();
+  const { receivables, projectIssues, termFees, taxInvoices, projects } = useStore();
 
   // 긴급 처리 집계 임시
   const overdueReceivables = receivables.filter((r) => r.status === "OVERDUE");
   const overdueAmount = overdueReceivables.reduce((s, r) => s + r.receivableAmount, 0);
   const highIssues = projectIssues.filter((i) => i.priority === "HIGH");
-  const scheduledSettlements = settlements.filter((s) => s.status === "SCHEDULED");
-  const pendingUnclaimed = unclaimedFees.filter((f) => f.status === "PENDING");
-  const pendingUnclaimedAmount = pendingUnclaimed.reduce((s, f) => s + f.amount, 0);
+  const unissuedGroups = getUnissuedInvoiceGroups(projects, termFees, taxInvoices);
+  const unissuedAmount = unissuedGroups.reduce((s, g) => s + g.amount, 0);
 
   // 과제 파이프라인
   const activeCount = projects.filter((p) => p.status === "ACTIVE").length;
@@ -59,7 +58,7 @@ export default function DashboardPage() {
       {/* 1구역 — 긴급 처리 항목 */}
       <section>
         <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">긴급 처리</p>
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-3 gap-3">
           {/* 연체 채권 */}
           <Link href="/receivables" className="block bg-white rounded-xl border border-slate-200 px-4 py-3 hover:border-red-300 hover:shadow-sm transition-all group">
             <div className="flex items-center justify-between mb-2">
@@ -80,26 +79,14 @@ export default function DashboardPage() {
             <p className="text-[10px] text-slate-400 mt-1.5 group-hover:text-amber-500 transition-colors">이슈 페이지에서 확인 →</p>
           </Link>
 
-          {/* 정산 예정 */}
-          <Link href="/settlements" className="block bg-white rounded-xl border border-slate-200 px-4 py-3 hover:border-blue-300 hover:shadow-sm transition-all group">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-xs text-slate-500">정산 예정</p>
-              {scheduledSettlements.length > 0 && <span className="text-[10px] font-bold text-white bg-blue-500 rounded-full px-1.5 py-0.5 leading-none">{scheduledSettlements.length}건</span>}
-            </div>
-            <p className={`text-base font-bold ${scheduledSettlements.length > 0 ? "text-blue-600" : "text-slate-300"}`}>
-              {scheduledSettlements.length > 0 ? `${scheduledSettlements.length}건 대기 중` : "없음"}
-            </p>
-            <p className="text-[10px] text-slate-400 mt-1.5 group-hover:text-blue-500 transition-colors">정산 페이지에서 관리 →</p>
-          </Link>
-
-          {/* 미청구 대기 */}
+          {/* 세금계산서 미발행 */}
           <Link href="/unclaimed" className="block bg-white rounded-xl border border-slate-200 px-4 py-3 hover:border-amber-300 hover:shadow-sm transition-all group">
             <div className="flex items-center justify-between mb-2">
-              <p className="text-xs text-slate-500">미청구 대기</p>
-              {pendingUnclaimed.length > 0 && <span className="text-[10px] font-bold text-white bg-amber-500 rounded-full px-1.5 py-0.5 leading-none">{pendingUnclaimed.length}건</span>}
+              <p className="text-xs text-slate-500">미발행한 금액</p>
+              {unissuedGroups.length > 0 && <span className="text-[10px] font-bold text-white bg-amber-500 rounded-full px-1.5 py-0.5 leading-none">{unissuedGroups.length}건</span>}
             </div>
-            <p className={`text-base font-bold ${pendingUnclaimed.length > 0 ? "text-amber-600" : "text-slate-300"}`}>{pendingUnclaimed.length > 0 ? fmt(pendingUnclaimedAmount) + "원" : "없음"}</p>
-            <p className="text-[10px] text-slate-400 mt-1.5 group-hover:text-amber-500 transition-colors">미청구 페이지에서 관리 →</p>
+            <p className={`text-base font-bold ${unissuedGroups.length > 0 ? "text-amber-600" : "text-slate-300"}`}>{unissuedGroups.length > 0 ? fmt(unissuedAmount) + "원" : "없음"}</p>
+            <p className="text-[10px] text-slate-400 mt-1.5 group-hover:text-amber-500 transition-colors">미발행 페이지에서 관리 →</p>
           </Link>
         </div>
       </section>

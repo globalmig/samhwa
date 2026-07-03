@@ -7,20 +7,20 @@ type Role = "ADMIN" | "ACCOUNTANT" | "SETTLEMENT" | "VIEWER";
 // ─── 페이지 접근 권한 ────────────────────────────────────────
 const PAGE_ACCESS: Record<string, Role[]> = {
   "/":               ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
-  "/projects":          ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
-  "/funding-agencies":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
-  "/institutions":      ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
-  "/fees":           ["ADMIN", "ACCOUNTANT"],
+  "/projects":          ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "/funding-agencies":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "/institutions":      ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "/fees":           ["ADMIN", "ACCOUNTANT", "VIEWER"],
   "/fee-calculation":["ADMIN", "ACCOUNTANT"],
   "/company-class":  ["ADMIN", "ACCOUNTANT"],
-  "/emails":         ["ADMIN", "ACCOUNTANT"],
+  "/emails":         ["ADMIN", "ACCOUNTANT", "VIEWER"],
   "/issues":         ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
-  "/unclaimed":      ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
+  "/unclaimed":      ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   "/receivables":    ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   "/settlements":    ["ADMIN", "SETTLEMENT"],
   "/tax-invoices":   ["ADMIN", "ACCOUNTANT"],
-  "/policy-history": ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
-  "/audit-log":      ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "/policy-history": ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "/audit-log":      ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
   "/admin/users":    ["ADMIN"],
 };
 
@@ -38,6 +38,7 @@ const WRITE_ACCESS: Record<string, Role[]> = {
   institutions:        ["ADMIN", "ACCOUNTANT"],
   users:          ["ADMIN"],
   issues:         ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  notices:        ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
 };
 
 export function canAccessPage(role: Role | undefined, pathname: string): boolean {

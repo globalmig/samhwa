@@ -12,8 +12,8 @@ import { useCanWrite } from "@/lib/permissions";
 const ROLE_MAP: Record<SystemUser["role"], { label: string; color: "red" | "blue" | "purple" | "slate"; desc: string }> = {
   ADMIN:      { label: "시스템 관리자", color: "red",    desc: "전체 데이터 조회·수정·삭제 및 사용자 관리" },
   ACCOUNTANT: { label: "회계 담당자",   color: "blue",   desc: "수수료·세금계산서·미수금·공문 발송 관리" },
-  SETTLEMENT: { label: "정산 담당자",   color: "purple", desc: "정산·채권·미청구액 관리" },
-  VIEWER:     { label: "조회 전용",     color: "slate",  desc: "모든 데이터 읽기만 가능, 수정 불가" },
+  SETTLEMENT: { label: "전문기관담당자", color: "purple", desc: "정산·채권·미청구액 관리" },
+  VIEWER:     { label: "조회 전용",     color: "slate",  desc: "수수료 청구·이슈 현황·변경 이력만 조회 가능" },
 };
 
 const ENTITY_NAMES: Record<string, string> = {
@@ -137,7 +137,7 @@ export default function UserDetailPage({ params }: { params: Promise<{ id: strin
                 className={selectCls}>
                 <option value="ADMIN">시스템 관리자</option>
                 <option value="ACCOUNTANT">회계 담당자</option>
-                <option value="SETTLEMENT">정산 담당자</option>
+                <option value="SETTLEMENT">전문기관담당자</option>
                 <option value="VIEWER">조회 전용</option>
               </select>
             </div>
@@ -181,7 +181,7 @@ export default function UserDetailPage({ params }: { params: Promise<{ id: strin
               {user.role === "ADMIN" && "시스템 내 모든 메뉴에 접근하고 데이터를 수정·삭제할 수 있습니다. 사용자 추가 및 권한 변경도 가능합니다."}
               {user.role === "ACCOUNTANT" && "수수료 산정, 세금계산서 발행, 미수금 관리, 공문 발송을 처리합니다. 과제·기관 정보는 조회만 가능합니다."}
               {user.role === "SETTLEMENT" && "정산 업무, 채권 관리, 미청구액 처리를 담당합니다. 수수료·세금계산서는 조회만 가능합니다."}
-              {user.role === "VIEWER" && "모든 데이터를 조회할 수 있지만 수정·삭제·등록 등의 작업은 불가합니다."}
+              {user.role === "VIEWER" && "수수료 청구 관리, 이슈 현황, 전체 변경이력만 조회할 수 있으며 수정·삭제·등록 등의 작업은 불가합니다."}
             </p>
           </div>
         </div>

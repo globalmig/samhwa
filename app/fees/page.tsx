@@ -9,9 +9,12 @@ import {
   addTermFee,
   updateReceivable,
   updateProject,
+  updateProjectMember,
   addTaxInvoice,
   updateTaxInvoice,
   addEmailDispatch,
+  addUnclaimedFee,
+  updateUnclaimedFee,
 } from "@/lib/store";
 import {
   type TermFee,
@@ -21,6 +24,7 @@ import {
 } from "@/lib/mock";
 import { fmtWon, fmtDate } from "@/lib/utils";
 import Modal from "@/components/common/Modal";
+import DateInput from "@/components/common/DateInput";
 import { useCanWrite } from "@/lib/permissions";
 
 // ── 타입 ──────────────────────────────────────────────────────
@@ -67,6 +71,10 @@ type FeeRow = {
   termNumber: number;
   effectivePolicy: FeePolicy | null;
   projectStatus: "ACTIVE" | "COMPLETED" | "SUSPENDED" | "";
+  // 수정용 참조 id
+  unclaimedFeeId: string;
+  leadMemberId: string;
+  hasOpenIssue: boolean;
 };
 
 type CollectionTarget = {
@@ -106,12 +114,24 @@ type DispatchTarget = {
   totalAmount:         number;
 };
 
+type InfoEditTarget = {
+  projectId:      string;
+  projectName:    string;
+  leadMemberId:   string;
+  docRequestDate: string;
+  docReplyDate:   string;
+  recipientName:  string;
+  recipientEmail: string;
+  assignedManager: string;
+};
+
 type ModalState =
   | { mode: "generate" }
   | { mode: "collection"; target: CollectionTarget }
   | { mode: "sales-issue"; target: SalesTarget }
   | { mode: "sales-cancel"; target: SalesTarget }
-  | { mode: "dispatch"; target: DispatchTarget };
+  | { mode: "dispatch"; target: DispatchTarget }
+  | { mode: "info-edit"; target: InfoEditTarget };
 
 const BILLING_TYPE_COLOR: Record<string, string> = {
   "정발행":     "bg-blue-100 text-blue-700",
@@ -781,6 +801,89 @@ function CollectionModal({ target, onClose }: { target: CollectionTarget; onClos
   );
 }
 
+// ── InfoEditModal (서류요청·서류회신·수신자·삼화담당자 수정) ────
+function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: () => void }) {
+  const [docRequestDate, setDocRequestDate]   = useState(target.docRequestDate);
+  const [docReplyDate, setDocReplyDate]       = useState(target.docReplyDate);
+  const [recipientName, setRecipientName]     = useState(target.recipientName);
+  const [recipientEmail, setRecipientEmail]   = useState(target.recipientEmail);
+  const [assignedManager, setAssignedManager] = useState(target.assignedManager);
+
+  function handleSave() {
+    updateProject(target.projectId, {
+      docRequestDate: docRequestDate || undefined,
+      docReplyDate:   docReplyDate || undefined,
+      assignedManager: assignedManager || undefined,
+    });
+    if (target.leadMemberId) {
+      updateProjectMember(target.leadMemberId, {
+        contactName:  recipientName || undefined,
+        contactEmail: recipientEmail || undefined,
+      });
+    }
+    onClose();
+  }
+
+  return (
+    <div className="p-6 space-y-4">
+      <p className="text-xs text-slate-500 -mt-1">{target.projectName}</p>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">서류요청일</label>
+          <DateInput value={docRequestDate} onChange={setDocRequestDate} className="w-full" />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">서류회신일</label>
+          <DateInput value={docReplyDate} onChange={setDocReplyDate} className="w-full" />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">수신자</label>
+          <input
+            value={recipientName}
+            onChange={(e) => setRecipientName(e.target.value)}
+            placeholder="담당자명"
+            className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">수신자 이메일</label>
+          <input
+            value={recipientEmail}
+            onChange={(e) => setRecipientEmail(e.target.value)}
+            placeholder="email@example.com"
+            className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+          />
+        </div>
+      </div>
+
+      {!target.leadMemberId && (
+        <p className="text-[11px] text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+          이 과제에는 등록된 주관기관 담당자 정보가 없어 수신자 항목은 저장되지 않습니다.
+        </p>
+      )}
+
+      <div>
+        <label className="block text-xs font-medium text-slate-600 mb-1">삼화담당자</label>
+        <input
+          value={assignedManager}
+          onChange={(e) => setAssignedManager(e.target.value)}
+          placeholder="담당자명"
+          className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+        />
+      </div>
+
+      <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+        <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
+        <button onClick={handleSave} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">저장</button>
+      </div>
+    </div>
+  );
+}
+
 function gradeToRuleGrade(grade?: string): string {
   if (!grade) return "일반";
   if (grade === "최우수(S)") return "S";
@@ -792,7 +895,7 @@ function gradeToRuleGrade(grade?: string): string {
 function useFeeRows(): FeeRow[] {
   const {
     termFees, projects, unclaimedFees, receivables,
-    fundingAgencies, feePolicies, projectMembers, taxInvoices,
+    fundingAgencies, feePolicies, projectMembers, taxInvoices, projectIssues,
   } = useStore();
 
   return useMemo(() => {
@@ -830,6 +933,11 @@ function useFeeRows(): FeeRow[] {
       // 주관기관 담당자 (projectMembers의 LEAD 기관 중 연락처 정보 있는 첫 번째)
       const leadMember = projectMembers.find(
         (pm) => pm.projectNumber === f0.projectNumber && pm.role === "LEAD"
+      );
+
+      // 미해결 이슈 여부
+      const hasOpenIssue = projectIssues.some(
+        (i) => i.projectNumber === f0.projectNumber && i.status !== "RESOLVED"
       );
 
       // 발행구분 — billingType 없으면 세금계산서 유무로 판별
@@ -873,6 +981,9 @@ function useFeeRows(): FeeRow[] {
         termNumber:          f0.termNumber,
         effectivePolicy,
         projectStatus:       project?.status ?? "",
+        unclaimedFeeId:      ucRecord?.id ?? "",
+        leadMemberId:        leadMember?.id ?? "",
+        hasOpenIssue,
       };
     });
 
@@ -883,7 +994,54 @@ function useFeeRows(): FeeRow[] {
     });
 
     return rows;
-  }, [termFees, projects, unclaimedFees, receivables, fundingAgencies, feePolicies, projectMembers, taxInvoices]);
+  }, [termFees, projects, unclaimedFees, receivables, fundingAgencies, feePolicies, projectMembers, taxInvoices, projectIssues]);
+}
+
+// ── UnclaimedAmountCell (손실금액 직접 입력) ────────────────────
+function UnclaimedAmountCell({ row, canEdit }: { row: FeeRow; canEdit: boolean }) {
+  const [value, setValue] = useState(row.unclaimedAmount);
+
+  useEffect(() => setValue(row.unclaimedAmount), [row.unclaimedAmount]);
+
+  if (!canEdit) {
+    return (
+      <span className={`text-xs font-medium ${row.unclaimedAmount > 0 ? "text-amber-600" : "text-slate-300"}`}>
+        {row.unclaimedAmount > 0 ? fmtWon(row.unclaimedAmount) : "—"}
+      </span>
+    );
+  }
+
+  function commit() {
+    if (value === row.unclaimedAmount) return;
+    if (row.unclaimedFeeId) {
+      updateUnclaimedFee(row.unclaimedFeeId, { amount: value });
+    } else if (value > 0) {
+      addUnclaimedFee({
+        projectNumber: row.projectNumber,
+        projectName: row.projectName,
+        leadInstitutionId: row.leadInstitutionId,
+        leadInstitutionName: row.leadInstitutionName,
+        termYear: row.termYear,
+        termNumber: row.termNumber,
+        amount: value,
+        occurredAt: new Date().toISOString().slice(0, 10),
+        carriedOver: false,
+        status: "PENDING",
+      });
+    }
+  }
+
+  return (
+    <input
+      type="number"
+      min={0}
+      value={value}
+      onChange={(e) => setValue(Number(e.target.value))}
+      onBlur={commit}
+      title="회수불가(손실) 금액 직접 입력"
+      className="w-24 text-xs text-right border border-transparent hover:border-slate-200 focus:border-blue-400 rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500/30 bg-transparent focus:bg-white"
+    />
+  );
 }
 
 // ── TermGenerateForm ──────────────────────────────────────────
@@ -1099,7 +1257,7 @@ const COLUMNS = [
   { key: "leadInstitutionName",label: "주관기관",    width: "w-32",  align: "text-left"   },
   { key: "researchLead",       label: "연구책임자",  width: "w-20",  align: "text-center" },
   { key: "startDate",          label: "당해시작일",  width: "w-24",  align: "text-center" },
-  { key: "endDate",            label: "종료일",      width: "w-24",  align: "text-center" },
+  { key: "endDate",            label: "당해종료일",  width: "w-24",  align: "text-center" },
   { key: "billingType",        label: "발행구분",    width: "w-20",  align: "text-center" },
   { key: "invoiceIssuedAt",    label: "계산서일자",  width: "w-24",  align: "text-center" },
   { key: "supplyAmount",       label: "공급가액",    width: "w-28",  align: "text-right"  },
@@ -1109,6 +1267,7 @@ const COLUMNS = [
   { key: "paidAmount",         label: "수금액",      width: "w-28",  align: "text-right"  },
   { key: "receivableAmount",   label: "미수액",      width: "w-28",  align: "text-right"  },
   { key: "unclaimedAmount",    label: "손실금액",    width: "w-28",  align: "text-right"  },
+  { key: "hasOpenIssue",       label: "이슈",        width: "w-12",  align: "text-center" },
   { key: "projectCode",        label: "과제코드",    width: "w-32",  align: "text-left"   },
   { key: "docRequestDate",     label: "서류요청",    width: "w-24",  align: "text-center" },
   { key: "docReplyDate",       label: "서류회신",    width: "w-24",  align: "text-center" },
@@ -1207,15 +1366,19 @@ export default function FeesPage() {
   const [filterProjectName,     setFilterProjectName]     = useState("");
   const [filterLeadInstitution, setFilterLeadInstitution] = useState("");
   const [filterResearchLead,    setFilterResearchLead]    = useState("");
-  const [filterProjectStatus,   setFilterProjectStatus]   = useState(() => searchParams.get("status") ?? "ALL");
+  // 완료/종료된 과제는 더 이상 확인할 필요가 없어 기본값은 '진행중'
+  const [filterProjectStatus,   setFilterProjectStatus]   = useState(() => searchParams.get("status") ?? "ACTIVE");
   const [filterAgency,          setFilterAgency]          = useState("ALL");
   const [filterBillingType,     setFilterBillingType]     = useState("ALL");
   const [filterCollectionStatus,setFilterCollectionStatus]= useState("ALL");
   const [filterOnlyReceivable,  setFilterOnlyReceivable]  = useState(false);
   const [invoiceDateFrom, setInvoiceDateFrom] = useState("");
   const [invoiceDateTo, setInvoiceDateTo]     = useState("");
+  const [termEndDateFrom, setTermEndDateFrom] = useState("");
+  const [termEndDateTo, setTermEndDateTo]     = useState("");
   const [expandedKey, setExpandedKey]     = useState<string | null>(null);
   const [modal, setModal]                 = useState<ModalState | null>(null);
+  const [selectedKeys, setSelectedKeys]   = useState<Set<string>>(new Set());
 
   function applyDateRange(from: string, to: string) {
     setInvoiceDateFrom(from);
@@ -1227,7 +1390,13 @@ export default function FeesPage() {
     setInvoiceDateTo("");
   }
 
+  function clearTermEndDateRange() {
+    setTermEndDateFrom("");
+    setTermEndDateTo("");
+  }
+
   const hasDateFilter = invoiceDateFrom !== "" || invoiceDateTo !== "";
+  const hasTermEndDateFilter = termEndDateFrom !== "" || termEndDateTo !== "";
 
   const filtered = useMemo(
     () =>
@@ -1246,13 +1415,17 @@ export default function FeesPage() {
         const matchFrom = invoiceDateFrom === "" || (dt !== "" && dt >= invoiceDateFrom);
         const matchTo   = invoiceDateTo   === "" || (dt !== "" && dt <= invoiceDateTo);
 
+        const endDt = r.endDate;
+        const matchEndFrom = termEndDateFrom === "" || (endDt !== "" && endDt >= termEndDateFrom);
+        const matchEndTo   = termEndDateTo   === "" || (endDt !== "" && endDt <= termEndDateTo);
+
         return matchProjectNumber && matchProjectName && matchLeadInstitution && matchResearchLead
           && matchStatus && matchAgency && matchBillingType && matchCollectionStatus
-          && matchOnlyReceivable && matchFrom && matchTo;
+          && matchOnlyReceivable && matchFrom && matchTo && matchEndFrom && matchEndTo;
       }),
     [allRows, filterProjectNumber, filterProjectName, filterLeadInstitution, filterResearchLead,
      filterProjectStatus, filterAgency, filterBillingType, filterCollectionStatus, filterOnlyReceivable,
-     invoiceDateFrom, invoiceDateTo]
+     invoiceDateFrom, invoiceDateTo, termEndDateFrom, termEndDateTo]
   );
 
   // 요약 통계
@@ -1263,6 +1436,36 @@ export default function FeesPage() {
 
   function toggleExpand(key: string) {
     setExpandedKey((prev) => (prev === key ? null : key));
+  }
+
+  function toggleSelect(key: string) {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  const allVisibleSelected = filtered.length > 0 && filtered.every((r) => selectedKeys.has(r.key));
+
+  function toggleSelectAll() {
+    setSelectedKeys((prev) => {
+      if (allVisibleSelected) return new Set();
+      const next = new Set(prev);
+      filtered.forEach((r) => next.add(r.key));
+      return next;
+    });
+  }
+
+  function completeSelected() {
+    const projectIds = Array.from(
+      new Set(filtered.filter((r) => selectedKeys.has(r.key)).map((r) => r.projectId))
+    ).filter(Boolean);
+    if (projectIds.length === 0) return;
+    if (!confirm(`선택한 과제 ${projectIds.length}건을 '완료' 상태로 변경하시겠습니까?`)) return;
+    projectIds.forEach((id) => updateProject(id, { status: "COMPLETED" }));
+    setSelectedKeys(new Set());
   }
 
   function cell(row: FeeRow, colKey: string) {
@@ -1341,10 +1544,13 @@ export default function FeesPage() {
         );
 
       case "unclaimedAmount":
-        return (
-          <span className={`text-xs font-medium ${row.unclaimedAmount > 0 ? "text-amber-600" : "text-slate-300"}`}>
-            {row.unclaimedAmount > 0 ? fmtWon(row.unclaimedAmount) : "—"}
-          </span>
+        return <UnclaimedAmountCell row={row} canEdit={canEdit} />;
+
+      case "hasOpenIssue":
+        return row.hasOpenIssue ? (
+          <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-red-50 text-red-600 text-[11px] font-bold">O</span>
+        ) : (
+          <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-slate-100 text-slate-400 text-[11px] font-bold">X</span>
         );
 
       case "projectCode":
@@ -1499,19 +1705,9 @@ export default function FeesPage() {
 
           {/* 날짜 입력 */}
           <div className="flex items-center gap-2">
-            <input
-              type="date"
-              value={invoiceDateFrom}
-              onChange={(e) => setInvoiceDateFrom(e.target.value)}
-              className="text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-            />
+            <DateInput value={invoiceDateFrom} onChange={setInvoiceDateFrom} className="w-28" />
             <span className="text-slate-400 text-xs">~</span>
-            <input
-              type="date"
-              value={invoiceDateTo}
-              onChange={(e) => setInvoiceDateTo(e.target.value)}
-              className="text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-            />
+            <DateInput value={invoiceDateTo} onChange={setInvoiceDateTo} className="w-28" />
             {hasDateFilter && (
               <button
                 onClick={clearDateRange}
@@ -1547,7 +1743,49 @@ export default function FeesPage() {
             </span>
           )}
         </div>
+
+        {/* 당해종료일 기간 필터 */}
+        <div className="px-4 py-3 flex items-center gap-3 flex-wrap">
+          <span className="text-xs font-medium text-slate-500 shrink-0 w-24">당해종료일</span>
+          <div className="flex items-center gap-2">
+            <DateInput value={termEndDateFrom} onChange={setTermEndDateFrom} className="w-28" />
+            <span className="text-slate-400 text-xs">~</span>
+            <DateInput value={termEndDateTo} onChange={setTermEndDateTo} className="w-28" />
+            {hasTermEndDateFilter && (
+              <button
+                onClick={clearTermEndDateRange}
+                className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1.5 rounded hover:bg-slate-100 transition-colors"
+              >
+                초기화
+              </button>
+            )}
+          </div>
+          {hasTermEndDateFilter && (
+            <span className="text-xs text-blue-600 font-medium ml-auto">
+              {filtered.length}건 해당
+            </span>
+          )}
+        </div>
       </div>
+
+      {/* 다중 선택 일괄 처리 */}
+      {canEdit && selectedKeys.size > 0 && (
+        <div className="flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-xl px-4 py-2.5">
+          <span className="text-xs font-medium text-blue-700">{selectedKeys.size}건 선택됨</span>
+          <button
+            onClick={completeSelected}
+            className="text-xs font-medium px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+          >
+            선택 과제 완료 처리
+          </button>
+          <button
+            onClick={() => setSelectedKeys(new Set())}
+            className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1.5 rounded hover:bg-white transition-colors"
+          >
+            선택 해제
+          </button>
+        </div>
+      )}
 
       {/* 메인 테이블 */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -1555,6 +1793,16 @@ export default function FeesPage() {
           <table className="text-xs" style={{ minWidth: "2400px" }}>
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50">
+                {canEdit && (
+                  <th className="w-8 px-2 py-3 shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      onChange={toggleSelectAll}
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30"
+                    />
+                  </th>
+                )}
                 <th className="w-8 px-2 py-3 shrink-0" />
                 {COLUMNS.map((col) => (
                   <th
@@ -1567,12 +1815,13 @@ export default function FeesPage() {
                 <th className="px-3 py-3 text-center font-medium text-slate-500 whitespace-nowrap w-24">공문발송</th>
                 <th className="px-3 py-3 text-center font-medium text-slate-500 whitespace-nowrap w-32">매출관리</th>
                 <th className="px-3 py-3 text-center font-medium text-slate-500 whitespace-nowrap w-20">수금관리</th>
+                <th className="px-3 py-3 text-center font-medium text-slate-500 whitespace-nowrap w-20">정보수정</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={COLUMNS.length + 4} className="px-4 py-10 text-center text-sm text-slate-400">
+                  <td colSpan={COLUMNS.length + (canEdit ? 6 : 5)} className="px-4 py-10 text-center text-sm text-slate-400">
                     검색 결과가 없습니다
                   </td>
                 </tr>
@@ -1586,6 +1835,16 @@ export default function FeesPage() {
                       key={row.key}
                       className={`border-b border-slate-50 transition-colors ${isExpanded ? "bg-blue-50/30" : "hover:bg-slate-50"}`}
                     >
+                      {canEdit && (
+                        <td className="px-2 py-2.5 text-center shrink-0">
+                          <input
+                            type="checkbox"
+                            checked={selectedKeys.has(row.key)}
+                            onChange={() => toggleSelect(row.key)}
+                            className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30"
+                          />
+                        </td>
+                      )}
                       <td className="px-2 py-2.5 text-center shrink-0">
                         <button
                           onClick={() => toggleExpand(row.key)}
@@ -1713,6 +1972,31 @@ export default function FeesPage() {
                           <span className="text-slate-300 text-xs">—</span>
                         )}
                       </td>
+                      {/* 정보수정 버튼 */}
+                      <td className="px-3 py-2.5 text-center align-middle w-20">
+                        {canEdit && (
+                          <button
+                            onClick={() =>
+                              setModal({
+                                mode: "info-edit",
+                                target: {
+                                  projectId:       row.projectId,
+                                  projectName:     row.projectName,
+                                  leadMemberId:    row.leadMemberId,
+                                  docRequestDate:  row.docRequestDate,
+                                  docReplyDate:    row.docReplyDate,
+                                  recipientName:   row.recipientName,
+                                  recipientEmail:  row.recipientEmail,
+                                  assignedManager: row.assignedManager,
+                                },
+                              })
+                            }
+                            className="text-[11px] font-medium px-2 py-1 rounded transition-colors whitespace-nowrap bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200"
+                          >
+                            정보수정
+                          </button>
+                        )}
+                      </td>
                     </tr>,
                     isExpanded && (
                       <FeeRowDetail key={`${row.key}-detail`} row={row} />
@@ -1767,6 +2051,11 @@ export default function FeesPage() {
           size="lg"
         >
           <DispatchModal target={modal.target} onClose={() => setModal(null)} />
+        </Modal>
+      )}
+      {modal?.mode === "info-edit" && (
+        <Modal title="과제 정보 수정" onClose={() => setModal(null)} size="md">
+          <InfoEditModal target={modal.target} onClose={() => setModal(null)} />
         </Modal>
       )}
     </div>

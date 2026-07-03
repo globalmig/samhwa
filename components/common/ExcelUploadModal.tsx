@@ -501,6 +501,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
   const [doneResult, setDoneResult] = useState({ agency: 0, project: 0, inst: 0 });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [previewBackStep, setPreviewBackStep] = useState<Step>("mapping");
 
   // ── 파일 파싱 ───────────────────────────────────────────────
 
@@ -659,6 +660,20 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
     setStep("preview");
   }
 
+  // 시트 확인 후 필수 컬럼이 모두 자동 인식되면 매핑 단계 건너뜀
+  function handleSheetConfirm(sheets: ParsedSheet[]) {
+    const allMapped = sheets.every((s) =>
+      s.mapping.filter((m) => m.required).every((m) => m.mappedTo !== null)
+    );
+    if (allMapped) {
+      setPreviewBackStep("sheet");
+      buildPreview();
+    } else {
+      setPreviewBackStep("mapping");
+      setStep("mapping");
+    }
+  }
+
   // ── 등록 실행 ───────────────────────────────────────────────
 
   function doRegister() {
@@ -789,7 +804,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         <SheetStep
           allSheetNames={allSheetNames}
           matched={matchedSheets}
-          onConfirm={() => setStep("mapping")}
+          onConfirm={() => handleSheetConfirm(parsedSheets)}
           onBack={() => setStep("upload")}
         />
       )}
@@ -807,7 +822,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         <PreviewStep
           previewRows={previewRows}
           onConfirm={doRegister}
-          onBack={() => setStep("mapping")}
+          onBack={() => setStep(previewBackStep)}
           loading={loading}
         />
       )}

@@ -5,9 +5,11 @@ import { FiEdit2 } from "react-icons/fi";
 import { useStore, addReceivable, updateReceivable } from "@/lib/store";
 import { type Receivable } from "@/lib/mock";
 import { fmtWon, fmtDate } from "@/lib/utils";
+import Link from "next/link";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
 import { useCanWrite } from "@/lib/permissions";
+import { isOverdueByRule } from "@/lib/notifications";
 
 const STATUS_MAP: Record<Receivable["status"], { label: string; color: "red" | "amber" | "green" | "blue" }> = {
   OVERDUE: { label: "미수", color: "red" },
@@ -87,7 +89,7 @@ function ReceivableForm({ initial, onSubmit, onClose }: { initial: Omit<Receivab
       <div className="grid grid-cols-3 gap-4">
         <Field label="청구액(원)"><input className={inputCls} type="number" min={0} value={form.billedAmount} onChange={(e) => s("billedAmount", Number(e.target.value))} /></Field>
         <Field label="수금액(원)"><input className={inputCls} type="number" min={0} value={form.paidAmount} onChange={(e) => s("paidAmount", Number(e.target.value))} /></Field>
-        <Field label="채권잔액(원)"><input className={inputCls} type="number" min={0} value={form.receivableAmount} onChange={(e) => s("receivableAmount", Number(e.target.value))} /></Field>
+        <Field label="미수금(원)"><input className={inputCls} type="number" min={0} value={form.receivableAmount} onChange={(e) => s("receivableAmount", Number(e.target.value))} /></Field>
       </div>
       <div className="grid grid-cols-2 gap-4">
         <Field label="청구일"><input className={inputCls} type="date" value={form.billedAt} onChange={(e) => s("billedAt", e.target.value)} /></Field>
@@ -103,7 +105,7 @@ function ReceivableForm({ initial, onSubmit, onClose }: { initial: Omit<Receivab
 
 export default function ReceivablesPage() {
   const canEdit = useCanWrite('receivables');
-  const { receivables } = useStore();
+  const { receivables, projects, fundingAgencies } = useStore();
   const [filterInvoiceNumber,   setFilterInvoiceNumber]   = useState("");
   const [filterProjectNumber,   setFilterProjectNumber]   = useState("");
   const [filterProjectName,     setFilterProjectName]     = useState("");
@@ -111,17 +113,35 @@ export default function ReceivablesPage() {
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [modal, setModal] = useState<ModalState | null>(null);
 
+  // 과제번호로 연결된 과제 정보(전문기관 약칭·연구책임자·당해기간·총 연차)를 함께 표시
+  const enriched = useMemo(
+    () =>
+      receivables.map((r) => {
+        const project = projects.find((p) => p.projectNumber === r.projectNumber);
+        const agency = project ? fundingAgencies.find((a) => a.id === project.agencyId) : undefined;
+        return {
+          ...r,
+          agencyShortName: agency?.shortName ?? "",
+          researchLead: project?.researchLead ?? "",
+          termStartDate: project?.startDate ?? "",
+          termEndDate: project?.endDate ?? "",
+          totalTerms: project?.totalTerms ?? 0,
+        };
+      }),
+    [receivables, projects, fundingAgencies]
+  );
+
   const filtered = useMemo(
     () =>
-      receivables.filter(
+      enriched.filter(
         (r) =>
-          (statusFilter === "ALL" || r.status === statusFilter) &&
+          (statusFilter === "ALL" || (statusFilter === "LATE" ? isOverdueByRule(r) : r.status === statusFilter)) &&
           (filterInvoiceNumber   === "" || r.invoiceNumber.includes(filterInvoiceNumber)) &&
           (filterProjectNumber   === "" || r.projectNumber.includes(filterProjectNumber)) &&
           (filterProjectName     === "" || r.projectName.includes(filterProjectName)) &&
           (filterLeadInstitution === "" || r.leadInstitutionName.includes(filterLeadInstitution))
       ),
-    [receivables, filterInvoiceNumber, filterProjectNumber, filterProjectName, filterLeadInstitution, statusFilter]
+    [enriched, filterInvoiceNumber, filterProjectNumber, filterProjectName, filterLeadInstitution, statusFilter]
   );
 
   const overdueAmount = receivables.filter((r) => r.status === "OVERDUE").reduce((s, r) => s + r.receivableAmount, 0);
@@ -148,7 +168,7 @@ export default function ReceivablesPage() {
 
       <div className="grid grid-cols-4 gap-3">
         {[
-          { label: "채권 잔액 합계", value: fmtWon(pendingAmount), color: "text-red-600" },
+          { label: "미수금 합계", value: fmtWon(pendingAmount), color: "text-red-600" },
           { label: "미수액", value: fmtWon(overdueAmount), color: "text-red-700" },
           { label: "미수 건수", value: `${overdueCount}건`, color: "text-red-600" },
           { label: "수금완료", value: `${receivables.filter((r) => r.status === "PAID").length}건`, color: "text-green-600" },
@@ -183,7 +203,8 @@ export default function ReceivablesPage() {
         <div className="px-4 py-2.5 flex justify-end">
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="text-xs border border-slate-200 rounded-lg px-3 py-1.5 text-slate-600 bg-white">
             <option value="ALL">전체 상태</option>
-            <option value="OVERDUE">연체</option>
+            <option value="OVERDUE">미수</option>
+            <option value="LATE">연체</option>
             <option value="PENDING">청구중</option>
             <option value="PARTIAL">일부수금</option>
             <option value="PAID">수금완료</option>
@@ -198,12 +219,16 @@ export default function ReceivablesPage() {
               <tr className="border-b border-slate-100 bg-slate-50">
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">계산서번호</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">과제번호</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">약칭</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">주관기관</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">연구책임자</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">연차</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">당해시작일</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">당해종료일</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">청구일</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">청구액</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">수금액</th>
-                <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">채권잔액</th>
+                <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">미수금</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">만기일</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">상태</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">관리</th>
@@ -211,26 +236,40 @@ export default function ReceivablesPage() {
             </thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan={11} className="px-4 py-10 text-center text-sm text-slate-400">검색 결과가 없습니다</td></tr>
+                <tr><td colSpan={15} className="px-4 py-10 text-center text-sm text-slate-400">검색 결과가 없습니다</td></tr>
               ) : (
                 filtered.map((r) => (
                   <tr key={r.id} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
                     <td className="px-4 py-3 font-mono text-xs text-slate-600 whitespace-nowrap">{r.invoiceNumber}</td>
                     <td className="px-4 py-3 font-mono text-xs text-slate-500 whitespace-nowrap">{r.projectNumber}</td>
+                    <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">{r.agencyShortName || "-"}</td>
                     <td className="px-4 py-3 text-sm text-blue-700 font-medium whitespace-nowrap">{r.leadInstitutionName}</td>
-                    <td className="px-4 py-3 text-center text-xs text-slate-600 whitespace-nowrap">{r.termYear}년 {r.termNumber}연차</td>
+                    <td className="px-4 py-3 text-center text-xs whitespace-nowrap">
+                      {r.researchLead
+                        ? <Link href={`/researchers/${encodeURIComponent(r.researchLead)}`} className="text-slate-700 hover:text-blue-600 hover:underline transition-colors">{r.researchLead}</Link>
+                        : <span className="text-slate-400">-</span>}
+                    </td>
+                    <td className="px-4 py-3 text-center text-xs text-slate-600 whitespace-nowrap">
+                      {r.totalTerms > 0 ? `${r.termNumber}/${r.totalTerms}` : `${r.termYear}년 ${r.termNumber}연차`}
+                    </td>
+                    <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">{r.termStartDate ? fmtDate(r.termStartDate) : "-"}</td>
+                    <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">{r.termEndDate ? fmtDate(r.termEndDate) : "-"}</td>
                     <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">{fmtDate(r.billedAt)}</td>
                     <td className="px-4 py-3 text-right text-sm text-slate-700 whitespace-nowrap">{fmtWon(r.billedAmount)}</td>
                     <td className="px-4 py-3 text-right text-sm text-green-700 whitespace-nowrap">{fmtWon(r.paidAmount)}</td>
                     <td className="px-4 py-3 text-right font-bold whitespace-nowrap">
                       {r.receivableAmount > 0
-                        ? <span className={r.status === "OVERDUE" ? "text-red-600" : "text-amber-600"}>{fmtWon(r.receivableAmount)}</span>
+                        ? <span className={r.status === "OVERDUE" || isOverdueByRule(r) ? "text-red-600" : "text-amber-600"}>{fmtWon(r.receivableAmount)}</span>
                         : <span className="text-slate-400">-</span>}
                     </td>
                     <td className="px-4 py-3 text-center text-xs whitespace-nowrap">
-                      <span className={r.status === "OVERDUE" ? "text-red-600 font-medium" : "text-slate-500"}>{fmtDate(r.dueDate)}</span>
+                      <span className={r.status === "OVERDUE" || isOverdueByRule(r) ? "text-red-600 font-medium" : "text-slate-500"}>{fmtDate(r.dueDate)}</span>
                     </td>
-                    <td className="px-4 py-3 text-center"><StatusBadge label={STATUS_MAP[r.status].label} color={STATUS_MAP[r.status].color} /></td>
+                    <td className="px-4 py-3 text-center">
+                      {isOverdueByRule(r)
+                        ? <StatusBadge label="연체" color="red" />
+                        : <StatusBadge label={STATUS_MAP[r.status].label} color={STATUS_MAP[r.status].color} />}
+                    </td>
                     <td className="px-4 py-3 text-center">
                       {canEdit && (
                         <button onClick={() => setModal({ mode: "edit", target: r })} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors" title="수정">

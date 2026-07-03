@@ -497,11 +497,15 @@ export interface Project {
   leadInstitutionId: string; // 주관기관 ID
   leadInstitutionName: string; // 주관기관명 (비정규화)
   totalBudget: number;
-  startDate: string;
-  endDate: string;
+  startDate: string;   // 당해시작일
+  endDate: string;     // 당해종료일
   totalTerms: number;
   currentTerm: number;
   status: "ACTIVE" | "COMPLETED" | "SUSPENDED";
+  firstStartDate?: string; // 최초시작일 (과제 전체 시작일)
+  finalEndDate?: string;   // 최종종료일 (과제 전체 종료일)
+  stageStartDate?: string; // 단계시작일
+  stageEndDate?: string;   // 단계종료일
   govGrant?: number;             // 당해 정부출연금
   privateCash?: number;          // 당해 민간원금
   privateInKind?: number;        // 당해 민간현물
@@ -2273,8 +2277,34 @@ export const systemUsers: SystemUser[] = [
 ];
 
 // ============================================================
+// 공지사항 (알림 - 회계담당자/전문기관담당자 공유용)
+// ============================================================
+
+export interface Notice {
+  id: string;
+  title: string;
+  content: string;
+  authorName: string;
+  authorRole: SystemUser["role"];
+  createdAt: string; // "YYYY-MM-DD HH:mm"
+}
+
+export const notices: Notice[] = [
+  {
+    id: "notice-001",
+    title: "12월 세금계산서 마감 안내",
+    content: "12월 세금계산서는 12/27(금)까지 발행 요청 부탁드립니다. 이후 요청 건은 익월로 이월됩니다.",
+    authorName: "이회계",
+    authorRole: "ACCOUNTANT",
+    createdAt: "2024-12-05 10:00",
+  },
+];
+
+// ============================================================
 // 이슈/메모 관리
 // ============================================================
+
+export type IssueRecipientGroup = "MANAGER" | "ACCOUNTANT" | "SETTLEMENT";
 
 export interface ProjectIssue {
   id: string;
@@ -2285,6 +2315,8 @@ export interface ProjectIssue {
   createdAt: string;
   priority: "HIGH" | "MEDIUM" | "LOW";
   status: "OPEN" | "IN_PROGRESS" | "RESOLVED";
+  // 알림 받을 대상. 비어있으면(미선택) 과제 담당자에게만 전달
+  recipientGroups?: IssueRecipientGroup[];
 }
 
 export const projectIssues: ProjectIssue[] = [

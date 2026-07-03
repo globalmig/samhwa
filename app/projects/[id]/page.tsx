@@ -10,9 +10,9 @@ import {
   addReceivable, updateReceivable, addEmailDispatch, updateTermFee, updateUnclaimedFee,
   updateProjectMember,
 } from "@/lib/store";
-import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember } from "@/lib/mock";
+import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type IssueRecipientGroup } from "@/lib/mock";
 import { calcTermFee, resolvePolicy, normalizeGrade, type CalcMember } from "@/lib/fee-calculator";
-import { fmtWon, fmtDate } from "@/lib/utils";
+import { fmtWonFull, fmtDate } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
 import { useCanWrite } from "@/lib/permissions";
 
@@ -63,6 +63,12 @@ const ISSUE_STATUS_LABEL: Record<string, string> = {
   IN_PROGRESS: "진행중",
   RESOLVED:    "완료",
 };
+const GRADE_COLOR: Record<string, string> = {
+  S: "bg-blue-100 text-blue-700",
+  "A~C": "bg-green-100 text-green-700",
+  일반: "bg-slate-100 text-slate-500",
+};
+const GRADE_LABEL: Record<string, string> = { S: "최우수(S)", "A~C": "우수(A~C)", 일반: "일반" };
 
 // ─── TermGroup ───────────────────────────────────────────────
 interface TermGroup {
@@ -100,8 +106,12 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   const [issueContent, setIssueContent] = useState("");
   const [issuePriority, setIssuePriority] = useState<"HIGH" | "MEDIUM" | "LOW">("MEDIUM");
   const [issueStatus, setIssueStatus] = useState<"OPEN" | "IN_PROGRESS" | "RESOLVED">("OPEN");
+  const [issueRecipients, setIssueRecipients] = useState<IssueRecipientGroup[]>([]);
   const [editingIssueId, setEditingIssueId] = useState<string | null>(null);
-  const [editIssueDraft, setEditIssueDraft] = useState({ content: "", priority: "MEDIUM" as "HIGH" | "MEDIUM" | "LOW", status: "OPEN" as "OPEN" | "IN_PROGRESS" | "RESOLVED" });
+  const [editIssueDraft, setEditIssueDraft] = useState({
+    content: "", priority: "MEDIUM" as "HIGH" | "MEDIUM" | "LOW", status: "OPEN" as "OPEN" | "IN_PROGRESS" | "RESOLVED",
+    recipientGroups: [] as IssueRecipientGroup[],
+  });
   const [deletingIssueId, setDeletingIssueId] = useState<string | null>(null);
 
   if (!project) return null;
@@ -136,7 +146,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
         members: calcMembers,
         workType: "ANNUAL",
         policy,
-        projectType: (project as unknown as { projectType?: "GENERAL" | "AUTONOMY_TRACK" }).projectType ?? "GENERAL",
+        projectType: project.projectType ?? "GENERAL",
         carriedOverUnclaimed: 0,
       })
     : null;
@@ -198,19 +208,24 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       createdAt: new Date().toISOString().replace("T", " ").slice(0, 16),
       priority: issuePriority,
       status: issueStatus,
+      recipientGroups: issueRecipients,
     });
     setIssueContent("");
     setIssuePriority("MEDIUM");
     setIssueStatus("OPEN");
+    setIssueRecipients([]);
     setShowIssueForm(false);
   }
 
-  const GRADE_COLOR: Record<string, string> = {
-    S: "bg-blue-100 text-blue-700",
-    "A~C": "bg-green-100 text-green-700",
-    일반: "bg-slate-100 text-slate-500",
-  };
-  const GRADE_LABEL: Record<string, string> = { S: "최우수(S)", "A~C": "우수(A~C)", 일반: "일반" };
+  function toggleIssueRecipient(group: IssueRecipientGroup) {
+    setIssueRecipients((prev) => prev.includes(group) ? prev.filter((g) => g !== group) : [...prev, group]);
+  }
+  function toggleEditIssueRecipient(group: IssueRecipientGroup) {
+    setEditIssueDraft((d) => ({
+      ...d,
+      recipientGroups: d.recipientGroups.includes(group) ? d.recipientGroups.filter((g) => g !== group) : [...d.recipientGroups, group],
+    }));
+  }
 
   return (
     <div className="space-y-4">
@@ -295,7 +310,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                   onChange={(e) => setDraft((p) => ({ ...p, privateCash: Number(e.target.value) }))} />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">참여 기관수</label>
+                <label className="block text-xs font-medium text-slate-500 mb-1">공동기관 수</label>
                 <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-white text-slate-500">
                   {members.length}개
                 </div>
@@ -313,7 +328,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">당해 사업비 (자동계산)</label>
                 <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-white font-bold text-slate-700">
-                  {fmtWon(annualBudget)}
+                  {fmtWonFull(annualBudget)}
                 </div>
               </div>
               <div>
@@ -324,17 +339,51 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             </div>
           </div>
 
-          {/* 기간 + 연차 + 과제구분 */}
-          <div className="grid grid-cols-5 gap-4">
+          {/* 과제 전체 기간 */}
+          <div className="grid grid-cols-4 gap-4">
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">시작일</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">최초시작일</label>
+              <input className={`${inp} w-full`} type="date" value={draft.firstStartDate ?? ""}
+                onChange={(e) => setDraft((p) => ({ ...p, firstStartDate: e.target.value }))} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">최종종료일</label>
+              <input className={`${inp} w-full`} type="date" value={draft.finalEndDate ?? ""}
+                onChange={(e) => setDraft((p) => ({ ...p, finalEndDate: e.target.value }))} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">단계시작일</label>
+              <input className={`${inp} w-full`} type="date" value={draft.stageStartDate ?? ""}
+                onChange={(e) => setDraft((p) => ({ ...p, stageStartDate: e.target.value }))} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">단계종료일</label>
+              <input className={`${inp} w-full`} type="date" value={draft.stageEndDate ?? ""}
+                onChange={(e) => setDraft((p) => ({ ...p, stageEndDate: e.target.value }))} />
+            </div>
+          </div>
+
+          {/* 당해 기간 + 연차 + 과제구분 + 자율성트랙 */}
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">당해시작일</label>
               <input className={`${inp} w-full`} type="date" value={draft.startDate}
                 onChange={(e) => setDraft((p) => ({ ...p, startDate: e.target.value }))} />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">종료일</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">당해종료일</label>
               <input className={`${inp} w-full`} type="date" value={draft.endDate}
                 onChange={(e) => setDraft((p) => ({ ...p, endDate: e.target.value }))} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">과제 구분</label>
+              <select className={`${sel} w-full`} value={draft.projectCategory ?? "연차상시"}
+                onChange={(e) => setDraft((p) => ({ ...p, projectCategory: e.target.value }))}>
+                <option value="연차상시">연차상시</option>
+                <option value="연차">연차</option>
+                <option value="상시">상시</option>
+                <option value="기타">기타</option>
+              </select>
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">총연차</label>
@@ -347,14 +396,19 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 onChange={(e) => setDraft((p) => ({ ...p, currentTerm: Number(e.target.value) }))} />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">과제 구분</label>
-              <select className={`${sel} w-full`} value={draft.projectCategory ?? "연차상시"}
-                onChange={(e) => setDraft((p) => ({ ...p, projectCategory: e.target.value }))}>
-                <option value="연차상시">연차상시</option>
-                <option value="연차">연차</option>
-                <option value="상시">상시</option>
-                <option value="기타">기타</option>
-              </select>
+              <label className="block text-xs font-medium text-slate-500 mb-1">자율성트랙 여부</label>
+              <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-medium">
+                <button type="button"
+                  onClick={() => setDraft((p) => ({ ...p, projectType: "GENERAL" }))}
+                  className={`flex-1 px-2 py-1.5 transition-colors ${
+                    (draft.projectType ?? "GENERAL") === "GENERAL" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"
+                  }`}>일반과제</button>
+                <button type="button"
+                  onClick={() => setDraft((p) => ({ ...p, projectType: "AUTONOMY_TRACK" }))}
+                  className={`flex-1 px-2 py-1.5 border-l border-slate-200 transition-colors ${
+                    draft.projectType === "AUTONOMY_TRACK" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"
+                  }`}>자율성트랙</button>
+              </div>
             </div>
           </div>
         </div>
@@ -369,7 +423,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
           </div>
           <div className="flex items-center gap-3">
             <span className="text-xs text-slate-500">
-              산정 수수료 합계 <strong className="text-slate-800 ml-1">{fmtWon(totalCalcFee)}</strong>
+              산정 수수료 합계 <strong className="text-slate-800 ml-1">{fmtWonFull(totalCalcFee)}</strong>
             </span>
             {editingMembers ? (
               <>
@@ -443,7 +497,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                           className={`${inp} w-36 text-right`}
                         />
                       ) : (
-                        <span className="text-sm text-slate-700">{fmtWon(budget)}</span>
+                        <span className="text-sm text-slate-700">{fmtWonFull(budget)}</span>
                       )}
                     </td>
                     <td className="px-4 py-3 text-center">
@@ -453,8 +507,8 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                     </td>
                     <td className="px-4 py-3 text-right font-bold text-slate-800">
                       {feeResult
-                        ? fmtWon(getInstCalcFee(m.institutionId))
-                        : fmtWon(m.calculatedFee)}
+                        ? fmtWonFull(getInstCalcFee(m.institutionId))
+                        : fmtWonFull(m.calculatedFee)}
                     </td>
                   </tr>
                 );
@@ -463,7 +517,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             <tfoot>
               <tr className="bg-slate-50 border-t border-slate-200">
                 <td colSpan={5} className="px-4 py-2.5 text-right text-xs text-slate-400">합계</td>
-                <td className="px-4 py-2.5 text-right font-bold text-slate-800">{fmtWon(totalCalcFee)}</td>
+                <td className="px-4 py-2.5 text-right font-bold text-slate-800">{fmtWonFull(totalCalcFee)}</td>
               </tr>
             </tfoot>
           </table>
@@ -507,7 +561,24 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                     <option value="RESOLVED">완료</option>
                   </select>
                 </div>
-                <div className="flex gap-2 ml-auto">
+              </div>
+              <div>
+                <p className="text-xs text-slate-500 mb-1.5">알림 받을 대상 <span className="text-slate-400 font-normal">· 선택 안 하면 과제 담당자에게만 전달</span></p>
+                <div className="flex items-center gap-3">
+                  {([
+                    { value: "MANAGER", label: "담당자" },
+                    { value: "ACCOUNTANT", label: "회계담당자 전체" },
+                    { value: "SETTLEMENT", label: "전문기관담당자 전체" },
+                  ] as const).map(({ value, label }) => (
+                    <label key={value} className="flex items-center gap-1.5 cursor-pointer">
+                      <input type="checkbox" checked={issueRecipients.includes(value)}
+                        onChange={() => toggleIssueRecipient(value)}
+                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30" />
+                      <span className="text-xs text-slate-600">{label}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="flex gap-2 mt-3 justify-end">
                   <button onClick={() => setShowIssueForm(false)}
                     className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
                   <button onClick={submitIssue} disabled={!issueContent.trim()}
@@ -554,12 +625,29 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                           <option value="RESOLVED">완료</option>
                         </select>
                       </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {([
+                        { value: "MANAGER", label: "담당자" },
+                        { value: "ACCOUNTANT", label: "회계담당자 전체" },
+                        { value: "SETTLEMENT", label: "전문기관담당자 전체" },
+                      ] as const).map(({ value, label }) => (
+                        <label key={value} className="flex items-center gap-1.5 cursor-pointer">
+                          <input type="checkbox" checked={editIssueDraft.recipientGroups.includes(value)}
+                            onChange={() => toggleEditIssueRecipient(value)}
+                            className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30" />
+                          <span className="text-xs text-slate-600">{label}</span>
+                        </label>
+                      ))}
                       <div className="flex gap-2 ml-auto">
                         <button onClick={() => setEditingIssueId(null)}
                           className="px-3 py-1 text-xs text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
                         <button
                           onClick={() => {
-                            updateProjectIssue(issue.id, { content: editIssueDraft.content.trim(), priority: editIssueDraft.priority, status: editIssueDraft.status });
+                            updateProjectIssue(issue.id, {
+                              content: editIssueDraft.content.trim(), priority: editIssueDraft.priority, status: editIssueDraft.status,
+                              recipientGroups: editIssueDraft.recipientGroups,
+                            });
                             setEditingIssueId(null);
                           }}
                           disabled={!editIssueDraft.content.trim()}
@@ -610,7 +698,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                     ) : (
                       <div className="flex items-center gap-0.5 shrink-0">
                         <button
-                          onClick={() => { setEditingIssueId(issue.id); setEditIssueDraft({ content: issue.content, priority: issue.priority, status: issue.status ?? "OPEN" }); }}
+                          onClick={() => { setEditingIssueId(issue.id); setEditIssueDraft({ content: issue.content, priority: issue.priority, status: issue.status ?? "OPEN", recipientGroups: issue.recipientGroups ?? [] }); }}
                           className="p-1.5 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors">
                           <FiEdit2 size={13} />
                         </button>
@@ -668,11 +756,12 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
 }
 
 // ─── Term section (per-연차 card in Tab 2) ───────────────────
-function TermSection({ group, projectNumber, leadInstitutionId, leadInstitutionName }: {
+function TermSection({ group, projectNumber, leadInstitutionId, leadInstitutionName, members }: {
   group: TermGroup;
   projectNumber: string;
   leadInstitutionId: string;
   leadInstitutionName: string;
+  members: ProjectMember[];
 }) {
   const canEditInvoices = useCanWrite('tax-invoices');
   const canEditReceivables = useCanWrite('receivables');
@@ -809,11 +898,11 @@ function TermSection({ group, projectNumber, leadInstitutionId, leadInstitutionN
           <p className="text-xs text-slate-400 mt-0.5">{group.fees.length}개 기관</p>
         </div>
         <div className="flex items-center gap-6 text-xs text-slate-500 mr-2">
-          <span>산정 <strong className="text-slate-700 ml-1">{fmtWon(group.totalCalculated)}</strong></span>
-          <span>신청 <strong className="text-slate-700 ml-1">{fmtWon(group.totalApplied)}</strong></span>
+          <span>산정 <strong className="text-slate-700 ml-1">{fmtWonFull(group.totalCalculated)}</strong></span>
+          <span>신청 <strong className="text-slate-700 ml-1">{fmtWonFull(group.totalApplied)}</strong></span>
           {group.receivable && (
             <span className={group.receivable.receivableAmount > 0 ? "text-red-600 font-semibold" : "text-green-700"}>
-              미수금 {fmtWon(group.receivable.receivableAmount)}
+              미수금 {fmtWonFull(group.receivable.receivableAmount)}
             </span>
           )}
         </div>
@@ -827,7 +916,7 @@ function TermSection({ group, projectNumber, leadInstitutionId, leadInstitutionN
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-100 text-slate-500 font-medium">
                   <th className="text-left px-4 py-2.5">기관명</th>
-                  <th className="text-center px-4 py-2.5">유형</th>
+                  <th className="text-center px-4 py-2.5">구분</th>
                   <th className="text-right px-4 py-2.5">사업비</th>
                   <th className="text-center px-4 py-2.5">요율</th>
                   <th className="text-right px-4 py-2.5">표준액(산정)</th>
@@ -839,23 +928,29 @@ function TermSection({ group, projectNumber, leadInstitutionId, leadInstitutionN
               <tbody>
                 {group.fees.map((f) => {
                   const adj = f.appliedFee === 0 ? 0 : f.appliedFee - f.calculatedFee;
+                  const rawGrade = members.find((m) => m.institutionId === f.institutionId)?.institutionGrade ?? "일반";
+                  const grade = normalizeGrade(rawGrade);
                   return (
                     <tr key={f.id} className="border-b border-slate-50 hover:bg-slate-50/50">
                       <td className="px-4 py-2.5 font-medium text-slate-800">{f.institutionName}</td>
-                      <td className="px-4 py-2.5 text-center text-slate-600 whitespace-nowrap">{f.institutionType}</td>
-                      <td className="px-4 py-2.5 text-right text-slate-600 whitespace-nowrap">{fmtWon(f.budget)}</td>
+                      <td className="px-4 py-2.5 text-center whitespace-nowrap">
+                        <span className={`text-xs font-medium px-2 py-0.5 rounded ${GRADE_COLOR[grade] ?? GRADE_COLOR["일반"]}`}>
+                          {GRADE_LABEL[grade] ?? grade}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-slate-600 whitespace-nowrap">{fmtWonFull(f.budget)}</td>
                       <td className="px-4 py-2.5 text-center text-blue-700 font-medium">{f.feeRate}%</td>
-                      <td className="px-4 py-2.5 text-right text-slate-700 whitespace-nowrap">{fmtWon(f.calculatedFee)}</td>
+                      <td className="px-4 py-2.5 text-right text-slate-700 whitespace-nowrap">{fmtWonFull(f.calculatedFee)}</td>
                       <td className="px-4 py-2.5 text-right whitespace-nowrap">
                         {adj === 0
                           ? <span className="text-slate-300">-</span>
                           : <span className={adj > 0 ? "text-blue-600 font-medium" : "text-red-500 font-medium"}>
-                              {adj > 0 ? "+" : ""}{fmtWon(adj)}
+                              {adj > 0 ? "+" : ""}{fmtWonFull(adj)}
                             </span>}
                       </td>
                       <td className="px-4 py-2.5 text-right font-semibold whitespace-nowrap">
                         <span className={f.appliedFee === 0 ? "text-amber-500 font-normal" : "text-slate-800"}>
-                          {f.appliedFee === 0 ? "미적용" : fmtWon(f.appliedFee)}
+                          {f.appliedFee === 0 ? "미적용" : fmtWonFull(f.appliedFee)}
                         </span>
                       </td>
                       <td className="px-4 py-2.5 text-center">
@@ -868,17 +963,17 @@ function TermSection({ group, projectNumber, leadInstitutionId, leadInstitutionN
               <tfoot>
                 <tr className="bg-slate-50 border-t border-slate-100">
                   <td colSpan={4} className="px-4 py-2 text-right text-xs text-slate-400">합계</td>
-                  <td className="px-4 py-2 text-right text-xs font-semibold text-slate-700">{fmtWon(group.totalCalculated)}</td>
+                  <td className="px-4 py-2 text-right text-xs font-semibold text-slate-700">{fmtWonFull(group.totalCalculated)}</td>
                   <td className="px-4 py-2 text-right text-xs">
                     {(() => {
                       const adj = group.totalApplied - group.totalCalculated;
                       if (adj === 0) return <span className="text-slate-300">-</span>;
                       return <span className={adj > 0 ? "text-blue-600 font-medium" : "text-red-500 font-medium"}>
-                        {adj > 0 ? "+" : ""}{fmtWon(adj)}
+                        {adj > 0 ? "+" : ""}{fmtWonFull(adj)}
                       </span>;
                     })()}
                   </td>
-                  <td className="px-4 py-2 text-right text-xs font-bold text-slate-800">{fmtWon(group.totalApplied)}</td>
+                  <td className="px-4 py-2 text-right text-xs font-bold text-slate-800">{fmtWonFull(group.totalApplied)}</td>
                   <td />
                 </tr>
               </tfoot>
@@ -890,15 +985,15 @@ function TermSection({ group, projectNumber, leadInstitutionId, leadInstitutionN
             <div className="border-t border-slate-200 px-5 py-3 bg-slate-50/60 flex items-center justify-end gap-10">
               <div className="text-right">
                 <p className="text-[10px] text-slate-400 mb-0.5">공 급 가 액</p>
-                <p className="text-sm font-semibold text-slate-700">{fmtWon(group.totalApplied)}</p>
+                <p className="text-sm font-semibold text-slate-700">{fmtWonFull(group.totalApplied)}</p>
               </div>
               <div className="text-right">
                 <p className="text-[10px] text-slate-400 mb-0.5">부 가 세 (10%)</p>
-                <p className="text-sm font-semibold text-slate-700">{fmtWon(Math.round(group.totalApplied * 0.1))}</p>
+                <p className="text-sm font-semibold text-slate-700">{fmtWonFull(Math.round(group.totalApplied * 0.1))}</p>
               </div>
               <div className="border-l border-slate-300 pl-10 text-right">
                 <p className="text-[10px] font-semibold text-slate-500 mb-0.5 tracking-widest uppercase">합  계</p>
-                <p className="text-lg font-bold text-slate-900">{fmtWon(Math.round(group.totalApplied * 1.1))}</p>
+                <p className="text-lg font-bold text-slate-900">{fmtWonFull(Math.round(group.totalApplied * 1.1))}</p>
               </div>
             </div>
           )}
@@ -911,9 +1006,9 @@ function TermSection({ group, projectNumber, leadInstitutionId, leadInstitutionN
                 <div className="flex-1 flex flex-wrap items-center gap-3">
                   <span className="font-mono text-xs text-slate-700">{group.invoice.invoiceNumber}</span>
                   <span className="text-xs text-slate-500">{fmtDate(group.invoice.issuedAt)}</span>
-                  <span className="text-xs text-slate-500">공급가 {fmtWon(group.invoice.supplyAmount)}</span>
-                  <span className="text-xs text-slate-500">부가세 {fmtWon(group.invoice.taxAmount)}</span>
-                  <span className="text-sm font-bold text-slate-800">{fmtWon(group.invoice.totalAmount)}</span>
+                  <span className="text-xs text-slate-500">공급가 {fmtWonFull(group.invoice.supplyAmount)}</span>
+                  <span className="text-xs text-slate-500">부가세 {fmtWonFull(group.invoice.taxAmount)}</span>
+                  <span className="text-sm font-bold text-slate-800">{fmtWonFull(group.invoice.totalAmount)}</span>
                   <StatusBadge label={INVOICE_STATUS[group.invoice.status].label} color={INVOICE_STATUS[group.invoice.status].color} />
                   {/* 공문 발송 - 세금계산서와 동일 행 */}
                   <div className="ml-auto flex items-center gap-2">
@@ -963,11 +1058,11 @@ function TermSection({ group, projectNumber, leadInstitutionId, leadInstitutionN
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-slate-600 mb-1">부가세 (자동)</label>
-                    <div className="text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-600">{fmtWon(invForm.taxAmount)}</div>
+                    <div className="text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-600">{fmtWonFull(invForm.taxAmount)}</div>
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-slate-600 mb-1">합계</label>
-                    <div className="text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 font-bold text-slate-700">{fmtWon(invForm.totalAmount)}</div>
+                    <div className="text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 font-bold text-slate-700">{fmtWonFull(invForm.totalAmount)}</div>
                   </div>
                 </div>
                 <div className="flex items-center justify-between">
@@ -989,10 +1084,10 @@ function TermSection({ group, projectNumber, leadInstitutionId, leadInstitutionN
               <span className="text-xs font-semibold text-slate-600 w-24 shrink-0 pt-1">수금 정보</span>
               {group.receivable ? (
                 <div className="flex-1 flex flex-wrap items-center gap-4">
-                  <span className="text-xs text-slate-500">청구 {fmtWon(group.receivable.billedAmount)}</span>
-                  <span className="text-xs text-green-700 font-medium">납부 {fmtWon(group.receivable.paidAmount)}</span>
+                  <span className="text-xs text-slate-500">청구 {fmtWonFull(group.receivable.billedAmount)}</span>
+                  <span className="text-xs text-green-700 font-medium">납부 {fmtWonFull(group.receivable.paidAmount)}</span>
                   <span className={`text-sm font-bold ${group.receivable.receivableAmount > 0 ? "text-red-600" : "text-slate-400"}`}>
-                    미수금 {fmtWon(group.receivable.receivableAmount)}
+                    미수금 {fmtWonFull(group.receivable.receivableAmount)}
                   </span>
                   <StatusBadge label={RECEIVABLE_STATUS[group.receivable.status].label} color={RECEIVABLE_STATUS[group.receivable.status].color} />
                   {canEditReceivables && (
@@ -1030,7 +1125,7 @@ function TermSection({ group, projectNumber, leadInstitutionId, leadInstitutionN
                   <div className="pb-0.5">
                     <p className="text-xs text-slate-400 mb-1">미수금 (자동)</p>
                     <p className={`text-sm font-bold ${Math.max(0, (group.invoice?.totalAmount ?? 0) - rvForm.paidAmount) > 0 ? "text-red-600" : "text-slate-400"}`}>
-                      {fmtWon(Math.max(0, (group.invoice?.totalAmount ?? 0) - rvForm.paidAmount))}
+                      {fmtWonFull(Math.max(0, (group.invoice?.totalAmount ?? 0) - rvForm.paidAmount))}
                     </p>
                   </div>
                   <div className="flex gap-2 ml-auto">
@@ -1051,7 +1146,7 @@ function TermSection({ group, projectNumber, leadInstitutionId, leadInstitutionN
             <div className="border-t border-amber-100 bg-amber-50/30 px-5 py-3 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <span className="text-xs font-semibold text-amber-800">미청구액</span>
-                <span className="text-sm font-bold text-amber-600">{fmtWon(group.unclaimed.amount)}</span>
+                <span className="text-sm font-bold text-amber-600">{fmtWonFull(group.unclaimed.amount)}</span>
                 <span className="text-xs text-amber-600">발생 {fmtDate(group.unclaimed.occurredAt)}</span>
                 <StatusBadge label={UNCLAIMED_STATUS[group.unclaimed.status].label} color={UNCLAIMED_STATUS[group.unclaimed.status].color} />
               </div>
@@ -1082,9 +1177,10 @@ function TermSection({ group, projectNumber, leadInstitutionId, leadInstitutionN
 
 // ─── Tab 2: 수수료 관리 ──────────────────────────────────────
 function FeeManagementTab({ projectId }: { projectId: string }) {
-  const { projects, termFees, taxInvoices, receivables, unclaimedFees } = useStore();
+  const { projects, termFees, taxInvoices, receivables, unclaimedFees, projectMembers } = useStore();
 
   const project = projects.find((p) => p.id === projectId) ?? null;
+  const members = projectMembers.filter((m) => m.projectId === projectId);
 
   // useMemo must be called before any conditional return
   const termGroups = useMemo<TermGroup[]>(() => {
@@ -1136,6 +1232,7 @@ function FeeManagementTab({ projectId }: { projectId: string }) {
           projectNumber={project.projectNumber}
           leadInstitutionId={project.leadInstitutionId}
           leadInstitutionName={project.leadInstitutionName}
+          members={members}
         />
       ))}
     </div>

@@ -14,7 +14,7 @@ import { type PolicyRule, type FeePolicy, type FundingAgency, type FeeRateBracke
 import Modal from "@/components/common/Modal";
 import StatusBadge from "@/components/common/StatusBadge";
 import { useCanWrite } from "@/lib/permissions";
-import { fmtDate } from "@/lib/utils";
+import { fmtDate, fmtWonFull } from "@/lib/utils";
 
 // ─── 공통 스타일 ────────────────────────────────────────────────
 const inputCls = "w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400";
@@ -246,15 +246,15 @@ function BracketEditor({ brackets, onChange }: { brackets: FeeRateBracket[]; onC
               <tr key={i} className="border-b border-slate-100 last:border-0">
                 <td className="px-2 py-1.5">
                   <input type="number" min={0} step={10_000_000} className="w-32 text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                    value={b.minAmount} onChange={(e) => set(i, "minAmount", Number(e.target.value))} />
+                    value={b.minAmount} onFocus={(e) => e.target.select()} onChange={(e) => set(i, "minAmount", Number(e.target.value))} />
                 </td>
                 <td className="px-2 py-1.5">
                   <input type="number" min={0} step={10_000_000} placeholder="(상한없음)" className="w-36 text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                    value={b.maxAmount ?? ""} onChange={(e) => set(i, "maxAmount", e.target.value === "" ? null : Number(e.target.value))} />
+                    value={b.maxAmount ?? ""} onFocus={(e) => e.target.select()} onChange={(e) => set(i, "maxAmount", e.target.value === "" ? null : Number(e.target.value))} />
                 </td>
                 <td className="px-2 py-1.5">
                   <input type="number" min={0} step={1_000} className="w-28 text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                    value={b.baseFee} onChange={(e) => set(i, "baseFee", Number(e.target.value))} />
+                    value={b.baseFee} onFocus={(e) => e.target.select()} onChange={(e) => set(i, "baseFee", Number(e.target.value))} />
                 </td>
                 <td className="px-2 py-1.5 text-slate-400">
                   {fmtAmt(b.minAmount)} ~ {b.maxAmount ? fmtAmt(b.maxAmount) : "∞"}
@@ -314,7 +314,7 @@ function AgencyFeeModelSummary({ agency, policy }: { agency: { shortName: string
     : `${Math.round(policy.annualBillingRate * 100)}% 연차상시 / 100% 정산`;
 
   const fmtAmt = (n: number) => n >= 1_000_000_000 ? `${n / 100_000_000}억` : n >= 100_000_000 ? `${n / 100_000_000}억` : n >= 10_000_000 ? `${n / 10_000_000}천만` : n >= 1_000_000 ? `${n / 1_000_000}백만` : n >= 10_000 ? `${n / 10_000}만` : String(n);
-  const fmtFee = (n: number) => (n / 10_000).toLocaleString() + "만원";
+  const fmtFee = fmtWonFull;
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -438,7 +438,7 @@ function PolicyForm({ initial, onSubmit, onClose }: { initial: PolicyFormData; o
           <label className="block text-xs font-medium text-slate-600 mb-1">적용 종료일</label>
           <input className={inputCls} type="date" value={form.effectiveTo ?? ""} onChange={(e) => sf("effectiveTo", e.target.value || null)} />
         </div>
-        <div>회장님
+        <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">상태</label>
           <select className={inputCls} value={form.status} onChange={(e) => sf("status", e.target.value as FeePolicy["status"])}>
             <option value="DRAFT">초안</option>

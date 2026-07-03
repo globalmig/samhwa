@@ -24,18 +24,19 @@ const navGroups: NavGroup[] = [
     ],
   },
 
-  // ── 과제 관리 (전담기관 + 과제 전체조회) ──────────────────
+  // ── 과제 관리 ──────────────────────────────────────────────
   // 세금계산서 발행, 공문 발송, 수금 입력, 이슈 등록은
   // 과제 전체조회 → 과제 클릭 → 상세 탭에서 처리
   {
     label: "과제 관리",
     items: [
       {
-        label: "전담기관 관리",
-        href: "/funding-agencies",
+        label: "수수료 청구 관리",
+        href: "/fees",
         icon: (
           <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
-            <path fillRule="evenodd" d="M3 6a3 3 0 0 1 3-3h10a1 1 0 0 1 .8 1.6L14.25 7l2.55 2.4A1 1 0 0 1 16 11H6a1 1 0 0 0-1 1v3a1 1 0 1 1-2 0V6z" clipRule="evenodd" />
+            <path d="M4 4a2 2 0 0 0-2 2v1h16V6a2 2 0 0 0-2-2H4z" />
+            <path fillRule="evenodd" d="M18 9H2v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM4 13a1 1 0 0 1 1-1h1a1 1 0 1 1 0 2H5a1 1 0 0 1-1-1zm5-1a1 1 0 1 0 0 2h1a1 1 0 1 0 0-2H9z" clipRule="evenodd" />
           </svg>
         ),
       },
@@ -52,10 +53,19 @@ const navGroups: NavGroup[] = [
     ],
   },
 
-  // ── 수수료 관리 ────────────────────────────────────────────
+  // ── 수수료 규정 관리 ────────────────────────────────────────
   {
-    label: "수수료 관리",
+    label: "수수료 규정 관리",
     items: [
+      {
+        label: "전담기관 관리",
+        href: "/funding-agencies",
+        icon: (
+          <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+            <path fillRule="evenodd" d="M3 6a3 3 0 0 1 3-3h10a1 1 0 0 1 .8 1.6L14.25 7l2.55 2.4A1 1 0 0 1 16 11H6a1 1 0 0 0-1 1v3a1 1 0 1 1-2 0V6z" clipRule="evenodd" />
+          </svg>
+        ),
+      },
       {
         label: "수수료 기준 관리",
         href: "/company-class",
@@ -65,13 +75,38 @@ const navGroups: NavGroup[] = [
           </svg>
         ),
       },
+    ],
+  },
+
+  // ── 현황 및 이력조회 ────────────────────────────────────────
+  {
+    label: "현황 및 이력조회",
+    items: [
       {
-        label: "수수료 청구 관리",
-        href: "/fees",
+        label: "이슈현황",
+        href: "/issues",
         icon: (
           <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
-            <path d="M4 4a2 2 0 0 0-2 2v1h16V6a2 2 0 0 0-2-2H4z" />
-            <path fillRule="evenodd" d="M18 9H2v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM4 13a1 1 0 0 1 1-1h1a1 1 0 1 1 0 2H5a1 1 0 0 1-1-1zm5-1a1 1 0 1 0 0 2h1a1 1 0 1 0 0-2H9z" clipRule="evenodd" />
+            <path fillRule="evenodd" d="M18 10c0 3.866-3.582 7-8 7a8.841 8.841 0 0 1-4.083-.98L2 17l1.338-3.123C2.493 12.767 2 11.434 2 10c0-3.866 3.582-7 8-7s8 3.134 8 7zM7 9H5v2h2V9zm8 0h-2v2h2V9zM9 9h2v2H9V9z" clipRule="evenodd" />
+          </svg>
+        ),
+      },
+      {
+        label: "전체 변경이력",
+        href: "/audit-log",
+        icon: (
+          <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+            <path fillRule="evenodd" d="M3 4a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1zm0 4a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1zm0 4a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1zm0 4a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1z" clipRule="evenodd" />
+          </svg>
+        ),
+      },
+      {
+        label: "공문 발송이력",
+        href: "/emails",
+        icon: (
+          <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+            <path d="M3 4a2 2 0 0 0-2 2v.4l9 5.4 9-5.4V6a2 2 0 0 0-2-2H3z" />
+            <path d="M19 8.6l-8.55 5.13a1 1 0 0 1-.9 0L1 8.6V14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.6z" />
           </svg>
         ),
       },
@@ -111,7 +146,7 @@ const navGroups: NavGroup[] = [
     label: "시스템",
     items: [
       {
-        label: "기관 관리",
+        label: "수행기관관리",
         href: "/institutions",
         icon: (
           <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
@@ -120,25 +155,7 @@ const navGroups: NavGroup[] = [
         ),
       },
       {
-        label: "이슈 현황",
-        href: "/issues",
-        icon: (
-          <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
-            <path fillRule="evenodd" d="M18 10c0 3.866-3.582 7-8 7a8.841 8.841 0 0 1-4.083-.98L2 17l1.338-3.123C2.493 12.767 2 11.434 2 10c0-3.866 3.582-7 8-7s8 3.134 8 7zM7 9H5v2h2V9zm8 0h-2v2h2V9zM9 9h2v2H9V9z" clipRule="evenodd" />
-          </svg>
-        ),
-      },
-      {
-        label: "전체 변경이력",
-        href: "/audit-log",
-        icon: (
-          <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
-            <path fillRule="evenodd" d="M3 4a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1zm0 4a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1zm0 4a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1zm0 4a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1z" clipRule="evenodd" />
-          </svg>
-        ),
-      },
-      {
-        label: "권한 관리",
+        label: "권한관리",
         href: "/admin/users",
         icon: (
           <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
@@ -153,7 +170,7 @@ const navGroups: NavGroup[] = [
 const ROLE_LABELS: Record<string, string> = {
   ADMIN: "시스템 관리자",
   ACCOUNTANT: "회계 담당자",
-  SETTLEMENT: "정산 담당자",
+  SETTLEMENT: "전문기관담당자",
   VIEWER: "조회 전용",
 };
 

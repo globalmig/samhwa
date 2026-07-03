@@ -9,9 +9,8 @@ import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
 import { useCanWrite } from "@/lib/permissions";
 
-const STATUS_MAP: Record<Settlement["status"], { label: string; color: "green" | "blue" | "slate" }> = {
+const STATUS_MAP: Partial<Record<Settlement["status"], { label: string; color: "green" | "blue" | "slate" }>> = {
   PAID: { label: "지급완료", color: "green" },
-  SCHEDULED: { label: "정산예정", color: "blue" },
   PENDING: { label: "처리중", color: "slate" },
 };
 
@@ -72,7 +71,6 @@ function SettlementForm({ initial, onSubmit, onClose }: { initial: Omit<Settleme
         <Field label="상태">
           <select className={selectCls} value={form.status} onChange={(e) => s("status", e.target.value as Settlement["status"])}>
             <option value="PENDING">처리중</option>
-            <option value="SCHEDULED">정산예정</option>
             <option value="PAID">지급완료</option>
           </select>
         </Field>
@@ -82,12 +80,10 @@ function SettlementForm({ initial, onSubmit, onClose }: { initial: Omit<Settleme
         주관기관 여부
       </label>
       <div className="grid grid-cols-2 gap-4">
-        <Field label="정산금(원)"><input className={inputCls} type="number" min={0} value={form.settlementAmount} onChange={(e) => s("settlementAmount", Number(e.target.value))} /></Field>
         <Field label="추가금(원)"><input className={inputCls} type="number" min={0} value={form.additionalAmount} onChange={(e) => s("additionalAmount", Number(e.target.value))} /></Field>
-      </div>
-      <div className="grid grid-cols-3 gap-4">
         <Field label="수수료(원)"><input className={inputCls} type="number" min={0} value={form.feeAmount} onChange={(e) => s("feeAmount", Number(e.target.value))} /></Field>
-        <Field label="정산예정금(원)"><input className={inputCls} type="number" min={0} value={form.scheduledAmount} onChange={(e) => s("scheduledAmount", Number(e.target.value))} /></Field>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
         <Field label="지급일"><input className={inputCls} type="date" value={form.paidAt ?? ""} onChange={(e) => s("paidAt", e.target.value || null)} /></Field>
       </div>
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
@@ -121,7 +117,6 @@ export default function SettlementsPage() {
     [settlements, filterProjectNumber, filterProjectName, filterInstitutionName, statusFilter, leadFilter]
   );
 
-  const scheduledTotal = settlements.filter((s) => s.status !== "PAID").reduce((acc, s) => acc + s.scheduledAmount, 0);
   const paidTotal = settlements.filter((s) => s.status === "PAID").reduce((acc, s) => acc + s.scheduledAmount, 0);
 
   function handleSubmit(data: Omit<Settlement, "id">) {
@@ -142,11 +137,9 @@ export default function SettlementsPage() {
         )}
       </div>
 
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 gap-3">
         {[
-          { label: "정산 예정 합계", value: fmtWon(scheduledTotal), color: "text-blue-600" },
           { label: "지급 완료", value: fmtWon(paidTotal), color: "text-green-600" },
-          { label: "예정 건수", value: `${settlements.filter((s) => s.status === "SCHEDULED").length}건`, color: "text-blue-600" },
           { label: "지급완료 건수", value: `${settlements.filter((s) => s.status === "PAID").length}건`, color: "text-green-600" },
         ].map((s) => (
           <div key={s.label} className="bg-white rounded-xl border border-slate-200 px-4 py-3">
@@ -183,7 +176,6 @@ export default function SettlementsPage() {
           </select>
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="text-xs border border-slate-200 rounded-lg px-3 py-1.5 text-slate-600 bg-white">
             <option value="ALL">전체 상태</option>
-            <option value="SCHEDULED">정산예정</option>
             <option value="PAID">지급완료</option>
             <option value="PENDING">처리중</option>
           </select>
@@ -199,10 +191,8 @@ export default function SettlementsPage() {
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500">기관명</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">구분</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">연차</th>
-                <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">정산금</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">추가금</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">수수료</th>
-                <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">정산예정금</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">지급일</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">상태</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">관리</th>
@@ -210,7 +200,7 @@ export default function SettlementsPage() {
             </thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan={11} className="px-4 py-10 text-center text-sm text-slate-400">검색 결과가 없습니다</td></tr>
+                <tr><td colSpan={9} className="px-4 py-10 text-center text-sm text-slate-400">검색 결과가 없습니다</td></tr>
               ) : (
                 filtered.map((s) => (
                   <tr key={s.id} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
@@ -223,16 +213,16 @@ export default function SettlementsPage() {
                       <StatusBadge label={s.isLead ? "주관" : "참여"} color={s.isLead ? "blue" : "slate"} />
                     </td>
                     <td className="px-4 py-3 text-center text-xs text-slate-600">{s.termYear}년</td>
-                    <td className="px-4 py-3 text-right text-xs text-slate-700 whitespace-nowrap">{fmtWon(s.settlementAmount)}</td>
                     <td className="px-4 py-3 text-right text-xs whitespace-nowrap">
                       {s.additionalAmount > 0 ? <span className="text-green-600">+{fmtWon(s.additionalAmount)}</span> : <span className="text-slate-400">-</span>}
                     </td>
                     <td className="px-4 py-3 text-right text-xs text-slate-600 whitespace-nowrap">
                       {s.feeAmount > 0 ? <span className="text-red-500">-{fmtWon(s.feeAmount)}</span> : <span className="text-slate-400">-</span>}
                     </td>
-                    <td className="px-4 py-3 text-right font-bold text-slate-800 whitespace-nowrap">{fmtWon(s.scheduledAmount)}</td>
                     <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">{fmtDate(s.paidAt)}</td>
-                    <td className="px-4 py-3 text-center"><StatusBadge label={STATUS_MAP[s.status].label} color={STATUS_MAP[s.status].color} /></td>
+                    <td className="px-4 py-3 text-center">
+                      <StatusBadge label={STATUS_MAP[s.status]?.label ?? "-"} color={STATUS_MAP[s.status]?.color ?? "slate"} />
+                    </td>
                     <td className="px-4 py-3 text-center">
                       {canEdit && (
                         <button onClick={() => setModal({ mode: "edit", target: s })} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors" title="수정">

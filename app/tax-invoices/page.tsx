@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import Link from "next/link";
 import { FiEdit2 } from "react-icons/fi";
 import { useStore, addTaxInvoice, updateTaxInvoice } from "@/lib/store";
 import { type TaxInvoice } from "@/lib/mock";
@@ -97,7 +98,7 @@ function InvoiceForm({ initial, onSubmit, onClose }: { initial: Omit<TaxInvoice,
 
 export default function TaxInvoicesPage() {
   const canEdit = useCanWrite('tax-invoices');
-  const { taxInvoices } = useStore();
+  const { taxInvoices, projects, fundingAgencies } = useStore();
   const [filterInvoiceNumber,   setFilterInvoiceNumber]   = useState("");
   const [filterProjectNumber,   setFilterProjectNumber]   = useState("");
   const [filterProjectName,     setFilterProjectName]     = useState("");
@@ -105,9 +106,27 @@ export default function TaxInvoicesPage() {
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [modal, setModal] = useState<ModalState | null>(null);
 
+  // 과제번호로 연결된 과제 정보(전담기관 약칭·연구책임자·당해기간·총 연차)를 함께 표시
+  const enriched = useMemo(
+    () =>
+      taxInvoices.map((t) => {
+        const project = projects.find((p) => p.projectNumber === t.projectNumber);
+        const agency = project ? fundingAgencies.find((a) => a.id === project.agencyId) : undefined;
+        return {
+          ...t,
+          agencyShortName: agency?.shortName ?? "",
+          researchLead: project?.researchLead ?? "",
+          termStartDate: project?.startDate ?? "",
+          termEndDate: project?.endDate ?? "",
+          totalTerms: project?.totalTerms ?? 0,
+        };
+      }),
+    [taxInvoices, projects, fundingAgencies]
+  );
+
   const filtered = useMemo(
     () =>
-      taxInvoices.filter(
+      enriched.filter(
         (t) =>
           (statusFilter === "ALL" || t.status === statusFilter) &&
           (filterInvoiceNumber   === "" || t.invoiceNumber.includes(filterInvoiceNumber)) &&
@@ -115,7 +134,7 @@ export default function TaxInvoicesPage() {
           (filterProjectName     === "" || t.projectName.includes(filterProjectName)) &&
           (filterLeadInstitution === "" || t.leadInstitutionName.includes(filterLeadInstitution))
       ),
-    [taxInvoices, filterInvoiceNumber, filterProjectNumber, filterProjectName, filterLeadInstitution, statusFilter]
+    [enriched, filterInvoiceNumber, filterProjectNumber, filterProjectName, filterLeadInstitution, statusFilter]
   );
 
   const totalSupply = filtered.filter((t) => t.status !== "CANCELED").reduce((s, t) => s + t.supplyAmount, 0);
@@ -190,8 +209,12 @@ export default function TaxInvoicesPage() {
               <tr className="border-b border-slate-100 bg-slate-50">
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">계산서번호</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">과제번호</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">약칭</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">주관기관 (수신자)</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">연구책임자</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">연차</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">당해시작일</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">당해종료일</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">발행일</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">공급가액</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">부가세</th>
@@ -202,14 +225,24 @@ export default function TaxInvoicesPage() {
             </thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan={10} className="px-4 py-10 text-center text-sm text-slate-400">검색 결과가 없습니다</td></tr>
+                <tr><td colSpan={14} className="px-4 py-10 text-center text-sm text-slate-400">검색 결과가 없습니다</td></tr>
               ) : (
                 filtered.map((t) => (
                   <tr key={t.id} className={`border-b border-slate-50 hover:bg-slate-50 transition-colors ${t.status === "CANCELED" ? "opacity-50" : ""}`}>
                     <td className="px-4 py-3 font-mono text-xs text-slate-600 whitespace-nowrap">{t.invoiceNumber}</td>
                     <td className="px-4 py-3 font-mono text-xs text-slate-500 whitespace-nowrap">{t.projectNumber}</td>
+                    <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">{t.agencyShortName || "-"}</td>
                     <td className="px-4 py-3 text-sm text-blue-700 font-medium whitespace-nowrap">{t.leadInstitutionName}</td>
-                    <td className="px-4 py-3 text-center text-xs text-slate-600 whitespace-nowrap">{t.termYear}년 {t.termNumber}연차</td>
+                    <td className="px-4 py-3 text-center text-xs whitespace-nowrap">
+                      {t.researchLead
+                        ? <Link href={`/researchers/${encodeURIComponent(t.researchLead)}`} className="text-slate-700 hover:text-blue-600 hover:underline transition-colors">{t.researchLead}</Link>
+                        : <span className="text-slate-400">-</span>}
+                    </td>
+                    <td className="px-4 py-3 text-center text-xs text-slate-600 whitespace-nowrap">
+                      {t.totalTerms > 0 ? `${t.termNumber}/${t.totalTerms}` : `${t.termYear}년 ${t.termNumber}연차`}
+                    </td>
+                    <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">{t.termStartDate ? fmtDate(t.termStartDate) : "-"}</td>
+                    <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">{t.termEndDate ? fmtDate(t.termEndDate) : "-"}</td>
                     <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">{fmtDate(t.issuedAt)}</td>
                     <td className="px-4 py-3 text-right text-sm text-slate-800 whitespace-nowrap">{fmtWon(t.supplyAmount)}</td>
                     <td className="px-4 py-3 text-right text-xs text-slate-600 whitespace-nowrap">{fmtWon(t.taxAmount)}</td>

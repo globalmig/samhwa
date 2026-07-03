@@ -7,6 +7,10 @@ export function fmtWon(n: number): string {
   return `${Math.round(n / 10_000).toLocaleString("ko-KR")}만원`;
 }
 
+export function fmtWonFull(n: number): string {
+  return `${n.toLocaleString("ko-KR")}원`;
+}
+
 export function fmtWonShort(n: number): string {
   if (n === 0) return "0";
   if (n >= 100_000_000) return `${parseFloat((n / 100_000_000).toFixed(1))}억`;

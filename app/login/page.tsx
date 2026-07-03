@@ -110,7 +110,7 @@ export default function LoginPage() {
             {[
               { label: "시스템 관리자", email: "admin@samhwa.co.kr", pw: "admin1234" },
               { label: "회계 담당자", email: "lee.acc@samhwa.co.kr", pw: "samhwa1234" },
-              { label: "정산 담당자", email: "park.set@samhwa.co.kr", pw: "samhwa1234" },
+              { label: "전문기관담당자", email: "park.set@samhwa.co.kr", pw: "samhwa1234" },
               { label: "조회 전용", email: "choi.view@samhwa.co.kr", pw: "samhwa1234" },
             ].map((acc) => (
               <button

@@ -16,6 +16,7 @@ import {
   systemUsers as initialUsers,
   projectIssues as initialIssues,
   fundingAgencies as initialFundingAgencies,
+  notices as initialNotices,
   type Institution,
   type Project,
   type ProjectMember,
@@ -32,6 +33,7 @@ import {
   type ProjectIssue,
   type FundingAgency,
   type AgencyGuideTab,
+  type Notice,
 } from "./mock";
 
 export type { TermFeeCalc, FeeOverride };
@@ -66,6 +68,7 @@ export const ENTITY_NAMES: Record<string, string> = {
   taxInvoice: "세금계산서",
   user: "사용자",
   projectIssue: "이슈/메모",
+  notice: "공지사항",
 };
 
 // ============================================================
@@ -87,6 +90,8 @@ interface StoreState {
   emailDispatches: EmailDispatch[];
   users: SystemUser[];
   projectIssues: ProjectIssue[];
+  notices: Notice[];
+  notificationState: Record<string, { readIds: string[]; dismissedIds: string[] }>;
   auditLog: AuditEntry[];
   agencyGuides: Record<string, AgencyGuideTab[]>;
 }
@@ -223,6 +228,8 @@ let _state: StoreState = {
   taxInvoices: [...initialInvoices],
   emailDispatches: [...initialEmails],
   users: [...initialUsers],
+  notices: [...initialNotices],
+  notificationState: {},
   auditLog: [...INITIAL_AUDIT_LOG],
   agencyGuides: {},
 };
@@ -575,6 +582,64 @@ export function deleteProjectIssue(id: string): void {
 }
 
 // ============================================================
+// NOTICES (공지사항)
+// ============================================================
+
+export function addNotice(data: Omit<Notice, "id">): Notice {
+  const item: Notice = { ...data, id: genId("notice") };
+  _state = { ..._state, notices: [item, ..._state.notices] };
+  record("notice", item.id, item.title, "CREATE");
+  notify();
+  return item;
+}
+
+export function deleteNotice(id: string): void {
+  const item = _state.notices.find((n) => n.id === id);
+  if (!item) return;
+  _state = { ..._state, notices: _state.notices.filter((n) => n.id !== id) };
+  record("notice", id, item.title, "DELETE");
+  notify();
+}
+
+// ============================================================
+// NOTIFICATION STATE (사용자별 알림 읽음/삭제 상태 — 감사로그 기록 안 함)
+// ============================================================
+
+function getNotifState(userId: string): { readIds: string[]; dismissedIds: string[] } {
+  return _state.notificationState[userId] ?? { readIds: [], dismissedIds: [] };
+}
+
+export function markNotificationRead(userId: string, id: string): void {
+  const cur = getNotifState(userId);
+  if (cur.readIds.includes(id)) return;
+  _state = {
+    ..._state,
+    notificationState: { ..._state.notificationState, [userId]: { ...cur, readIds: [...cur.readIds, id] } },
+  };
+  notify();
+}
+
+export function markAllNotificationsRead(userId: string, ids: string[]): void {
+  const cur = getNotifState(userId);
+  const merged = Array.from(new Set([...cur.readIds, ...ids]));
+  _state = {
+    ..._state,
+    notificationState: { ..._state.notificationState, [userId]: { ...cur, readIds: merged } },
+  };
+  notify();
+}
+
+export function dismissNotification(userId: string, id: string): void {
+  const cur = getNotifState(userId);
+  if (cur.dismissedIds.includes(id)) return;
+  _state = {
+    ..._state,
+    notificationState: { ..._state.notificationState, [userId]: { ...cur, dismissedIds: [...cur.dismissedIds, id] } },
+  };
+  notify();
+}
+
+// ============================================================
 // TAX INVOICES
 // ============================================================
 
@@ -593,6 +658,66 @@ export function updateTaxInvoice(id: string, data: Partial<TaxInvoice>): void {
   _state = { ..._state, taxInvoices: _state.taxInvoices.map((t) => (t.id === id ? after : t)) };
   record("taxInvoice", id, after.invoiceNumber, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   notify();
+}
+
+// ─── 세금계산서 미발행 연차 집계 (연차별 청구액 확정 O, 세금계산서 발행 X) ───
+export interface UnissuedInvoiceGroup {
+  key: string;
+  projectId: string;
+  projectNumber: string;
+  projectName: string;
+  leadInstitutionName: string;
+  termYear: number;
+  termNumber: number;
+  amount: number; // 미발행 공급가액 (연차 신청수수료 합계)
+  currentTerm: number;
+  projectStatus: Project["status"];
+  fees: TermFee[];
+}
+
+export function getUnissuedInvoiceGroups(
+  projects: Project[],
+  termFees: TermFee[],
+  taxInvoices: TaxInvoice[],
+): UnissuedInvoiceGroup[] {
+  const grouped = new Map<string, TermFee[]>();
+  termFees.forEach((f) => {
+    const k = `${f.projectNumber}|${f.termYear}|${f.termNumber}`;
+    if (!grouped.has(k)) grouped.set(k, []);
+    grouped.get(k)!.push(f);
+  });
+
+  const result: UnissuedInvoiceGroup[] = [];
+  grouped.forEach((fees, key) => {
+    const amount = fees.reduce((s, f) => s + f.appliedFee, 0);
+    if (amount <= 0) return;
+    const [projectNumber, yStr, nStr] = key.split("|");
+    const termYear = Number(yStr);
+    const termNumber = Number(nStr);
+    const hasInvoice = taxInvoices.some(
+      (t) => t.projectNumber === projectNumber && t.termYear === termYear && t.termNumber === termNumber,
+    );
+    if (hasInvoice) return;
+    const project = projects.find((p) => p.projectNumber === projectNumber);
+    if (!project) return;
+    result.push({
+      key,
+      projectId: project.id,
+      projectNumber,
+      projectName: fees[0].projectName,
+      leadInstitutionName: project.leadInstitutionName,
+      termYear,
+      termNumber,
+      amount,
+      currentTerm: project.currentTerm,
+      projectStatus: project.status,
+      fees,
+    });
+  });
+
+  return result.sort((a, b) =>
+    b.termYear !== a.termYear ? b.termYear - a.termYear : b.termNumber - a.termNumber,
+  );
 }
 
 // ============================================================

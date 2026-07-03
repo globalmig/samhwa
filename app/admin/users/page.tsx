@@ -13,8 +13,8 @@ import { useCanWrite } from "@/lib/permissions";
 const ROLE_MAP: Record<SystemUser["role"], { label: string; color: "red" | "blue" | "purple" | "slate"; desc: string }> = {
   ADMIN: { label: "시스템 관리자", color: "red", desc: "전체 권한" },
   ACCOUNTANT: { label: "회계 담당자", color: "blue", desc: "수수료·세금계산서" },
-  SETTLEMENT: { label: "정산 담당자", color: "purple", desc: "정산·채권" },
-  VIEWER: { label: "조회 전용", color: "slate", desc: "읽기 전용" },
+  SETTLEMENT: { label: "전문기관담당자", color: "purple", desc: "정산·채권" },
+  VIEWER: { label: "조회 전용", color: "slate", desc: "수수료·이슈·변경이력 조회 전용" },
 };
 
 type ModalState = { mode: "add" } | { mode: "edit"; target: SystemUser };
@@ -54,7 +54,7 @@ function UserForm({ initial, onSubmit, onClose }: { initial: Omit<SystemUser, "i
           <select className={selectCls} value={form.role} onChange={(e) => s("role", e.target.value as SystemUser["role"])}>
             <option value="ADMIN">시스템 관리자</option>
             <option value="ACCOUNTANT">회계 담당자</option>
-            <option value="SETTLEMENT">정산 담당자</option>
+            <option value="SETTLEMENT">전문기관담당자</option>
             <option value="VIEWER">조회 전용</option>
           </select>
         </Field>
@@ -168,7 +168,7 @@ export default function AdminUsersPage() {
             <option value="ALL">전체 역할</option>
             <option value="ADMIN">시스템 관리자</option>
             <option value="ACCOUNTANT">회계 담당자</option>
-            <option value="SETTLEMENT">정산 담당자</option>
+            <option value="SETTLEMENT">전문기관담당자</option>
             <option value="VIEWER">조회 전용</option>
           </select>
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="text-xs border border-slate-200 rounded-lg px-3 py-1.5 text-slate-600 bg-white">
