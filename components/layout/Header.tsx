@@ -285,20 +285,25 @@ export default function Header() {
         )}
 
         {/* 사용자 메뉴 */}
-        <div className="relative">
-          <button
-            onClick={() => setMenuOpen((v) => !v)}
-            className="flex items-center gap-2 hover:bg-slate-50 rounded-lg px-2 py-1 transition-colors"
-          >
-            <div className="flex items-center justify-center w-7 h-7 rounded-full bg-blue-600 text-xs text-white font-medium">
-              {initials}
-            </div>
-            {user && (
+        <div className="relative flex items-center">
+          {user && (
+            <Link
+              href={`/admin/users/${user.id}`}
+              className="flex items-center gap-2 hover:bg-slate-50 rounded-lg px-2 py-1 transition-colors"
+            >
+              <div className="flex items-center justify-center w-7 h-7 rounded-full bg-blue-600 text-xs text-white font-medium">
+                {initials}
+              </div>
               <div className="text-left hidden sm:block">
                 <p className="text-xs font-medium text-slate-700 leading-tight">{user.name}</p>
                 <p className="text-xs text-slate-400 leading-tight">{ROLE_LABELS[user.role] ?? user.role}</p>
               </div>
-            )}
+            </Link>
+          )}
+          <button
+            onClick={() => setMenuOpen((v) => !v)}
+            className="p-1 hover:bg-slate-50 rounded-lg transition-colors"
+          >
             <svg viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5 text-slate-400">
               <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06z" clipRule="evenodd" />
             </svg>
