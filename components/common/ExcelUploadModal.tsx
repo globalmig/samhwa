@@ -17,6 +17,7 @@ import {
   addInstitution,
   addProject,
   addProjectMember,
+  updateProject,
 } from "@/lib/store";
 
 // ============================================================
@@ -898,8 +899,9 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           projectName: row.projectName || "미입력",
           agencyId,
           agency: row.agencyName,
+          // 주관기관은 이 시점엔 특정할 수 없음 — 참여기관 등록 후 role="LEAD" 행으로 보정한다.
           leadInstitutionId: "",
-          leadInstitutionName: row.institutionName || "",
+          leadInstitutionName: "",
           totalBudget: 0,
           startDate: startDateStr,
           endDate: row.endDate || today,
@@ -946,6 +948,23 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         annualBudgets: annualBudgets.length > 0 ? annualBudgets : undefined,
       });
       memberCount++;
+    }
+
+    // 주관기관 정보 보정 — 과제 생성 시점엔 어느 행이 주관기관인지 알 수 없어 비워뒀으므로,
+    // 참여기관 등록이 끝난 뒤 role="LEAD"로 판별된 기관으로 채워 넣는다.
+    for (const agg of memberAggregates) {
+      if (agg.role !== "LEAD") continue;
+      const projectId = registeredProjects.get(normProjectNum(agg.projectNumber));
+      const institutionId = registeredInst.get(normBiz(agg.bizNumber));
+      if (!projectId || !institutionId) continue;
+
+      const existingProject = projects.find((p) => p.id === projectId);
+      if (existingProject?.leadInstitutionId) continue; // 기존 과제에 이미 지정된 주관기관은 건드리지 않음
+
+      updateProject(projectId, {
+        leadInstitutionId: institutionId,
+        leadInstitutionName: agg.institutionName,
+      });
     }
 
     setDoneResult({ agency: agencyCount, project: projectCount, inst: instCount, member: memberCount });
