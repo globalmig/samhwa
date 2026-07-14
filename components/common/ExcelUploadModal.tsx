@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 import * as XLSX from "xlsx";
 import Modal from "@/components/common/Modal";
 import {
@@ -16,6 +16,7 @@ import {
   addFundingAgency,
   addInstitution,
   addProject,
+  addProjectMember,
 } from "@/lib/store";
 
 // ============================================================
@@ -58,6 +59,25 @@ interface PreviewRow extends ExtractedRow {
   willRegister: { agency: boolean; project: boolean; institution: boolean };
 }
 
+// 참여기관(ProjectMember) 자동 등록 — "연차별기관별" + "단계기관별" 시트를 과제+기관 단위로 합산
+interface AggregatedBudget {
+  termYear: number;
+  termNumber: number;
+  cashBudget: number;
+  inKindBudget: number;
+}
+
+interface MemberAggregate {
+  key: string; // normProjectNum|normBiz
+  projectNumber: string;
+  bizNumber: string;
+  institutionName: string;
+  role: "LEAD" | "PARTICIPANT";
+  settlementType: "위탁정산" | "자체정산";
+  budgetsByTerm: Map<number, AggregatedBudget>;
+  totalCashBudgetFallback: number;
+}
+
 // ============================================================
 // 유틸
 // ============================================================
@@ -94,6 +114,86 @@ function strSimilarity(a: string, b: string): number {
 function getCellVal(row: Record<string, string>, mappedTo: string | null): string {
   if (!mappedTo) return "";
   return (row[mappedTo] ?? "").toString().trim();
+}
+
+function parseAmount(s: string): number {
+  const n = Number(s.replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(n) ? n : 0;
+}
+
+// "연차별기관별"(연차·예산) + "단계기관별"(정산형태·역할) 시트를 과제+기관 단위로 합산해
+// 참여기관(ProjectMember) 등록에 쓸 데이터를 만든다. 이게 있어야 등록 시 연차 수수료가 자동 계산된다.
+function buildMemberAggregates(sheets: ParsedSheet[]): {
+  members: MemberAggregate[];
+  projectMaxTerm: Map<string, number>;
+} {
+  const memberMap = new Map<string, MemberAggregate>();
+  const projectMaxTerm = new Map<string, number>();
+
+  for (const sheet of sheets) {
+    const get = (field: string, row: Record<string, string>) => {
+      const m = sheet.mapping.find((x) => x.field === field);
+      return getCellVal(row, m?.mappedTo ?? null);
+    };
+
+    for (const row of sheet.rows) {
+      const projectNumber = get("projectNumber", row);
+      const bizNumber = get("bizNumber", row);
+      const normNum = normProjectNum(projectNumber);
+      const normBizNum = normBiz(bizNumber);
+      if (!normNum || !normBizNum) continue;
+
+      const key = `${normNum}|${normBizNum}`;
+      let agg = memberMap.get(key);
+      if (!agg) {
+        agg = {
+          key,
+          projectNumber,
+          bizNumber,
+          institutionName: get("institutionName", row) || "미입력",
+          role: "PARTICIPANT",
+          settlementType: "위탁정산",
+          budgetsByTerm: new Map(),
+          totalCashBudgetFallback: 0,
+        };
+        memberMap.set(key, agg);
+      }
+
+      const roleStr = get("institutionRole", row);
+      if (roleStr.includes("주관")) agg.role = "LEAD";
+
+      const settlementStr = get("settlementType", row);
+      if (settlementStr) agg.settlementType = settlementStr.includes("자체") ? "자체정산" : "위탁정산";
+
+      if (sheet.def.key === "annual") {
+        // rcms-columns.ts 상 field명은 "termYear"지만 실제로는 "연차"(회차) 값이고,
+        // 달력상 실제 연도는 "supportYear"(지원연도) 컬럼이 담당한다.
+        const termNumber = parseInt(get("termYear", row), 10) || 1;
+        const supportYear = parseInt(get("supportYear", row), 10) || new Date().getFullYear();
+        const cashBudget = parseAmount(get("cashBudget", row));
+        agg.budgetsByTerm.set(termNumber, { termYear: supportYear, termNumber, cashBudget, inKindBudget: 0 });
+        projectMaxTerm.set(normNum, Math.max(projectMaxTerm.get(normNum) ?? 0, termNumber));
+      } else {
+        const totalCash = parseAmount(get("totalCashBudget", row));
+        if (totalCash > 0) agg.totalCashBudgetFallback = totalCash;
+      }
+    }
+  }
+
+  return { members: Array.from(memberMap.values()), projectMaxTerm };
+}
+
+// autoGenerateTermFees와 동일한 방식(startDate + 연차-1년)으로 "현재 몇 연차인지" 추정
+function computeCurrentTerm(startDate: string, totalTerms: number, today: string): number {
+  const start = new Date(startDate);
+  if (Number.isNaN(start.getTime())) return 1;
+  let current = 1;
+  for (let term = 1; term <= totalTerms; term++) {
+    const termStart = new Date(start);
+    termStart.setFullYear(start.getFullYear() + term - 1);
+    if (termStart.toISOString().slice(0, 10) <= today) current = term;
+  }
+  return current;
 }
 
 // ============================================================
@@ -329,11 +429,13 @@ function MappingStep({
 
 function PreviewStep({
   previewRows,
+  newMemberCount,
   onConfirm,
   onBack,
   loading,
 }: {
   previewRows: PreviewRow[];
+  newMemberCount: number;
   onConfirm: () => void;
   onBack: () => void;
   loading: boolean;
@@ -356,15 +458,17 @@ function PreviewStep({
   }
 
   const dupRows = previewRows.filter((r) => r.duplicates.length > 0);
+  const totalNew = newAgency + newProject + newInst + newMemberCount;
 
   return (
     <div className="p-6 space-y-4">
       {/* 요약 */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-4 gap-3">
         {[
           { label: "신규 전담기관", count: newAgency, color: "blue" },
           { label: "신규 과제", count: newProject, color: "emerald" },
           { label: "신규 기관", count: newInst, color: "purple" },
+          { label: "신규 참여기관", count: newMemberCount, color: "amber" },
         ].map((c) => (
           <div key={c.label} className={`rounded-xl border border-${c.color}-100 bg-${c.color}-50 px-4 py-3 text-center`}>
             <p className={`text-2xl font-bold text-${c.color}-700`}>{c.count}</p>
@@ -372,6 +476,9 @@ function PreviewStep({
           </div>
         ))}
       </div>
+      <p className="text-[11px] text-slate-400">
+        참여기관까지 등록되어야 해당 과제의 연차 수수료가 자동으로 계산됩니다.
+      </p>
 
       {/* 중복/유사 경고 */}
       {dupRows.length > 0 && (
@@ -392,7 +499,7 @@ function PreviewStep({
         </div>
       )}
 
-      {newAgency + newProject + newInst === 0 && (
+      {totalNew === 0 && (
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
           등록할 신규 항목이 없습니다.
         </div>
@@ -402,10 +509,10 @@ function PreviewStep({
         <button onClick={onBack} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">이전</button>
         <button
           onClick={onConfirm}
-          disabled={loading || newAgency + newProject + newInst === 0}
+          disabled={loading || totalNew === 0}
           className="px-4 py-2 text-sm font-medium text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-40 transition-colors"
         >
-          {loading ? "등록 중..." : `등록 (전담기관 ${newAgency} · 과제 ${newProject} · 기관 ${newInst})`}
+          {loading ? "등록 중..." : `등록 (전담기관 ${newAgency} · 과제 ${newProject} · 기관 ${newInst} · 참여기관 ${newMemberCount})`}
         </button>
       </div>
     </div>
@@ -414,7 +521,7 @@ function PreviewStep({
 
 // ── 완료 ────────────────────────────────────────────────────────
 
-function DoneStep({ result, onClose }: { result: { agency: number; project: number; inst: number }; onClose: () => void }) {
+function DoneStep({ result, onClose }: { result: { agency: number; project: number; inst: number; member: number }; onClose: () => void }) {
   return (
     <div className="p-6 flex flex-col items-center gap-4">
       <div className="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center">
@@ -423,11 +530,12 @@ function DoneStep({ result, onClose }: { result: { agency: number; project: numb
         </svg>
       </div>
       <p className="text-base font-semibold text-slate-800">등록 완료</p>
-      <div className="grid grid-cols-3 gap-3 w-full">
+      <div className="grid grid-cols-4 gap-3 w-full">
         {[
           { label: "전담기관", count: result.agency },
           { label: "과제", count: result.project },
           { label: "기관", count: result.inst },
+          { label: "참여기관", count: result.member },
         ].map((c) => (
           <div key={c.label} className="bg-slate-50 rounded-xl border border-slate-200 px-4 py-3 text-center">
             <p className="text-xl font-bold text-slate-800">{c.count}</p>
@@ -435,6 +543,9 @@ function DoneStep({ result, onClose }: { result: { agency: number; project: numb
           </div>
         ))}
       </div>
+      {result.member > 0 && (
+        <p className="text-[11px] text-slate-400 -mt-2">참여기관이 등록된 과제는 연차 수수료가 자동으로 계산되었습니다.</p>
+      )}
       <button onClick={onClose} className="mt-2 px-6 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
         닫기
       </button>
@@ -482,8 +593,40 @@ export function downloadExcelTemplate() {
   const ws = XLSX.utils.aoa_to_sheet([notes, headers, ...rows]);
   ws["!cols"] = headers.map(() => ({ wch: 22 }));
 
+  const stageNotes = [
+    "선택", "※필수", "선택", "※필수", "※필수",
+    "※필수 (YYYY-MM-DD)", "※필수 (YYYY-MM-DD)", "선택",
+    "※필수", "※필수 (000-00-00000)", "선택 (주관/공동/위탁)", "선택", "선택 (원 단위)", "선택",
+  ];
+  const stageHeaders = [
+    "과제번호(숫자)", "전문기관명", "RCMS사업명", "과제번호", "과제명",
+    "총개발시작일자", "총개발종료일자", "정산형태구분",
+    "연구기관명", "기관사업자등록번호", "기관역할구분", "기관책임자", "기관_총사업비(현금)", "회계법인",
+  ];
+  const stageRows = [
+    [
+      "1", "한국산업기술기획평가원", "스마트제조혁신사업", "RS-2024-00000001", "스마트 제조 AI 시스템 개발",
+      "2024-03-01", "2027-02-28", "위탁정산",
+      "삼화기술경영(주)", "123-45-67890", "주관", "홍길동", "500000000", "삼일회계법인",
+    ],
+    [
+      "1", "한국산업기술기획평가원", "스마트제조혁신사업", "RS-2024-00000001", "스마트 제조 AI 시스템 개발",
+      "2024-03-01", "2027-02-28", "위탁정산",
+      "참여기업(주)", "234-56-78901", "공동", "김참여", "200000000", "삼일회계법인",
+    ],
+    [
+      "2", "한국에너지기술평가원", "신재생에너지핵심기술개발", "RS-2024-00000002", "신재생에너지 효율화 연구",
+      "2024-06-01", "2026-05-31", "위탁정산",
+      "에너지연구소", "345-67-89012", "주관", "박연구", "800000000", "한영회계법인",
+    ],
+  ];
+
+  const stageWs = XLSX.utils.aoa_to_sheet([stageNotes, stageHeaders, ...stageRows]);
+  stageWs["!cols"] = stageHeaders.map(() => ({ wch: 22 }));
+
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "연차별기관별_연구비 집행");
+  XLSX.utils.book_append_sheet(wb, stageWs, "단계기관별");
   XLSX.writeFile(wb, "RCMS_업로드_양식.xlsx");
 }
 
@@ -492,16 +635,33 @@ export function downloadExcelTemplate() {
 // ============================================================
 
 export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
-  const { fundingAgencies, institutions, projects } = useStore();
+  const { fundingAgencies, institutions, projects, projectMembers } = useStore();
   const [step, setStep] = useState<Step>("upload");
   const [allSheetNames, setAllSheetNames] = useState<string[]>([]);
   const [matchedSheets, setMatchedSheets] = useState<{ sheetName: string; def: SheetDef }[]>([]);
   const [parsedSheets, setParsedSheets] = useState<ParsedSheet[]>([]);
   const [previewRows, setPreviewRows] = useState<PreviewRow[]>([]);
-  const [doneResult, setDoneResult] = useState({ agency: 0, project: 0, inst: 0 });
+  const [doneResult, setDoneResult] = useState({ agency: 0, project: 0, inst: 0, member: 0 });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [previewBackStep, setPreviewBackStep] = useState<Step>("mapping");
+
+  // "연차별기관별" + "단계기관별" 시트를 과제+기관 단위로 합산 — 참여기관(ProjectMember) 등록에 사용
+  const { members: memberAggregates, projectMaxTerm } = useMemo(
+    () => buildMemberAggregates(parsedSheets),
+    [parsedSheets]
+  );
+
+  // 이미 참여기관으로 연결된 (과제, 기관) 쌍은 제외하고 새로 등록될 참여기관 수를 계산
+  const newMemberCount = useMemo(() => {
+    const existingKeys = new Set<string>();
+    for (const pm of projectMembers) {
+      const proj = projects.find((p) => p.id === pm.projectId);
+      const inst = institutions.find((i) => i.id === pm.institutionId);
+      if (proj && inst) existingKeys.add(`${normProjectNum(proj.projectNumber)}|${normBiz(inst.bizNumber)}`);
+    }
+    return memberAggregates.filter((m) => !existingKeys.has(m.key)).length;
+  }, [memberAggregates, projectMembers, projects, institutions]);
 
   // ── 파일 파싱 ───────────────────────────────────────────────
 
@@ -681,12 +841,14 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
     const today = new Date().toISOString().slice(0, 10);
 
     const registeredAgencies = new Map<string, string>(); // name → id
-    const registeredProjects = new Set<string>();
-    const registeredInst = new Set<string>();
-    let agencyCount = 0, projectCount = 0, instCount = 0;
+    const registeredProjects = new Map<string, string>(); // normProjectNum → id
+    const registeredInst = new Map<string, string>();      // normBiz → id
+    let agencyCount = 0, projectCount = 0, instCount = 0, memberCount = 0;
 
-    // 기존 전담기관 미리 채워두기
+    // 기존 전담기관·과제·기관 미리 채워두기 (참여기관 연결에 필요)
     for (const a of fundingAgencies) registeredAgencies.set(a.name, a.id);
+    for (const p of projects) registeredProjects.set(normProjectNum(p.projectNumber), p.id);
+    for (const i of institutions) registeredInst.set(normBiz(i.bizNumber), i.id);
 
     for (const row of previewRows) {
       // 전담기관
@@ -698,9 +860,9 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           contactName: "",
           contactEmail: "",
           contactPhone: "",
-          feePolicyId: null,
           status: "ACTIVE",
           registeredAt: today,
+          noticeRecipientScope: "LEAD_ONLY",
         });
         registeredAgencies.set(row.agencyName, created.id);
         agencyCount++;
@@ -709,7 +871,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       // 기관
       const normBizNum = normBiz(row.bizNumber);
       if (row.willRegister.institution && normBizNum && !registeredInst.has(normBizNum)) {
-        addInstitution({
+        const created = addInstitution({
           name: row.institutionName || "미입력",
           type: "중소기업",
           bizNumber: row.bizNumber,
@@ -721,7 +883,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           registeredAt: today,
           status: "ACTIVE",
         });
-        registeredInst.add(normBizNum);
+        registeredInst.set(normBizNum, created.id);
         instCount++;
       }
 
@@ -729,7 +891,9 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       const normNum = normProjectNum(row.projectNumber);
       if (row.willRegister.project && normNum && !registeredProjects.has(normNum)) {
         const agencyId = registeredAgencies.get(row.agencyName) ?? "";
-        addProject({
+        const startDateStr = row.startDate || today;
+        const totalTerms = Math.max(1, projectMaxTerm.get(normNum) ?? 1);
+        const created = addProject({
           projectNumber: row.projectNumber,
           projectName: row.projectName || "미입력",
           agencyId,
@@ -737,18 +901,54 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           leadInstitutionId: "",
           leadInstitutionName: row.institutionName || "",
           totalBudget: 0,
-          startDate: row.startDate || today,
+          startDate: startDateStr,
           endDate: row.endDate || today,
-          totalTerms: 1,
-          currentTerm: 1,
+          totalTerms,
+          currentTerm: computeCurrentTerm(startDateStr, totalTerms, today),
           status: "ACTIVE",
         });
-        registeredProjects.add(normNum);
+        registeredProjects.set(normNum, created.id);
         projectCount++;
       }
     }
 
-    setDoneResult({ agency: agencyCount, project: projectCount, inst: instCount });
+    // 참여기관 — 이게 등록돼야 연차 수수료가 자동으로 계산된다 (autoGenerateTermFees 트리거)
+    for (const agg of memberAggregates) {
+      const projectId = registeredProjects.get(normProjectNum(agg.projectNumber));
+      const institutionId = registeredInst.get(normBiz(agg.bizNumber));
+      if (!projectId || !institutionId) continue;
+
+      const alreadyMember = projectMembers.some(
+        (m) => m.projectId === projectId && m.institutionId === institutionId
+      );
+      if (alreadyMember) continue;
+
+      const institution = institutions.find((i) => i.id === institutionId);
+      const annualBudgets = Array.from(agg.budgetsByTerm.values()).sort((a, b) => a.termNumber - b.termNumber);
+      const totalBudget = annualBudgets.length > 0
+        ? annualBudgets.reduce((s, b) => s + b.cashBudget + b.inKindBudget, 0)
+        : agg.totalCashBudgetFallback;
+
+      addProjectMember({
+        projectId,
+        projectNumber: agg.projectNumber,
+        institutionId,
+        institutionName: agg.institutionName,
+        institutionType: institution?.type ?? "중소기업",
+        role: agg.role,
+        budget: totalBudget,
+        feeRate: 0,
+        calculatedFee: 0,
+        institutionGrade: "일반",
+        settlementType: agg.settlementType,
+        cashBudget: totalBudget,
+        inKindBudget: 0,
+        annualBudgets: annualBudgets.length > 0 ? annualBudgets : undefined,
+      });
+      memberCount++;
+    }
+
+    setDoneResult({ agency: agencyCount, project: projectCount, inst: instCount, member: memberCount });
     setLoading(false);
     setStep("done");
   }
@@ -821,6 +1021,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       {step === "preview" && (
         <PreviewStep
           previewRows={previewRows}
+          newMemberCount={newMemberCount}
           onConfirm={doRegister}
           onBack={() => setStep(previewBackStep)}
           loading={loading}

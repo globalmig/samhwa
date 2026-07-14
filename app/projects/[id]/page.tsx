@@ -3,17 +3,20 @@
 import { use, useState, useMemo, type ReactNode } from "react";
 import Link from "next/link";
 import {
-  FiEdit2, FiCheck, FiX, FiPlus, FiSend, FiChevronDown, FiChevronUp, FiTrash2,
+  FiEdit2, FiCheck, FiX, FiPlus, FiSend, FiChevronDown, FiChevronUp, FiTrash2, FiFileText,
 } from "react-icons/fi";
 import {
   useStore, updateProject, addProjectIssue, updateProjectIssue, deleteProjectIssue, addTaxInvoice,
   addReceivable, updateReceivable, addEmailDispatch, updateTermFee, updateUnclaimedFee,
-  updateProjectMember,
+  updateProjectMember, autoGenerateTermFees, addProjectMember, deleteProjectMember,
 } from "@/lib/store";
-import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type IssueRecipientGroup } from "@/lib/mock";
-import { calcTermFee, resolvePolicy, normalizeGrade, type CalcMember } from "@/lib/fee-calculator";
+import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, EMPTY_NOTICE_TEMPLATE, COMPANY_INFO } from "@/lib/mock";
+import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, type CalcMember } from "@/lib/fee-calculator";
 import { fmtWonFull, fmtDate } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
+import Modal from "@/components/common/Modal";
+import NoticeLetterPreview, { type NoticeStatusRow } from "@/components/common/NoticeLetterPreview";
+import InstitutionQuickAdd from "@/components/common/InstitutionQuickAdd";
 import { useCanWrite } from "@/lib/permissions";
 
 // ─── Shared styles ───────────────────────────────────────────
@@ -102,6 +105,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   const [savedMsg, setSavedMsg] = useState(false);
   const [editingMembers, setEditingMembers] = useState(false);
   const [memberDrafts, setMemberDrafts] = useState<Record<string, Partial<ProjectMember>>>({});
+  const [showAddMember, setShowAddMember] = useState(false);
   const [showIssueForm, setShowIssueForm] = useState(false);
   const [issueContent, setIssueContent] = useState("");
   const [issuePriority, setIssuePriority] = useState<"HIGH" | "MEDIUM" | "LOW">("MEDIUM");
@@ -125,11 +129,13 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
 
   // KEIT 수수료 산정 (현재 연차 기준)
   const currentTerm = project.currentTerm ?? 1;
-  const policy = resolvePolicy(project.agencyId, feePolicies);
+  const policy = resolvePolicy(project.agencyId, feePolicies, project.programType ?? "GENERAL");
   const calcMembers: CalcMember[] = policy ? members.flatMap((m) => {
     const ab = m.annualBudgets?.find((a) => a.termNumber === currentTerm);
     const cashBudget = ab?.cashBudget ?? (m as unknown as { cashBudget?: number }).cashBudget ?? m.budget ?? 0;
-    if (cashBudget <= 0) return [];
+    const inKindBudget = ab?.inKindBudget ?? 0;
+    const amount = policy.feeBasis === "CASH_PLUS_INKIND" ? cashBudget + inKindBudget : cashBudget;
+    if (amount <= 0) return [];
     return [{
       institutionId: m.institutionId,
       institutionName: m.institutionName,
@@ -137,7 +143,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       grade: normalizeGrade(m.institutionGrade ?? "일반"),
       settlementType: (m.settlementType ?? "위탁정산") as "위탁정산" | "자체정산",
       cashBudget,
-      inKindBudget: ab?.inKindBudget ?? 0,
+      inKindBudget,
     }];
   }) : [];
 
@@ -152,17 +158,24 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
     : null;
 
   const exemptIds = new Set(feeResult?.exemptBreakdown.map((e) => e.institutionId) ?? []);
-  const nonExemptCalcMembers = calcMembers.filter((m) => !exemptIds.has(m.institutionId));
-  const totalNonExemptCash = nonExemptCalcMembers.reduce((s, m) => s + m.cashBudget, 0);
+  const excludedIds = new Set(feeResult?.excludedInstitutionIds ?? []);
+  const feeBasis = policy?.feeBasis ?? "CASH";
+  const nonExemptCalcMembers = calcMembers.filter(
+    (m) => !exemptIds.has(m.institutionId) && !excludedIds.has(m.institutionId)
+  );
+  const totalNonExemptCash = nonExemptCalcMembers.reduce((s, m) => s + getMemberAmount(m, feeBasis), 0);
 
   const getInstCalcFee = (institutionId: string): number => {
     if (!feeResult) return 0;
+    if (excludedIds.has(institutionId)) return 0;
+    const perInst = feeResult.perInstitutionFees?.find((e) => e.institutionId === institutionId);
+    if (perInst) return perInst.calculatedFee;
     if (exemptIds.has(institutionId)) {
       return feeResult.exemptBreakdown.find((e) => e.institutionId === institutionId)?.calculatedFee ?? 0;
     }
     const cm = calcMembers.find((m) => m.institutionId === institutionId);
     if (!cm) return 0;
-    const ratio = totalNonExemptCash > 0 ? cm.cashBudget / totalNonExemptCash : 0;
+    const ratio = totalNonExemptCash > 0 ? getMemberAmount(cm, feeBasis) / totalNonExemptCash : 0;
     return Math.round(feeResult.generalFee * ratio);
   };
 
@@ -265,12 +278,12 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
           {/* 주관기관 + 지원기관 */}
           <div className="grid grid-cols-3 gap-4">
             <div className="col-span-2">
-              <label className="block text-xs font-medium text-slate-500 mb-1">주관기관</label>
-              <select className={`${sel} w-full`} value={draft.leadInstitutionId}
-                onChange={(e) => setDraft((p) => ({ ...p, leadInstitutionId: e.target.value }))}>
-                <option value="">선택하세요</option>
-                {institutions.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
-              </select>
+              <InstitutionQuickAdd
+                label="주관기관"
+                value={draft.leadInstitutionId}
+                onChange={(id) => setDraft((p) => ({ ...p, leadInstitutionId: id }))}
+                institutions={institutions}
+              />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">전담기관</label>
@@ -410,6 +423,25 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                   }`}>자율성트랙</button>
               </div>
             </div>
+            {draft.agencyId === "fa-003" && (
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">
+                  사업 유형 <span className="text-slate-400 font-normal">· IITP 전용</span>
+                </label>
+                <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-medium">
+                  <button type="button"
+                    onClick={() => setDraft((p) => ({ ...p, programType: "GENERAL" }))}
+                    className={`flex-1 px-2 py-1.5 transition-colors ${
+                      (draft.programType ?? "GENERAL") === "GENERAL" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"
+                    }`}>일반 R&D</button>
+                  <button type="button"
+                    onClick={() => setDraft((p) => ({ ...p, programType: "ICT_FUND" }))}
+                    className={`flex-1 px-2 py-1.5 border-l border-slate-200 transition-colors ${
+                      draft.programType === "ICT_FUND" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"
+                    }`}>ICT 기금사업</button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -437,13 +469,30 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 </button>
               </>
             ) : canEditProjects ? (
-              <button onClick={startMemberEdit}
-                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
-                <FiEdit2 size={12} /> 기관 수정
-              </button>
+              <>
+                <button onClick={() => setShowAddMember((v) => !v)}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
+                  <FiPlus size={12} /> 참여기관 추가
+                </button>
+                <button onClick={startMemberEdit}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                  <FiEdit2 size={12} /> 기관 수정
+                </button>
+              </>
             ) : null}
           </div>
         </div>
+        {showAddMember && (
+          <AddMemberForm
+            projectId={projectId}
+            projectNumber={project.projectNumber}
+            startDate={project.startDate}
+            currentTerm={project.currentTerm ?? 1}
+            institutions={institutions}
+            existingInstitutionIds={new Set(members.map((m) => m.institutionId))}
+            onClose={() => setShowAddMember(false)}
+          />
+        )}
         {members.length === 0 ? (
           <div className="px-5 py-8 text-center text-sm text-slate-400">참여기관 없음</div>
         ) : (
@@ -456,6 +505,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 <th className="text-right px-4 py-3 text-xs font-medium text-slate-500">배정예산 (원)</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500">구분</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-slate-500">산정 수수료 ({currentTerm}연차)</th>
+                {canEditProjects && <th className="px-4 py-3 w-10" />}
               </tr>
             </thead>
             <tbody>
@@ -470,7 +520,17 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                         className="text-sm text-blue-600 hover:underline font-medium">{m.institutionName}</Link>
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <StatusBadge label={m.role === "LEAD" ? "주관" : "참여"} color={m.role === "LEAD" ? "blue" : "slate"} />
+                      {editingMembers ? (
+                        <select
+                          value={getMemberVal(m, "role")}
+                          onChange={(e) => setMemberField(m.id, "role", e.target.value as ProjectMember["role"])}
+                          className="text-xs border border-slate-200 rounded-lg px-2 py-1 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400">
+                          <option value="LEAD">주관</option>
+                          <option value="PARTICIPANT">참여</option>
+                        </select>
+                      ) : (
+                        <StatusBadge label={m.role === "LEAD" ? "주관" : "참여"} color={m.role === "LEAD" ? "blue" : "slate"} />
+                      )}
                     </td>
                     <td className="px-4 py-3 text-center">
                       {editingMembers ? (
@@ -501,7 +561,9 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                       )}
                     </td>
                     <td className="px-4 py-3 text-center">
-                      {exemptIds.has(m.institutionId)
+                      {excludedIds.has(m.institutionId)
+                        ? <span className="text-xs font-medium px-2 py-0.5 rounded bg-red-100 text-red-600">제외</span>
+                        : exemptIds.has(m.institutionId)
                         ? <span className="text-xs font-medium px-2 py-0.5 rounded bg-purple-100 text-purple-700">면제</span>
                         : <span className="text-xs font-medium px-2 py-0.5 rounded bg-slate-100 text-slate-500">일반</span>}
                     </td>
@@ -510,6 +572,17 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                         ? fmtWonFull(getInstCalcFee(m.institutionId))
                         : fmtWonFull(m.calculatedFee)}
                     </td>
+                    {canEditProjects && (
+                      <td className="px-4 py-3 text-center">
+                        <button
+                          onClick={() => {
+                            if (confirm(`"${m.institutionName}"을(를) 참여기관에서 제외하시겠습니까?`)) deleteProjectMember(m.id);
+                          }}
+                          className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors">
+                          <FiTrash2 size={13} />
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 );
               })}
@@ -518,6 +591,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               <tr className="bg-slate-50 border-t border-slate-200">
                 <td colSpan={5} className="px-4 py-2.5 text-right text-xs text-slate-400">합계</td>
                 <td className="px-4 py-2.5 text-right font-bold text-slate-800">{fmtWonFull(totalCalcFee)}</td>
+                {canEditProjects && <td />}
               </tr>
             </tfoot>
           </table>
@@ -755,10 +829,120 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   );
 }
 
+// ─── 참여기관 추가 폼 ──────────────────────────────────────────
+function AddMemberForm({
+  projectId,
+  projectNumber,
+  startDate,
+  currentTerm,
+  institutions,
+  existingInstitutionIds,
+  onClose,
+}: {
+  projectId: string;
+  projectNumber: string;
+  startDate: string;
+  currentTerm: number;
+  institutions: Institution[];
+  existingInstitutionIds: Set<string>;
+  onClose: () => void;
+}) {
+  const [institutionId, setInstitutionId] = useState("");
+  const [role, setRole] = useState<"LEAD" | "PARTICIPANT">("PARTICIPANT");
+  const [grade, setGrade] = useState<NonNullable<ProjectMember["institutionGrade"]>>("일반");
+  const [settlementType, setSettlementType] = useState<"위탁정산" | "자체정산">("위탁정산");
+  const [cashBudget, setCashBudget] = useState(0);
+  const [inKindBudget, setInKindBudget] = useState(0);
+  const [error, setError] = useState("");
+
+  const availableInstitutions = institutions.filter((i) => !existingInstitutionIds.has(i.id));
+
+  function submit() {
+    const inst = institutions.find((i) => i.id === institutionId);
+    if (!inst) { setError("기관을 선택하세요."); return; }
+    // autoGenerateTermFees는 annualBudgets(연차별 예산)만 참조하므로, 현재연차 기준으로 함께 채워야
+    // 수수료 관리 화면에 해당 연차 수수료가 자동 생성된다.
+    const termStartDate = new Date(startDate);
+    termStartDate.setFullYear(termStartDate.getFullYear() + currentTerm - 1);
+    const termYear = termStartDate.getFullYear();
+    addProjectMember({
+      projectId,
+      projectNumber,
+      institutionId,
+      institutionName: inst.name,
+      institutionType: inst.type,
+      role,
+      budget: cashBudget + inKindBudget,
+      feeRate: 0,
+      calculatedFee: 0,
+      institutionGrade: grade,
+      settlementType,
+      cashBudget,
+      inKindBudget,
+      annualBudgets: cashBudget > 0 || inKindBudget > 0
+        ? [{ termYear, termNumber: currentTerm, cashBudget, inKindBudget }]
+        : undefined,
+    });
+    onClose();
+  }
+
+  return (
+    <div className="px-5 py-4 border-b border-slate-100 bg-blue-50/30 space-y-3">
+      {error && <p className="text-xs text-red-600">{error}</p>}
+      <InstitutionQuickAdd label="기관" value={institutionId} onChange={setInstitutionId} institutions={availableInstitutions} />
+      <div className="grid grid-cols-3 gap-3">
+        <div>
+          <label className="block text-xs font-medium text-slate-500 mb-1">역할</label>
+          <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-medium">
+            <button type="button" onClick={() => setRole("LEAD")}
+              className={`flex-1 px-2 py-1.5 transition-colors ${role === "LEAD" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"}`}>주관</button>
+            <button type="button" onClick={() => setRole("PARTICIPANT")}
+              className={`flex-1 px-2 py-1.5 border-l border-slate-200 transition-colors ${role === "PARTICIPANT" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"}`}>참여</button>
+          </div>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-500 mb-1">등급</label>
+          <select className={sel} value={grade} onChange={(e) => setGrade(e.target.value as NonNullable<ProjectMember["institutionGrade"]>)}>
+            <option value="최우수(S)">최우수 (S)</option>
+            <option value="우수(A)">우수 (A)</option>
+            <option value="우수(B)">우수 (B)</option>
+            <option value="우수(C)">우수 (C)</option>
+            <option value="일반">일반</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-500 mb-1">정산형태</label>
+          <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-medium">
+            <button type="button" onClick={() => setSettlementType("위탁정산")}
+              className={`flex-1 px-2 py-1.5 transition-colors ${settlementType === "위탁정산" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"}`}>위탁정산</button>
+            <button type="button" onClick={() => setSettlementType("자체정산")}
+              className={`flex-1 px-2 py-1.5 border-l border-slate-200 transition-colors ${settlementType === "자체정산" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"}`}>자체정산</button>
+          </div>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="block text-xs font-medium text-slate-500 mb-1">현금사업비 (원)</label>
+          <input type="number" min={0} className={`${inp} w-full`} value={cashBudget} onChange={(e) => setCashBudget(Number(e.target.value))} />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-500 mb-1">현물사업비 (원)</label>
+          <input type="number" min={0} className={`${inp} w-full`} value={inKindBudget} onChange={(e) => setInKindBudget(Number(e.target.value))} />
+        </div>
+      </div>
+      <div className="flex justify-end gap-2">
+        <button onClick={onClose} className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
+        <button onClick={submit} className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">추가</button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Term section (per-연차 card in Tab 2) ───────────────────
-function TermSection({ group, projectNumber, leadInstitutionId, leadInstitutionName, members }: {
+function TermSection({ group, projectNumber, agencyId, leadInstitutionId, leadInstitutionName, members }: {
   group: TermGroup;
   projectNumber: string;
+  agencyId: string;
   leadInstitutionId: string;
   leadInstitutionName: string;
   members: ProjectMember[];
@@ -767,8 +951,10 @@ function TermSection({ group, projectNumber, leadInstitutionId, leadInstitutionN
   const canEditReceivables = useCanWrite('receivables');
   const canEditEmails = useCanWrite('emails');
   const canEditUnclaimed = useCanWrite('unclaimed');
-  const { institutions, emailDispatches } = useStore();
+  const { institutions, emailDispatches, fundingAgencies } = useStore();
   const leadInst = institutions.find((i) => i.id === leadInstitutionId);
+  // 전담기관 설정에 따라 공문을 주관기관만 받을지, 참여기관까지 다 받을지 결정
+  const sendToAllInstitutions = fundingAgencies.find((a) => a.id === agencyId)?.noticeRecipientScope === "LEAD_AND_PARTICIPANTS";
 
   const [expanded, setExpanded] = useState(false);
   const [issuingInvoice, setIssuingInvoice] = useState(false);
@@ -814,8 +1000,14 @@ function TermSection({ group, projectNumber, leadInstitutionId, leadInstitutionN
       totalAmount: invForm.totalAmount,
       status: "ISSUED",
     });
+    // 주관기관만 발송 대상인 전담기관은 실제로 청구서를 받는 주관기관만 청구완료 처리하고,
+    // 참여기관은 개별 청구된 게 아니므로 확정(CONFIRMED)까지만 반영한다.
     group.fees.forEach((f) => {
-      if (f.status !== "BILLED") updateTermFee(f.id, { status: "BILLED" });
+      if (sendToAllInstitutions || f.institutionId === leadInstitutionId) {
+        if (f.status !== "BILLED") updateTermFee(f.id, { status: "BILLED" });
+      } else if (f.status === "DRAFT" || f.status === "SCHEDULED") {
+        updateTermFee(f.id, { status: "CONFIRMED" });
+      }
     });
     setIssuingInvoice(false);
   }
@@ -867,16 +1059,27 @@ function TermSection({ group, projectNumber, leadInstitutionId, leadInstitutionN
   const lastSent = [...sentEmails].sort((a, b) => b.sentAt.localeCompare(a.sentAt))[0];
 
   function sendLetter() {
-    addEmailDispatch({
-      batchId: `BATCH-${Date.now()}`,
-      sentAt: new Date().toISOString().replace("T", " ").slice(0, 16),
-      recipientInstitution: leadInstitutionName,
-      recipientEmail: leadInst?.contactEmail ?? "",
-      subject: `[${projectNumber}] ${termLabel} 수수료 청구서`,
-      emailType: "TAX_INVOICE",
-      feeCategory: "ANNUAL",
-      attachments: [`청구서_${projectNumber}_${termLabel}.pdf`],
-      status: "SUCCESS",
+    const batchId = `BATCH-${Date.now()}`;
+    const sentAt = new Date().toISOString().replace("T", " ").slice(0, 16);
+    const recipients = sendToAllInstitutions
+      ? group.fees.map((f) => ({
+          institutionName: f.institutionName,
+          email: institutions.find((i) => i.id === f.institutionId)?.contactEmail ?? "",
+        }))
+      : [{ institutionName: leadInstitutionName, email: leadInst?.contactEmail ?? "" }];
+
+    recipients.forEach((r) => {
+      addEmailDispatch({
+        batchId,
+        sentAt,
+        recipientInstitution: r.institutionName,
+        recipientEmail: r.email,
+        subject: `[${projectNumber}] ${termLabel} 수수료 청구서`,
+        emailType: "TAX_INVOICE",
+        feeCategory: "ANNUAL",
+        attachments: [`청구서_${projectNumber}_${termLabel}.pdf`],
+        status: "SUCCESS",
+      });
     });
   }
 
@@ -1017,8 +1220,9 @@ function TermSection({ group, projectNumber, leadInstitutionId, leadInstitutionN
                     )}
                     {canEditEmails && (
                       <button onClick={sendLetter}
+                        title={sendToAllInstitutions ? `주관+참여기관 ${group.fees.length}곳으로 발송됩니다` : "주관기관으로 발송됩니다"}
                         className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 transition-colors">
-                        <FiSend size={12} /> 공문 발송
+                        <FiSend size={12} /> 공문 발송{sendToAllInstitutions ? ` (${group.fees.length}곳)` : ""}
                       </button>
                     )}
                     {canEditInvoices && (
@@ -1178,9 +1382,17 @@ function TermSection({ group, projectNumber, leadInstitutionId, leadInstitutionN
 // ─── Tab 2: 수수료 관리 ──────────────────────────────────────
 function FeeManagementTab({ projectId }: { projectId: string }) {
   const { projects, termFees, taxInvoices, receivables, unclaimedFees, projectMembers } = useStore();
+  const canRecalc = useCanWrite('fees');
+  const [recalculated, setRecalculated] = useState(false);
 
   const project = projects.find((p) => p.id === projectId) ?? null;
   const members = projectMembers.filter((m) => m.projectId === projectId);
+
+  function recalc() {
+    autoGenerateTermFees(projectId);
+    setRecalculated(true);
+    setTimeout(() => setRecalculated(false), 2000);
+  }
 
   // useMemo must be called before any conditional return
   const termGroups = useMemo<TermGroup[]>(() => {
@@ -1214,22 +1426,37 @@ function FeeManagementTab({ projectId }: { projectId: string }) {
 
   if (!project) return null;
 
+  const recalcButton = canRecalc && (
+    <div className="flex items-center justify-end gap-2">
+      {recalculated && <span className="text-xs text-green-600 font-medium">재계산 완료</span>}
+      <button onClick={recalc}
+        className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+        <FiEdit2 size={12} /> 수수료 재계산
+      </button>
+    </div>
+  );
+
   if (termGroups.length === 0) {
     return (
-      <div className="bg-white rounded-xl border border-slate-200 py-16 text-center">
-        <p className="text-sm text-slate-400">연차별 수수료 내역이 없습니다</p>
-        <p className="text-xs text-slate-300 mt-1">수수료 관리 메뉴에서 연차 수수료를 먼저 생성해 주세요</p>
+      <div className="space-y-3">
+        {recalcButton}
+        <div className="bg-white rounded-xl border border-slate-200 py-16 text-center">
+          <p className="text-sm text-slate-400">연차별 수수료 내역이 없습니다</p>
+          <p className="text-xs text-slate-300 mt-1">수수료 관리 메뉴에서 연차 수수료를 먼저 생성해 주세요</p>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="space-y-3">
+      {recalcButton}
       {termGroups.map((group) => (
         <TermSection
           key={group.key}
           group={group}
           projectNumber={project.projectNumber}
+          agencyId={project.agencyId}
           leadInstitutionId={project.leadInstitutionId}
           leadInstitutionName={project.leadInstitutionName}
           members={members}
@@ -1239,11 +1466,141 @@ function FeeManagementTab({ projectId }: { projectId: string }) {
   );
 }
 
+// ─── 정산절차 안내 공문 발송 모달 ───────────────────────────
+function SettlementNoticeModal({
+  project,
+  agencyLabel,
+  templates,
+  statusRows,
+  recipientEmail,
+  docNumber,
+  issuedDate,
+  onClose,
+}: {
+  project: Project;
+  agencyLabel: string;
+  templates: AgencyNoticeTemplateEntry[];
+  statusRows: NoticeStatusRow[];
+  recipientEmail: string;
+  docNumber: string;
+  issuedDate: string;
+  onClose: () => void;
+}) {
+  const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
+  const [toEmail, setToEmail] = useState(recipientEmail);
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+
+  const selectedTemplate = templates.find((t) => t.id === templateId) ?? templates[0];
+  const template = selectedTemplate?.content ?? EMPTY_NOTICE_TEMPLATE;
+
+  function send() {
+    setSending(true);
+    addEmailDispatch({
+      batchId: `BATCH-${Date.now()}`,
+      sentAt: new Date().toISOString().replace("T", " ").slice(0, 16),
+      recipientInstitution: project.leadInstitutionName,
+      recipientEmail: toEmail,
+      subject: `[${project.projectNumber}] ${template.title || "정산절차 안내 및 수수료 청구"}`,
+      emailType: "SETTLEMENT_NOTICE",
+      attachments: template.attachments,
+      status: "SUCCESS",
+      noticeSnapshot: { template, statusRows, docNumber, issuedDate },
+    });
+    setSending(false);
+    setSent(true);
+  }
+
+  if (sent) {
+    return (
+      <div className="p-6 flex flex-col items-center gap-3">
+        <div className="w-14 h-14 rounded-full bg-green-100 flex items-center justify-center">
+          <FiSend size={22} className="text-green-600" />
+        </div>
+        <div className="text-center">
+          <p className="text-sm font-semibold text-slate-800">발송 완료</p>
+          <p className="text-xs text-slate-500 mt-1">{toEmail}</p>
+        </div>
+        <button onClick={onClose} className="mt-2 px-6 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
+          닫기
+        </button>
+      </div>
+    );
+  }
+
+  if (templates.length === 0) {
+    return (
+      <div className="p-6 space-y-4">
+        <p className="text-sm text-slate-600">
+          {agencyLabel}에 등록된 공문 템플릿이 없습니다. &quot;공문 양식 관리&quot; 메뉴에서 먼저 템플릿을 등록해주세요.
+        </p>
+        <div className="flex justify-end">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">닫기</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-6 space-y-4">
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-bold px-2 py-1 rounded bg-purple-100 text-purple-700">
+          {agencyLabel} · 정산절차 안내 공문
+        </span>
+        <span className="text-xs text-slate-500">{project.projectNumber}</span>
+      </div>
+
+      {templates.length > 1 && (
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">템플릿 선택</label>
+          <select
+            value={templateId}
+            onChange={(e) => setTemplateId(e.target.value)}
+            className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+          >
+            {templates.map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      <div className="max-h-[50vh] overflow-y-auto border border-slate-100 rounded-xl p-4 bg-slate-50/50">
+        <NoticeLetterPreview template={template} statusRows={statusRows} docNumber={docNumber} issuedDate={issuedDate} />
+      </div>
+
+      <div>
+        <label className="block text-xs font-medium text-slate-600 mb-1">수신 이메일</label>
+        <input
+          type="email"
+          value={toEmail}
+          onChange={(e) => setToEmail(e.target.value)}
+          className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+          placeholder="recipient@institution.co.kr"
+        />
+      </div>
+
+      <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+        <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
+        <button
+          onClick={send}
+          disabled={!toEmail.trim() || sending}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          <FiSend size={14} />
+          {sending ? "발송 중..." : "발송"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Page ───────────────────────────────────────────────
 export default function ProjectDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const { projects } = useStore();
+  const { projects, fundingAgencies, agencyNoticeTemplates, projectMembers, emailDispatches } = useStore();
   const [activeTab, setActiveTab] = useState<"info" | "fees">("info");
+  const [showNotice, setShowNotice] = useState(false);
 
   const project = projects.find((p) => p.id === id);
 
@@ -1255,6 +1612,26 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
       </div>
     );
   }
+
+  const noticeAgency = fundingAgencies.find((a) => a.id === project.agencyId);
+  const noticeAgencyTemplates = noticeAgency
+    ? agencyNoticeTemplates.filter((t) => t.agencyShortName === noticeAgency.shortName)
+    : [];
+  const leadMember = projectMembers.find((m) => m.projectId === project.id && m.role === "LEAD");
+  const coInstitutionCount = projectMembers.filter((m) => m.projectId === project.id && m.role === "PARTICIPANT").length;
+  const noticeStatusRows: NoticeStatusRow[] = [
+    { label: "과제번호 (RCMS)", value: project.projectCode || project.projectNumber },
+    { label: "과제명", value: project.projectName },
+    { label: "단계연구개발기간", value: `${fmtDate(project.stageStartDate ?? project.startDate)} ~ ${fmtDate(project.stageEndDate ?? project.endDate)}` },
+    { label: "대상기간", value: `${fmtDate(project.firstStartDate ?? project.startDate)} ~ ${fmtDate(project.finalEndDate ?? project.endDate)}` },
+    { label: "정산구분", value: leadMember?.settlementType ?? "위탁정산" },
+    { label: "주관연구개발기관", value: project.leadInstitutionName },
+    { label: "연구책임자", value: project.researchLead ?? "—" },
+    { label: "공동연구개발기관수", value: `${coInstitutionCount}개` },
+  ];
+  const noticeSeq = emailDispatches.filter((e) => e.emailType === "SETTLEMENT_NOTICE").length + 1;
+  const noticeDocNumber = `${COMPANY_INFO.docNumberPrefix} ${new Date().getFullYear()}-${String(noticeSeq).padStart(4, "0")}`;
+  const noticeIssuedDate = new Date().toISOString().slice(0, 10).replace(/-/g, ".");
 
   return (
     <div className="space-y-4">
@@ -1273,7 +1650,17 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
             <h2 className="text-base font-bold text-slate-800 mt-0.5">{project.projectName}</h2>
             <p className="text-sm text-slate-500 mt-0.5">{project.leadInstitutionName} · {project.agency}</p>
           </div>
-          <StatusBadge label={PROJECT_STATUS[project.status].label} color={PROJECT_STATUS[project.status].color} />
+          <div className="flex items-center gap-2">
+            {noticeAgency && (
+              <button
+                onClick={() => setShowNotice(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-lg hover:bg-purple-100 transition-colors"
+              >
+                <FiFileText size={12} /> 정산절차 안내 공문
+              </button>
+            )}
+            <StatusBadge label={PROJECT_STATUS[project.status].label} color={PROJECT_STATUS[project.status].color} />
+          </div>
         </div>
       </div>
 
@@ -1299,6 +1686,21 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
         <ProjectInfoTab projectId={id} />
       ) : (
         <FeeManagementTab projectId={id} />
+      )}
+
+      {showNotice && noticeAgency && (
+        <Modal title="정산절차 안내 공문" onClose={() => setShowNotice(false)} size="xl">
+          <SettlementNoticeModal
+            project={project}
+            agencyLabel={`${noticeAgency.name} (${noticeAgency.shortName})`}
+            templates={noticeAgencyTemplates}
+            statusRows={noticeStatusRows}
+            recipientEmail={leadMember?.contactEmail ?? ""}
+            docNumber={noticeDocNumber}
+            issuedDate={noticeIssuedDate}
+            onClose={() => setShowNotice(false)}
+          />
+        </Modal>
       )}
     </div>
   );

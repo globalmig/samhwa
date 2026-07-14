@@ -406,7 +406,8 @@ export interface FundingAgency {
   status: "ACTIVE" | "INACTIVE";
   registeredAt: string;
   website?: string;
-  feePolicyId?: string | null;
+  // 공문 · 세금계산서 발송 대상 — LEAD_ONLY: 주관기관만, LEAD_AND_PARTICIPANTS: 주관+참여(공동)기관 모두
+  noticeRecipientScope: "LEAD_ONLY" | "LEAD_AND_PARTICIPANTS";
 }
 
 export const fundingAgencies: FundingAgency[] = [
@@ -421,6 +422,7 @@ export const fundingAgencies: FundingAgency[] = [
     status: "ACTIVE",
     registeredAt: "2022-01-01",
     website: "https://www.keit.re.kr",
+    noticeRecipientScope: "LEAD_ONLY",
   },
   {
     id: "fa-002",
@@ -433,6 +435,7 @@ export const fundingAgencies: FundingAgency[] = [
     status: "ACTIVE",
     registeredAt: "2022-01-01",
     website: "https://www.ketep.re.kr",
+    noticeRecipientScope: "LEAD_ONLY",
   },
   {
     id: "fa-003",
@@ -445,6 +448,7 @@ export const fundingAgencies: FundingAgency[] = [
     status: "ACTIVE",
     registeredAt: "2022-03-01",
     website: "https://www.iitp.kr",
+    noticeRecipientScope: "LEAD_ONLY",
   },
   {
     id: "fa-004",
@@ -457,6 +461,7 @@ export const fundingAgencies: FundingAgency[] = [
     status: "ACTIVE",
     registeredAt: "2022-01-01",
     website: "https://www.kofpi.or.kr",
+    noticeRecipientScope: "LEAD_ONLY",
   },
   {
     id: "fa-005",
@@ -469,6 +474,7 @@ export const fundingAgencies: FundingAgency[] = [
     status: "ACTIVE",
     registeredAt: "2022-07-01",
     website: "https://www.rda.go.kr",
+    noticeRecipientScope: "LEAD_AND_PARTICIPANTS",
   },
   {
     id: "fa-006",
@@ -481,6 +487,7 @@ export const fundingAgencies: FundingAgency[] = [
     status: "ACTIVE",
     registeredAt: "2023-09-01",
     website: "https://www.rda.go.kr",
+    noticeRecipientScope: "LEAD_AND_PARTICIPANTS",
   },
 ];
 
@@ -521,6 +528,7 @@ export interface Project {
   agreementType?: "BATCH" | "STAGED"; // 일괄협약(0단계) | 단계협약
   stages?: { stageNumber: number; startTermNumber: number; endTermNumber: number }[];
   projectType?: "GENERAL" | "AUTONOMY_TRACK"; // 일반과제 | 자율성트랙과제
+  programType?: "GENERAL" | "ICT_FUND";        // 일반 R&D과제 | ICT 기금사업 (IITP 전용 별도 수수료체계)
   docRequestDate?: string;  // 서류 요청일
   docReplyDate?: string;    // 서류 회신일
   assignedManager?: string; // 삼화 담당자
@@ -774,30 +782,30 @@ export interface ProjectMember {
 
 export const projectMembers: ProjectMember[] = [
   // p-001: 삼화전자 주관, 4개 기관
-  { id: "pm-001", projectId: "p-001", projectNumber: "RS-2024-00214837", institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", role: "LEAD", budget: 700_000_000, feeRate: 3.0, calculatedFee: 21_000_000, institutionGrade: "일반", contactName: "김연구", contactEmail: "research@samhwa.co.kr", contactPhone: "02-1234-5678" },
-  { id: "pm-002", projectId: "p-001", projectNumber: "RS-2024-00214837", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 1_200_000_000, feeRate: 2.0, calculatedFee: 24_000_000, institutionGrade: "우수(A)", contactName: "이박사", contactEmail: "lee@kist.re.kr", contactPhone: "02-2055-1000" },
-  { id: "pm-003", projectId: "p-001", projectNumber: "RS-2024-00214837", institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", role: "PARTICIPANT", budget: 500_000_000, feeRate: 2.0, calculatedFee: 10_000_000, institutionGrade: "최우수(S)", contactName: "박교수", contactEmail: "park@yonsei.ac.kr", contactPhone: "02-2123-3456" },
-  { id: "pm-004", projectId: "p-001", projectNumber: "RS-2024-00214837", institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", role: "PARTICIPANT", budget: 400_000_000, feeRate: 2.5, calculatedFee: 10_000_000, institutionGrade: "일반", contactName: "최담당", contactEmail: "choi@nanomat.co.kr", contactPhone: "031-456-7890" },
+  { id: "pm-001", projectId: "p-001", projectNumber: "RS-2024-00214837", institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", role: "LEAD", budget: 700_000_000, feeRate: 3.0, calculatedFee: 21_000_000, institutionGrade: "일반", contactName: "김연구", contactEmail: "research@samhwa.co.kr", contactPhone: "02-1234-5678", annualBudgets: [{ termYear: 2024, termNumber: 2, cashBudget: 700_000_000, inKindBudget: 0 }] },
+  { id: "pm-002", projectId: "p-001", projectNumber: "RS-2024-00214837", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 1_200_000_000, feeRate: 2.0, calculatedFee: 24_000_000, institutionGrade: "우수(A)", contactName: "이박사", contactEmail: "lee@kist.re.kr", contactPhone: "02-2055-1000", annualBudgets: [{ termYear: 2024, termNumber: 2, cashBudget: 1_200_000_000, inKindBudget: 0 }] },
+  { id: "pm-003", projectId: "p-001", projectNumber: "RS-2024-00214837", institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", role: "PARTICIPANT", budget: 500_000_000, feeRate: 2.0, calculatedFee: 10_000_000, institutionGrade: "최우수(S)", contactName: "박교수", contactEmail: "park@yonsei.ac.kr", contactPhone: "02-2123-3456", annualBudgets: [{ termYear: 2024, termNumber: 2, cashBudget: 500_000_000, inKindBudget: 0 }] },
+  { id: "pm-004", projectId: "p-001", projectNumber: "RS-2024-00214837", institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", role: "PARTICIPANT", budget: 400_000_000, feeRate: 2.5, calculatedFee: 10_000_000, institutionGrade: "일반", contactName: "최담당", contactEmail: "choi@nanomat.co.kr", contactPhone: "031-456-7890", annualBudgets: [{ termYear: 2024, termNumber: 2, cashBudget: 400_000_000, inKindBudget: 0 }] },
 
   // p-002: (주)에너텍솔루션 주관, 6개 기관
-  { id: "pm-005", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", role: "LEAD", budget: 1_500_000_000, feeRate: 2.5, calculatedFee: 37_500_000, institutionGrade: "우수(B)" },
-  { id: "pm-006", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", role: "PARTICIPANT", budget: 2_000_000_000, feeRate: 2.0, calculatedFee: 40_000_000, institutionGrade: "최우수(S)" },
-  { id: "pm-007", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 500_000_000, feeRate: 2.0, calculatedFee: 10_000_000, institutionGrade: "우수(A)" },
-  { id: "pm-008", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", role: "PARTICIPANT", budget: 300_000_000, feeRate: 2.0, calculatedFee: 6_000_000, institutionGrade: "우수(B)" },
-  { id: "pm-009", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-010", institutionName: "(주)클린에너지솔루션", institutionType: "중견기업", role: "PARTICIPANT", budget: 100_000_000, feeRate: 2.5, calculatedFee: 2_500_000, institutionGrade: "우수(C)" },
-  { id: "pm-010", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-011", institutionName: "하이테크머티리얼(주)", institutionType: "스타트업", role: "PARTICIPANT", budget: 100_000_000, feeRate: 2.5, calculatedFee: 2_500_000, institutionGrade: "일반" },
+  { id: "pm-005", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", role: "LEAD", budget: 1_500_000_000, feeRate: 2.5, calculatedFee: 37_500_000, institutionGrade: "우수(B)", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 1_500_000_000, inKindBudget: 0 }] },
+  { id: "pm-006", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", role: "PARTICIPANT", budget: 2_000_000_000, feeRate: 2.0, calculatedFee: 40_000_000, institutionGrade: "최우수(S)", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 2_000_000_000, inKindBudget: 0 }] },
+  { id: "pm-007", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 500_000_000, feeRate: 2.0, calculatedFee: 10_000_000, institutionGrade: "우수(A)", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 500_000_000, inKindBudget: 0 }] },
+  { id: "pm-008", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", role: "PARTICIPANT", budget: 300_000_000, feeRate: 2.0, calculatedFee: 6_000_000, institutionGrade: "우수(B)", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 300_000_000, inKindBudget: 0 }] },
+  { id: "pm-009", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-010", institutionName: "(주)클린에너지솔루션", institutionType: "중견기업", role: "PARTICIPANT", budget: 100_000_000, feeRate: 2.5, calculatedFee: 2_500_000, institutionGrade: "우수(C)", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 100_000_000, inKindBudget: 0 }] },
+  { id: "pm-010", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-011", institutionName: "하이테크머티리얼(주)", institutionType: "스타트업", role: "PARTICIPANT", budget: 100_000_000, feeRate: 2.5, calculatedFee: 2_500_000, institutionGrade: "일반", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 100_000_000, inKindBudget: 0 }] },
 
   // p-003: 나노소재기술 주관, 3개 기관
-  { id: "pm-011", projectId: "p-003", projectNumber: "RS-2024-00201547", institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", role: "LEAD", budget: 600_000_000, feeRate: 2.5, calculatedFee: 15_000_000, institutionGrade: "일반" },
-  { id: "pm-012", projectId: "p-003", projectNumber: "RS-2024-00201547", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 400_000_000, feeRate: 2.0, calculatedFee: 8_000_000, institutionGrade: "우수(A)" },
-  { id: "pm-013", projectId: "p-003", projectNumber: "RS-2024-00201547", institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", role: "PARTICIPANT", budget: 200_000_000, feeRate: 2.0, calculatedFee: 4_000_000, institutionGrade: "우수(B)" },
+  { id: "pm-011", projectId: "p-003", projectNumber: "RS-2024-00201547", institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", role: "LEAD", budget: 600_000_000, feeRate: 2.5, calculatedFee: 15_000_000, institutionGrade: "일반", annualBudgets: [{ termYear: 2022, termNumber: 1, cashBudget: 600_000_000, inKindBudget: 0 }] },
+  { id: "pm-012", projectId: "p-003", projectNumber: "RS-2024-00201547", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 400_000_000, feeRate: 2.0, calculatedFee: 8_000_000, institutionGrade: "우수(A)", annualBudgets: [{ termYear: 2022, termNumber: 1, cashBudget: 400_000_000, inKindBudget: 0 }] },
+  { id: "pm-013", projectId: "p-003", projectNumber: "RS-2024-00201547", institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", role: "PARTICIPANT", budget: 200_000_000, feeRate: 2.0, calculatedFee: 4_000_000, institutionGrade: "우수(B)", annualBudgets: [{ termYear: 2022, termNumber: 1, cashBudget: 200_000_000, inKindBudget: 0 }] },
 
   // p-004: 연세대학교 주관, 5개 기관
-  { id: "pm-014", projectId: "p-004", projectNumber: "RS-2023-00187652", institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", role: "LEAD", budget: 1_500_000_000, feeRate: 2.0, calculatedFee: 30_000_000, institutionGrade: "최우수(S)" },
-  { id: "pm-015", projectId: "p-004", projectNumber: "RS-2023-00187652", institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", role: "PARTICIPANT", budget: 800_000_000, feeRate: 2.5, calculatedFee: 20_000_000, institutionGrade: "우수(B)" },
-  { id: "pm-016", projectId: "p-004", projectNumber: "RS-2023-00187652", institutionId: "inst-008", institutionName: "그린바이오텍(주)", institutionType: "중소기업", role: "PARTICIPANT", budget: 500_000_000, feeRate: 3.0, calculatedFee: 15_000_000, institutionGrade: "우수(C)" },
-  { id: "pm-017", projectId: "p-004", projectNumber: "RS-2023-00187652", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 200_000_000, feeRate: 2.0, calculatedFee: 4_000_000, institutionGrade: "우수(A)" },
-  { id: "pm-018", projectId: "p-004", projectNumber: "RS-2023-00187652", institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", role: "PARTICIPANT", budget: 100_000_000, feeRate: 2.0, calculatedFee: 2_000_000, institutionGrade: "우수(B)" },
+  { id: "pm-014", projectId: "p-004", projectNumber: "RS-2023-00187652", institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", role: "LEAD", budget: 1_500_000_000, feeRate: 2.0, calculatedFee: 30_000_000, institutionGrade: "최우수(S)", annualBudgets: [{ termYear: 2024, termNumber: 2, cashBudget: 1_500_000_000, inKindBudget: 0 }] },
+  { id: "pm-015", projectId: "p-004", projectNumber: "RS-2023-00187652", institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", role: "PARTICIPANT", budget: 800_000_000, feeRate: 2.5, calculatedFee: 20_000_000, institutionGrade: "우수(B)", annualBudgets: [{ termYear: 2024, termNumber: 2, cashBudget: 800_000_000, inKindBudget: 0 }] },
+  { id: "pm-016", projectId: "p-004", projectNumber: "RS-2023-00187652", institutionId: "inst-008", institutionName: "그린바이오텍(주)", institutionType: "중소기업", role: "PARTICIPANT", budget: 500_000_000, feeRate: 3.0, calculatedFee: 15_000_000, institutionGrade: "우수(C)", annualBudgets: [{ termYear: 2024, termNumber: 2, cashBudget: 500_000_000, inKindBudget: 0 }] },
+  { id: "pm-017", projectId: "p-004", projectNumber: "RS-2023-00187652", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 200_000_000, feeRate: 2.0, calculatedFee: 4_000_000, institutionGrade: "우수(A)", annualBudgets: [{ termYear: 2024, termNumber: 2, cashBudget: 200_000_000, inKindBudget: 0 }] },
+  { id: "pm-018", projectId: "p-004", projectNumber: "RS-2023-00187652", institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", role: "PARTICIPANT", budget: 100_000_000, feeRate: 2.0, calculatedFee: 2_000_000, institutionGrade: "우수(B)", annualBudgets: [{ termYear: 2024, termNumber: 2, cashBudget: 100_000_000, inKindBudget: 0 }] },
 
   // p-005: 한국과학기술연구원 주관, 2개 기관
   { id: "pm-019", projectId: "p-005", projectNumber: "RS-2024-00225198", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "LEAD", budget: 800_000_000, feeRate: 2.0, calculatedFee: 16_000_000, institutionGrade: "최우수(S)" },
@@ -873,8 +881,17 @@ export interface FeePolicy {
   feeRateBrackets: FeeRateBracket[];
   coInstAddonMethod: "TIERED" | "FLAT"; // TIERED: 1개10%+추가5%, FLAT: 전체10%×N
   exemptGrades: string[];              // 면제기관 등급 ["S","A~C"] or ["S"] or []
+  // DISCOUNT: 면제등급도 산정기준액에 포함해 계산한 뒤 85% 할인 (KEIT/KETEP)
+  // EXCLUDE: 면제등급을 산정기준액에서 완전히 제외 — 연차상시도 수행하지 않음 (IITP/RDA1/RDA2)
+  exemptionMode: "DISCOUNT" | "EXCLUDE";
+  feeBasis: "CASH" | "CASH_PLUS_INKIND"; // CASH_PLUS_INKIND: RDA1/RDA2 — 현금+현물 합산 기준
   hasAutonomyTrack: boolean;           // 자율성트랙 과제 존재 여부
   annualBillingRate: number;           // 연차상시 청구 비율 (0.85=KEIT/KETEP, 1.0=KOFPI 등 미청구 없는 기관)
+  minimumFee?: number;                 // 연차별 산정수수료 최소 하한액 — 미만이면 이 금액을 기준으로 하고 차액은 이월 (RDA1/RDA2: 100,000원)
+  excludeLeadFromCalc?: boolean;       // 주관기관을 산정기준액에서 완전 제외 + 공동기관수 -1 보정 (RDA2: 주관기관이 농진청/소속기관인 경우)
+  calcMode?: "AGGREGATE" | "PER_INSTITUTION"; // AGGREGATE(기본): 과제 전체 사업비로 표준수수료 산정 후 배분 / PER_INSTITUTION: 기관별 사업비를 각각 구간표에 대입해 개별 산정 (IITP ICT기금사업)
+  programType?: "GENERAL" | "ICT_FUND"; // 정책이 적용되는 사업 유형 — 동일 전담기관에 유형별로 별도 정책을 둘 수 있음 (미지정 시 GENERAL)
+  legacyTransitionNote?: string;       // 수수료체계 변경 시점의 경과조치 안내 (예: KETEP 26년 전환 — 이전 과제 미청구수수료 수기조정 필요)
 }
 
 // ─── 전담기관별 현금사업비 구간 요율표 ──────────────────────────
@@ -914,6 +931,40 @@ export const KOFPI_BRACKETS: FeeRateBracket[] = [
   { minAmount: 4_000_000_000,  maxAmount: 5_000_000_000, baseFee: 2_500_000 },
 ];
 
+// IITP: KEIT 대비 5천만원 미만 구간이 추가로 있음
+export const IITP_BRACKETS: FeeRateBracket[] = [
+  { minAmount: 0,              maxAmount: 50_000_000,     baseFee: 600_000   },
+  { minAmount: 50_000_000,     maxAmount: 100_000_000,    baseFee: 987_000   },
+  { minAmount: 100_000_000,    maxAmount: 300_000_000,    baseFee: 1_185_000 },
+  { minAmount: 300_000_000,    maxAmount: 500_000_000,    baseFee: 1_515_000 },
+  { minAmount: 500_000_000,    maxAmount: 1_000_000_000,  baseFee: 1_647_000 },
+  { minAmount: 1_000_000_000,  maxAmount: 3_000_000_000,  baseFee: 1_845_000 },
+  { minAmount: 3_000_000_000,  maxAmount: null,            baseFee: 2_043_000 },
+];
+
+// IITP ICT 기금사업 전용 — 국가연구개발사업이 아닌 기금사업. 단계정산 없이 매년 100% 청구,
+// 공동기관 구분 없이 참여기관별로 각자의 사업비를 이 구간표에 대입해 개별 산정한다 (calcMode: "PER_INSTITUTION").
+export const IITP_ICT_BRACKETS: FeeRateBracket[] = [
+  { minAmount: 0,              maxAmount: 50_000_000,     baseFee: 600_000   },
+  { minAmount: 50_000_000,     maxAmount: 100_000_000,    baseFee: 800_000   },
+  { minAmount: 100_000_000,    maxAmount: 300_000_000,    baseFee: 1_000_000 },
+  { minAmount: 300_000_000,    maxAmount: 500_000_000,    baseFee: 1_500_000 },
+  { minAmount: 500_000_000,    maxAmount: 1_000_000_000,  baseFee: 1_600_000 },
+  { minAmount: 1_000_000_000,  maxAmount: 3_000_000_000,  baseFee: 1_800_000 },
+  { minAmount: 3_000_000_000,  maxAmount: null,            baseFee: 2_100_000 },
+];
+
+// 농촌진흥청(RDA1/RDA2) 공용 — 현금+현물 합산 기준
+export const RDA_BRACKETS: FeeRateBracket[] = [
+  { minAmount: 0,              maxAmount: 50_000_000,     baseFee: 750_000   },
+  { minAmount: 50_000_000,     maxAmount: 100_000_000,    baseFee: 820_000   },
+  { minAmount: 100_000_000,    maxAmount: 200_000_000,    baseFee: 980_000   },
+  { minAmount: 200_000_000,    maxAmount: 300_000_000,    baseFee: 1_080_000 },
+  { minAmount: 300_000_000,    maxAmount: 500_000_000,    baseFee: 1_320_000 },
+  { minAmount: 500_000_000,    maxAmount: 1_000_000_000,  baseFee: 1_440_000 },
+  { minAmount: 1_000_000_000,  maxAmount: null,            baseFee: 1_800_000 },
+];
+
 const COMMON_RULES: PolicyRule[] = [
   { subject: "기관", grade: "일반",       gradeName: "일반",       settlementType: "위탁정산", annualRate: 85, settlementRate: 100 },
   { subject: "기관", grade: "S",          gradeName: "최우수",     settlementType: "자체정산", annualRate: 85, settlementRate: 85  },
@@ -925,13 +976,13 @@ const COMMON_RULES: PolicyRule[] = [
 ];
 
 const KEIT_RULES: PolicyRule[] = [
-  { subject: "기관", grade: "일반",       gradeName: "일반",       settlementType: "위탁정산", annualRate: 80, settlementRate: 100 },
-  { subject: "기관", grade: "S",          gradeName: "최우수",     settlementType: "자체정산", annualRate: 80, settlementRate: 80  },
-  { subject: "기관", grade: "S",          gradeName: "최우수",     settlementType: "위탁정산", annualRate: 80, settlementRate: 100 },
-  { subject: "기관", grade: "A~C",        gradeName: "우수",       settlementType: "자체정산", annualRate: 80, settlementRate: 80  },
-  { subject: "기관", grade: "A~C",        gradeName: "우수",       settlementType: "위탁정산", annualRate: 80, settlementRate: 100 },
-  { subject: "과제", grade: "자율성트랙", gradeName: "자율성트랙", settlementType: "자체정산", annualRate: 80, settlementRate: 80  },
-  { subject: "과제", grade: "자율성트랙", gradeName: "자율성트랙", settlementType: "위탁정산", annualRate: 80, settlementRate: 100 },
+  { subject: "기관", grade: "일반",       gradeName: "일반",       settlementType: "위탁정산", annualRate: 85, settlementRate: 100 },
+  { subject: "기관", grade: "S",          gradeName: "최우수",     settlementType: "자체정산", annualRate: 85, settlementRate: 85  },
+  { subject: "기관", grade: "S",          gradeName: "최우수",     settlementType: "위탁정산", annualRate: 85, settlementRate: 100 },
+  { subject: "기관", grade: "A~C",        gradeName: "우수",       settlementType: "자체정산", annualRate: 85, settlementRate: 85  },
+  { subject: "기관", grade: "A~C",        gradeName: "우수",       settlementType: "위탁정산", annualRate: 85, settlementRate: 100 },
+  { subject: "과제", grade: "자율성트랙", gradeName: "자율성트랙", settlementType: "자체정산", annualRate: 85, settlementRate: 85  },
+  { subject: "과제", grade: "자율성트랙", gradeName: "자율성트랙", settlementType: "위탁정산", annualRate: 85, settlementRate: 100 },
 ];
 
 export const feePolicies: FeePolicy[] = [
@@ -952,6 +1003,8 @@ export const feePolicies: FeePolicy[] = [
     feeRateBrackets: KEIT_BRACKETS,
     coInstAddonMethod: "TIERED" as const,
     exemptGrades: ["S", "A~C"],
+    exemptionMode: "DISCOUNT" as const,
+    feeBasis: "CASH" as const,
     hasAutonomyTrack: true,
     annualBillingRate: 0.85,
   },
@@ -971,6 +1024,8 @@ export const feePolicies: FeePolicy[] = [
     feeRateBrackets: KEIT_BRACKETS,
     coInstAddonMethod: "TIERED" as const,
     exemptGrades: ["S", "A~C"],
+    exemptionMode: "DISCOUNT" as const,
+    feeBasis: "CASH" as const,
     hasAutonomyTrack: true,
     annualBillingRate: 0.85,
   },
@@ -990,6 +1045,8 @@ export const feePolicies: FeePolicy[] = [
     feeRateBrackets: KEIT_BRACKETS,
     coInstAddonMethod: "TIERED" as const,
     exemptGrades: ["S", "A~C"],
+    exemptionMode: "DISCOUNT" as const,
+    feeBasis: "CASH" as const,
     hasAutonomyTrack: true,
     annualBillingRate: 0.85,
   },
@@ -1010,6 +1067,8 @@ export const feePolicies: FeePolicy[] = [
     feeRateBrackets: KEIT_BRACKETS,
     coInstAddonMethod: "TIERED" as const,
     exemptGrades: ["S", "A~C"],
+    exemptionMode: "DISCOUNT" as const,
+    feeBasis: "CASH" as const,
     hasAutonomyTrack: true,
     annualBillingRate: 0.85,
   },
@@ -1029,6 +1088,8 @@ export const feePolicies: FeePolicy[] = [
     feeRateBrackets: KEIT_BRACKETS,
     coInstAddonMethod: "TIERED" as const,
     exemptGrades: ["S", "A~C"],
+    exemptionMode: "DISCOUNT" as const,
+    feeBasis: "CASH" as const,
     hasAutonomyTrack: true,
     annualBillingRate: 0.85,
   },
@@ -1049,10 +1110,16 @@ export const feePolicies: FeePolicy[] = [
     feeRateBrackets: KETEP_BRACKETS,
     coInstAddonMethod: "FLAT" as const,
     exemptGrades: ["S"],
+    exemptionMode: "DISCOUNT" as const,
+    feeBasis: "CASH" as const,
     hasAutonomyTrack: false,
     annualBillingRate: 0.85,
+    legacyTransitionNote:
+      "26년 이후 수수료체계 변경 — 26년 이전(pre-2026) 과제의 미청구수수료는 이전 수수료체계로 산정된 금액의 15%를 적용해야 하며, " +
+      "새 구간표로 소급 재계산하지 말고 해당 연차의 실제 청구/미청구 금액을 그대로 유지한 뒤 수기 입력으로 조정할 것.",
   },
   // ─── IITP (fa-003) 전담기관 자체 정책 ───────────────────────
+  // IITP 특이사항: S등급은 업무 자체를 안 하므로 산정기준액에서 완전 제외, A~C는 면제 없음(일반과 동일 위탁정산), 자율성트랙 없음
   {
     id: "pol-iitp-001",
     agencyId: "fa-003",
@@ -1063,14 +1130,42 @@ export const feePolicies: FeePolicy[] = [
     status: "ACTIVE",
     standardRate: 3.0,
     rules: [],
-    description: "정보통신 분야 표준수수료율 3.0% — 공통 기준표 적용",
+    description: "정보통신 분야 표준수수료율 3.0% — IITP 전용 구간표, S등급 완전 제외, 자율성트랙 없음",
     createdAt: "2023-12-20",
     createdBy: "김관리",
-    feeRateBrackets: KEIT_BRACKETS,
+    feeRateBrackets: IITP_BRACKETS,
     coInstAddonMethod: "TIERED" as const,
-    exemptGrades: ["S", "A~C"],
-    hasAutonomyTrack: true,
+    exemptGrades: ["S"],
+    exemptionMode: "EXCLUDE" as const,
+    feeBasis: "CASH" as const,
+    hasAutonomyTrack: false,
     annualBillingRate: 0.85,
+    programType: "GENERAL" as const,
+  },
+  // ─── IITP ICT 기금사업 (fa-003) — 국가연구개발사업이 아닌 별도 기금사업 ──
+  // 단계정산 없이 매년 100% 청구, 공동기관 구분 없이 참여기관별로 개별 산정·청구함
+  {
+    id: "pol-iitp-ict-001",
+    agencyId: "fa-003",
+    name: "IITP ICT 기금사업 2024 정책",
+    version: "v2024.IITP-ICT",
+    effectiveFrom: "2024-01-01",
+    effectiveTo: null,
+    status: "ACTIVE",
+    standardRate: 3.0,
+    rules: [],
+    description: "ICT 기금사업 전용 — IITP 일반 R&D 구간표와 다른 별도 구간표 적용, 참여기관별 개별 산정, 매년 100% 청구(단계정산 없음)",
+    createdAt: "2023-12-20",
+    createdBy: "김관리",
+    feeRateBrackets: IITP_ICT_BRACKETS,
+    coInstAddonMethod: "TIERED" as const,
+    exemptGrades: [],
+    exemptionMode: "DISCOUNT" as const,
+    feeBasis: "CASH" as const,
+    hasAutonomyTrack: false,
+    annualBillingRate: 1.0,
+    calcMode: "PER_INSTITUTION" as const,
+    programType: "ICT_FUND" as const,
   },
   // ─── KOFPI (fa-004) 전담기관 자체 정책 ──────────────────────
   // KOFPI 특이사항: 면제기관 없음(S/A~C 전부 일반 취급), 연차상시도 100%, 자율성트랙 없음
@@ -1094,10 +1189,13 @@ export const feePolicies: FeePolicy[] = [
     feeRateBrackets: KOFPI_BRACKETS,
     coInstAddonMethod: "TIERED" as const,
     exemptGrades: [],
+    exemptionMode: "DISCOUNT" as const,
+    feeBasis: "CASH" as const,
     hasAutonomyTrack: false,
     annualBillingRate: 1.0,
   },
   // ─── RDA1 (fa-005) 전담기관 자체 정책 ───────────────────────
+  // RDA1 특이사항: 현금+현물 합산 기준, S등급은 산정기준액에서 완전 제외, A~C는 면제 없음, 자율성트랙 없음
   {
     id: "pol-rda1-001",
     agencyId: "fa-005",
@@ -1108,14 +1206,17 @@ export const feePolicies: FeePolicy[] = [
     status: "ACTIVE",
     standardRate: 2.8,
     rules: [],
-    description: "농촌진흥청 1유형 표준수수료율 2.8% — 공통 기준표 적용",
+    description: "농촌진흥청 1유형(일반기관 트랙) — RDA 전용 구간표(현금+현물 기준), S등급 완전 제외, 자율성트랙 없음",
     createdAt: "2023-12-20",
     createdBy: "김관리",
-    feeRateBrackets: KEIT_BRACKETS,
+    feeRateBrackets: RDA_BRACKETS,
     coInstAddonMethod: "TIERED" as const,
-    exemptGrades: ["S", "A~C"],
-    hasAutonomyTrack: true,
+    exemptGrades: ["S"],
+    exemptionMode: "EXCLUDE" as const,
+    feeBasis: "CASH_PLUS_INKIND" as const,
+    hasAutonomyTrack: false,
     annualBillingRate: 0.85,
+    minimumFee: 100_000,
   },
   // ─── RDA2 (fa-006) 전담기관 자체 정책 ───────────────────────
   {
@@ -1128,14 +1229,21 @@ export const feePolicies: FeePolicy[] = [
     status: "ACTIVE",
     standardRate: 2.8,
     rules: [],
-    description: "농촌진흥청 2유형 표준수수료율 2.8% — 공통 기준표 적용",
+    description: "농촌진흥청 2유형(소속기관 트랙) — RDA1과 동일 기준(현금+현물, S등급 완전 제외). " +
+      "주관기관이 농촌진흥청 소속기관인 경우 주관기관을 산정기준에서 제외하고 공동기관수를 -1 보정한 뒤 " +
+      "일반 수수료를 공동기관별 사업비 비율로 배분해 표시함(excludeLeadFromCalc). " +
+      "(*) 다만 공동기관별 개별 세금계산서 발행(분리 청구) 워크플로는 아직 미구현 — 현재는 참여기관 목록에서 배분된 산정액만 확인 가능.",
     createdAt: "2023-12-20",
     createdBy: "김관리",
-    feeRateBrackets: KEIT_BRACKETS,
+    feeRateBrackets: RDA_BRACKETS,
     coInstAddonMethod: "TIERED" as const,
-    exemptGrades: ["S", "A~C"],
-    hasAutonomyTrack: true,
+    exemptGrades: ["S"],
+    exemptionMode: "EXCLUDE" as const,
+    feeBasis: "CASH_PLUS_INKIND" as const,
+    hasAutonomyTrack: false,
     annualBillingRate: 0.85,
+    minimumFee: 100_000,
+    excludeLeadFromCalc: true,
   },
 ];
 
@@ -1161,79 +1269,47 @@ export interface TermFee {
   isAutoGenerated?: boolean; // 자동 산정 여부
 }
 
+// 전담기관(6곳)당 1건씩만 남긴 더미 — 발송대상(noticeRecipientScope) 차이를 바로 확인할 수 있도록
+// LEAD_ONLY(KEIT/KETEP/IITP/KOFPI)는 주관기관만 BILLED·참여기관은 CONFIRMED, LEAD_AND_PARTICIPANTS(RDA1/RDA2)는 전원 BILLED로 맞춰둠.
+// KEIT/KETEP/IITP/KOFPI 4건은 calcTermFee 실제 정책 로직으로 재계산한 값으로 교체함(참여기관 annualBudgets도 동일 값으로 채움).
+// RDA1/RDA2 2건은 아직 예전 손입력 더미 그대로 — RDA는 S등급 완전제외(EXCLUDE) 규칙이 있어 별도 확인 후 정정 필요.
 export const termFees: TermFee[] = [
-  // p-001 2연차 — 주관: 삼화전자, 청구액 합계 52M
-  { id: "tf-001", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2024, termNumber: 2, institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", budget: 700_000_000, feeRate: 3.0, calculatedFee: 21_000_000, appliedFee: 21_000_000, status: "BILLED" },
-  { id: "tf-002", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2024, termNumber: 2, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 1_200_000_000, feeRate: 2.0, calculatedFee: 24_000_000, appliedFee: 24_000_000, status: "BILLED" },
-  { id: "tf-003", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2024, termNumber: 2, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 500_000_000, feeRate: 2.0, calculatedFee: 10_000_000, appliedFee: 7_000_000, status: "BILLED" },
-  { id: "tf-004", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2024, termNumber: 2, institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", budget: 400_000_000, feeRate: 2.5, calculatedFee: 10_000_000, appliedFee: 0, status: "BILLED" },
+  // p-001 2연차 — 주관: 삼화전자 (KEIT · 주관기관만 발송)
+  { id: "tf-001", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2024, termNumber: 2, institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", budget: 700_000_000, feeRate: 2.8, calculatedFee: 553_500, appliedFee: 470_475, status: "BILLED" },
+  { id: "tf-002", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2024, termNumber: 2, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 1_200_000_000, feeRate: 2.8, calculatedFee: 948_857, appliedFee: 806_529, status: "CONFIRMED" },
+  { id: "tf-003", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2024, termNumber: 2, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 500_000_000, feeRate: 2.8, calculatedFee: 395_357, appliedFee: 336_054, status: "CONFIRMED" },
+  { id: "tf-004", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2024, termNumber: 2, institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", budget: 400_000_000, feeRate: 2.8, calculatedFee: 316_286, appliedFee: 268_843, status: "CONFIRMED" },
 
-  // p-002 1연차 — 주관: (주)에너텍솔루션, 청구액 합계 112.5M
-  { id: "tf-005", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", budget: 1_500_000_000, feeRate: 2.5, calculatedFee: 37_500_000, appliedFee: 37_500_000, status: "BILLED" },
-  { id: "tf-006", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 2_000_000_000, feeRate: 2.0, calculatedFee: 40_000_000, appliedFee: 40_000_000, status: "BILLED" },
-  { id: "tf-007", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 500_000_000, feeRate: 2.0, calculatedFee: 10_000_000, appliedFee: 10_000_000, status: "BILLED" },
-  { id: "tf-008", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", budget: 300_000_000, feeRate: 2.0, calculatedFee: 6_000_000, appliedFee: 6_000_000, status: "BILLED" },
-  { id: "tf-009", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-010", institutionName: "(주)클린에너지솔루션", institutionType: "중견기업", budget: 100_000_000, feeRate: 2.5, calculatedFee: 2_500_000, appliedFee: 2_500_000, status: "BILLED" },
-  { id: "tf-010", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-011", institutionName: "하이테크머티리얼(주)", institutionType: "스타트업", budget: 100_000_000, feeRate: 2.5, calculatedFee: 2_500_000, appliedFee: 2_500_000, status: "BILLED" },
+  // p-002 1연차 — 주관: (주)에너텍솔루션 (KETEP · 주관기관만 발송)
+  { id: "tf-005", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", budget: 1_500_000_000, feeRate: 3.5, calculatedFee: 1_021_500, appliedFee: 868_275, status: "BILLED" },
+  { id: "tf-006", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 2_000_000_000, feeRate: 3.5, calculatedFee: 1_362_000, appliedFee: 1_157_700, status: "CONFIRMED" },
+  { id: "tf-007", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 500_000_000, feeRate: 3.5, calculatedFee: 340_500, appliedFee: 289_425, status: "CONFIRMED" },
+  { id: "tf-008", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", budget: 300_000_000, feeRate: 3.5, calculatedFee: 204_300, appliedFee: 173_655, status: "CONFIRMED" },
+  { id: "tf-009", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-010", institutionName: "(주)클린에너지솔루션", institutionType: "중견기업", budget: 100_000_000, feeRate: 3.5, calculatedFee: 68_100, appliedFee: 57_885, status: "CONFIRMED" },
+  { id: "tf-010", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-011", institutionName: "하이테크머티리얼(주)", institutionType: "스타트업", budget: 100_000_000, feeRate: 3.5, calculatedFee: 68_100, appliedFee: 57_885, status: "CONFIRMED" },
 
-  // p-003 3연차 — 주관: 나노소재기술, 청구액 합계 22M
-  { id: "tf-011", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2024, termNumber: 3, institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", budget: 600_000_000, feeRate: 2.5, calculatedFee: 15_000_000, appliedFee: 14_000_000, status: "CONFIRMED" },
-  { id: "tf-012", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2024, termNumber: 3, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 400_000_000, feeRate: 2.0, calculatedFee: 8_000_000, appliedFee: 8_000_000, status: "CONFIRMED" },
+  // p-003 1연차 2022 — 주관: 나노소재기술 (IITP · 주관기관만 발송)
+  { id: "tf-031", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2022, termNumber: 1, institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", budget: 600_000_000, feeRate: 3.0, calculatedFee: 1_060_875, appliedFee: 901_744, status: "BILLED" },
+  { id: "tf-032", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2022, termNumber: 1, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 400_000_000, feeRate: 3.0, calculatedFee: 707_250, appliedFee: 601_163, status: "CONFIRMED" },
+  { id: "tf-033", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2022, termNumber: 1, institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", budget: 200_000_000, feeRate: 3.0, calculatedFee: 353_625, appliedFee: 300_581, status: "CONFIRMED" },
 
-  // p-004 2연차 — 주관: (주)에너텍솔루션, 청구액 합계 77.5M
-  { id: "tf-013", projectNumber: "RS-2023-00187652", projectName: "바이오 플라스틱 생분해성 소재 개발", termYear: 2024, termNumber: 2, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 1_500_000_000, feeRate: 2.0, calculatedFee: 30_000_000, appliedFee: 30_000_000, status: "BILLED" },
-  { id: "tf-014", projectNumber: "RS-2023-00187652", projectName: "바이오 플라스틱 생분해성 소재 개발", termYear: 2024, termNumber: 2, institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", budget: 800_000_000, feeRate: 2.5, calculatedFee: 20_000_000, appliedFee: 20_000_000, status: "BILLED" },
-  { id: "tf-015", projectNumber: "RS-2023-00187652", projectName: "바이오 플라스틱 생분해성 소재 개발", termYear: 2024, termNumber: 2, institutionId: "inst-008", institutionName: "그린바이오텍(주)", institutionType: "중소기업", budget: 500_000_000, feeRate: 3.0, calculatedFee: 15_000_000, appliedFee: 15_000_000, status: "BILLED" },
-  { id: "tf-016", projectNumber: "RS-2023-00187652", projectName: "바이오 플라스틱 생분해성 소재 개발", termYear: 2024, termNumber: 2, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 200_000_000, feeRate: 2.0, calculatedFee: 4_000_000, appliedFee: 4_000_000, status: "BILLED" },
-  { id: "tf-017", projectNumber: "RS-2023-00187652", projectName: "바이오 플라스틱 생분해성 소재 개발", termYear: 2024, termNumber: 2, institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", budget: 100_000_000, feeRate: 2.0, calculatedFee: 2_000_000, appliedFee: 2_000_000, status: "BILLED" },
+  // p-004 2연차 — 주관: 연세대학교 (KOFPI · 주관기관만 발송)
+  { id: "tf-013", projectNumber: "RS-2023-00187652", projectName: "바이오 플라스틱 생분해성 소재 개발", termYear: 2024, termNumber: 2, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 1_500_000_000, feeRate: 2.5, calculatedFee: 1_391_129, appliedFee: 1_391_129, status: "BILLED" },
+  { id: "tf-014", projectNumber: "RS-2023-00187652", projectName: "바이오 플라스틱 생분해성 소재 개발", termYear: 2024, termNumber: 2, institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", budget: 800_000_000, feeRate: 2.5, calculatedFee: 741_935, appliedFee: 741_935, status: "CONFIRMED" },
+  { id: "tf-015", projectNumber: "RS-2023-00187652", projectName: "바이오 플라스틱 생분해성 소재 개발", termYear: 2024, termNumber: 2, institutionId: "inst-008", institutionName: "그린바이오텍(주)", institutionType: "중소기업", budget: 500_000_000, feeRate: 2.5, calculatedFee: 463_710, appliedFee: 463_710, status: "CONFIRMED" },
+  { id: "tf-016", projectNumber: "RS-2023-00187652", projectName: "바이오 플라스틱 생분해성 소재 개발", termYear: 2024, termNumber: 2, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 200_000_000, feeRate: 2.5, calculatedFee: 185_484, appliedFee: 185_484, status: "CONFIRMED" },
+  { id: "tf-017", projectNumber: "RS-2023-00187652", projectName: "바이오 플라스틱 생분해성 소재 개발", termYear: 2024, termNumber: 2, institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", budget: 100_000_000, feeRate: 2.5, calculatedFee: 92_742, appliedFee: 92_742, status: "CONFIRMED" },
 
-  // p-005 1연차 — 주관: 삼화전자, DRAFT (미청구)
-  { id: "tf-018", projectNumber: "RS-2024-00225198", projectName: "고효율 수소 연료전지 스택 성능 향상", termYear: 2024, termNumber: 1, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 800_000_000, feeRate: 2.0, calculatedFee: 16_000_000, appliedFee: 16_000_000, status: "DRAFT" },
-  { id: "tf-019", projectNumber: "RS-2024-00225198", projectName: "고효율 수소 연료전지 스택 성능 향상", termYear: 2024, termNumber: 1, institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", budget: 1_400_000_000, feeRate: 3.0, calculatedFee: 42_000_000, appliedFee: 42_000_000, status: "DRAFT" },
-
-  // p-006 1연차 — 주관: (주)미래반도체
-  { id: "tf-020", projectNumber: "RS-2024-00231087", projectName: "반도체 패키징 열관리 신소재 연구", termYear: 2024, termNumber: 1, institutionId: "inst-009", institutionName: "(주)미래반도체", institutionType: "중소기업", budget: 480_000_000, feeRate: 3.0, calculatedFee: 14_400_000, appliedFee: 14_400_000, status: "BILLED" },
-  { id: "tf-021", projectNumber: "RS-2024-00231087", projectName: "반도체 패키징 열관리 신소재 연구", termYear: 2024, termNumber: 1, institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", budget: 300_000_000, feeRate: 2.5, calculatedFee: 7_500_000, appliedFee: 7_500_000, status: "BILLED" },
-
-  // p-007 3연차 — 주관: (주)한국항공우주
+  // p-007 3연차 — 주관: (주)한국항공우주 (RDA1 · 주관+참여기관 모두 발송 → 전원 청구완료)
   { id: "tf-022", projectNumber: "RS-2023-00176431", projectName: "도심항공모빌리티(UAM) 경량화 구조재 개발", termYear: 2024, termNumber: 3, institutionId: "inst-006", institutionName: "(주)한국항공우주", institutionType: "중견기업", budget: 1_200_000_000, feeRate: 2.5, calculatedFee: 30_000_000, appliedFee: 30_000_000, status: "BILLED" },
   { id: "tf-023", projectNumber: "RS-2023-00176431", projectName: "도심항공모빌리티(UAM) 경량화 구조재 개발", termYear: 2024, termNumber: 3, institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", budget: 1_200_000_000, feeRate: 3.0, calculatedFee: 36_000_000, appliedFee: 36_000_000, status: "BILLED" },
-  { id: "tf-024", projectNumber: "RS-2023-00176431", projectName: "도심항공모빌리티(UAM) 경량화 구조재 개발", termYear: 2024, termNumber: 3, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 1_500_000_000, feeRate: 2.0, calculatedFee: 30_000_000, appliedFee: 30_000_000, status: "CONFIRMED" },
-  { id: "tf-025", projectNumber: "RS-2023-00176431", projectName: "도심항공모빌리티(UAM) 경량화 구조재 개발", termYear: 2024, termNumber: 3, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 1_000_000_000, feeRate: 2.0, calculatedFee: 20_000_000, appliedFee: 20_000_000, status: "CONFIRMED" },
+  { id: "tf-024", projectNumber: "RS-2023-00176431", projectName: "도심항공모빌리티(UAM) 경량화 구조재 개발", termYear: 2024, termNumber: 3, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 1_500_000_000, feeRate: 2.0, calculatedFee: 30_000_000, appliedFee: 30_000_000, status: "BILLED" },
+  { id: "tf-025", projectNumber: "RS-2023-00176431", projectName: "도심항공모빌리티(UAM) 경량화 구조재 개발", termYear: 2024, termNumber: 3, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 1_000_000_000, feeRate: 2.0, calculatedFee: 20_000_000, appliedFee: 20_000_000, status: "BILLED" },
 
-  // p-008 2연차 — 주관: 그린바이오텍, DRAFT
-  { id: "tf-026", projectNumber: "RS-2024-00219874", projectName: "의료용 생체흡수성 임플란트 소재 개발", termYear: 2024, termNumber: 2, institutionId: "inst-008", institutionName: "그린바이오텍(주)", institutionType: "중소기업", budget: 1_100_000_000, feeRate: 3.0, calculatedFee: 33_000_000, appliedFee: 33_000_000, status: "DRAFT" },
-
-  // p-001 1연차 2023 — 주관: 삼화전자 (61M 청구, 4M 미회수 → uc-003)
-  { id: "tf-027", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2023, termNumber: 1, institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", budget: 700_000_000, feeRate: 3.0, calculatedFee: 21_000_000, appliedFee: 21_000_000, status: "BILLED" },
-  { id: "tf-028", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2023, termNumber: 1, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 1_200_000_000, feeRate: 2.0, calculatedFee: 24_000_000, appliedFee: 24_000_000, status: "BILLED" },
-  { id: "tf-029", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2023, termNumber: 1, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 500_000_000, feeRate: 2.0, calculatedFee: 10_000_000, appliedFee: 10_000_000, status: "BILLED" },
-  { id: "tf-030", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2023, termNumber: 1, institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", budget: 400_000_000, feeRate: 2.5, calculatedFee: 10_000_000, appliedFee: 6_000_000, status: "BILLED" },
-
-  // p-003 1연차 2022 — 주관: 나노소재기술 (27M 전액 납부)
-  { id: "tf-031", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2022, termNumber: 1, institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", budget: 600_000_000, feeRate: 2.5, calculatedFee: 15_000_000, appliedFee: 15_000_000, status: "BILLED" },
-  { id: "tf-032", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2022, termNumber: 1, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 400_000_000, feeRate: 2.0, calculatedFee: 8_000_000, appliedFee: 8_000_000, status: "BILLED" },
-  { id: "tf-033", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2022, termNumber: 1, institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", budget: 200_000_000, feeRate: 2.0, calculatedFee: 4_000_000, appliedFee: 4_000_000, status: "BILLED" },
-
-  // p-003 2연차 2023 — 주관: 나노소재기술 (26M 청구, 2M 미회수 → uc-004)
-  { id: "tf-034", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2023, termNumber: 2, institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", budget: 600_000_000, feeRate: 2.5, calculatedFee: 15_000_000, appliedFee: 14_000_000, status: "BILLED" },
-  { id: "tf-035", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2023, termNumber: 2, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 400_000_000, feeRate: 2.0, calculatedFee: 8_000_000, appliedFee: 8_000_000, status: "BILLED" },
-  { id: "tf-036", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2023, termNumber: 2, institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", budget: 200_000_000, feeRate: 2.0, calculatedFee: 4_000_000, appliedFee: 4_000_000, status: "BILLED" },
-
-  // p-008 1연차 2023 — 주관: 그린바이오텍 (44M 전액 납부)
+  // p-008 1연차 2023 — 주관: 그린바이오텍 (RDA2 · 주관+참여기관 모두 발송 → 전원 청구완료)
   { id: "tf-037", projectNumber: "RS-2024-00219874", projectName: "의료용 생체흡수성 임플란트 소재 개발", termYear: 2023, termNumber: 1, institutionId: "inst-008", institutionName: "그린바이오텍(주)", institutionType: "중소기업", budget: 1_100_000_000, feeRate: 3.0, calculatedFee: 33_000_000, appliedFee: 33_000_000, status: "BILLED" },
   { id: "tf-038", projectNumber: "RS-2024-00219874", projectName: "의료용 생체흡수성 임플란트 소재 개발", termYear: 2023, termNumber: 1, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 350_000_000, feeRate: 2.0, calculatedFee: 7_000_000, appliedFee: 7_000_000, status: "BILLED" },
   { id: "tf-039", projectNumber: "RS-2024-00219874", projectName: "의료용 생체흡수성 임플란트 소재 개발", termYear: 2023, termNumber: 1, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 200_000_000, feeRate: 2.0, calculatedFee: 4_000_000, appliedFee: 4_000_000, status: "BILLED" },
-
-  // p-009 탄소섬유 — 1/2/3연차 (완료 과제)
-  { id: "tf-040", projectNumber: "RS-2022-00158234", projectName: "탄소섬유 복합소재 고속 성형 기술 개발", termYear: 2022, termNumber: 1, institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", budget: 1_400_000_000, feeRate: 2.0, calculatedFee: 28_000_000, appliedFee: 28_000_000, status: "BILLED" },
-  { id: "tf-041", projectNumber: "RS-2022-00158234", projectName: "탄소섬유 복합소재 고속 성형 기술 개발", termYear: 2022, termNumber: 1, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 500_000_000, feeRate: 2.0, calculatedFee: 10_000_000, appliedFee: 10_000_000, status: "BILLED" },
-  { id: "tf-042", projectNumber: "RS-2022-00158234", projectName: "탄소섬유 복합소재 고속 성형 기술 개발", termYear: 2022, termNumber: 1, institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", budget: 200_000_000, feeRate: 3.0, calculatedFee: 6_000_000, appliedFee: 6_000_000, status: "BILLED" },
-  { id: "tf-043", projectNumber: "RS-2022-00158234", projectName: "탄소섬유 복합소재 고속 성형 기술 개발", termYear: 2023, termNumber: 2, institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", budget: 1_400_000_000, feeRate: 2.0, calculatedFee: 28_000_000, appliedFee: 28_000_000, status: "BILLED" },
-  { id: "tf-044", projectNumber: "RS-2022-00158234", projectName: "탄소섬유 복합소재 고속 성형 기술 개발", termYear: 2023, termNumber: 2, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 500_000_000, feeRate: 2.0, calculatedFee: 10_000_000, appliedFee: 10_000_000, status: "BILLED" },
-  { id: "tf-045", projectNumber: "RS-2022-00158234", projectName: "탄소섬유 복합소재 고속 성형 기술 개발", termYear: 2023, termNumber: 2, institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", budget: 200_000_000, feeRate: 3.0, calculatedFee: 6_000_000, appliedFee: 6_000_000, status: "BILLED" },
-  { id: "tf-046", projectNumber: "RS-2022-00158234", projectName: "탄소섬유 복합소재 고속 성형 기술 개발", termYear: 2024, termNumber: 3, institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", budget: 1_400_000_000, feeRate: 2.0, calculatedFee: 28_000_000, appliedFee: 28_000_000, status: "BILLED" },
-  { id: "tf-047", projectNumber: "RS-2022-00158234", projectName: "탄소섬유 복합소재 고속 성형 기술 개발", termYear: 2024, termNumber: 3, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 200_000_000, feeRate: 2.0, calculatedFee: 4_000_000, appliedFee: 4_000_000, status: "BILLED" },
 ];
 
 // ============================================================
@@ -2132,8 +2208,17 @@ export const taxInvoices: TaxInvoice[] = [
 // 이메일 발송 관리
 // ============================================================
 
-// emailType: TAX_INVOICE=세금계산서 공문(청구서), FEE_DETAIL=수수료 산출내역 안내
+// emailType: TAX_INVOICE=세금계산서 공문(청구서), FEE_DETAIL=수수료 산출내역 안내, SETTLEMENT_NOTICE=정산절차 안내 공문
 // feeCategory: TAX_INVOICE일 때만 사용 — ANNUAL=연차상시점검수수료, SETTLEMENT=위탁정산수수료
+// 발송 당시 실제 화면에 표시됐던 정산절차 안내 공문 내용을 그대로 재현하기 위한 스냅샷.
+// 템플릿은 이후에도 계속 수정될 수 있으므로, 발송 시점의 값을 EmailDispatch에 그대로 복제해 저장한다.
+export interface NoticeSnapshot {
+  template: AgencyNoticeTemplate;
+  statusRows: { label: string; value: string }[];
+  docNumber: string;
+  issuedDate: string;
+}
+
 export interface EmailDispatch {
   id: string;
   batchId: string;
@@ -2141,10 +2226,14 @@ export interface EmailDispatch {
   recipientInstitution: string;
   recipientEmail: string;
   subject: string;
-  emailType: "TAX_INVOICE" | "FEE_DETAIL";
+  emailType: "TAX_INVOICE" | "FEE_DETAIL" | "SETTLEMENT_NOTICE";
   feeCategory?: "ANNUAL" | "SETTLEMENT";
   attachments: string[];
   status: "SUCCESS" | "FAILED" | "PENDING";
+  /** 발송된 이메일 본문 (일반 안내 메일). 정산절차 안내 공문은 noticeSnapshot을 대신 사용. */
+  body?: string;
+  /** 정산절차 안내 공문(SETTLEMENT_NOTICE) 발송 시점의 공문 서식 스냅샷 */
+  noticeSnapshot?: NoticeSnapshot;
 }
 
 export const emailDispatches: EmailDispatch[] = [
@@ -2228,6 +2317,79 @@ export const emailDispatches: EmailDispatch[] = [
     attachments: ["수수료산출내역_RS-2024-00219874_2연차.pdf"],
     status: "PENDING",
   },
+  {
+    id: "em-011", batchId: "BATCH-2025-0115", sentAt: "2025-01-15 11:20",
+    recipientInstitution: "삼화전자(주)", recipientEmail: "lee.ys@samhwa.co.kr",
+    subject: "[RS-2024-00214837] 한국산업기술기획평가원(KEIT) 협약체결과제에 대한 정산 절차 안내 및 수수료 청구",
+    emailType: "SETTLEMENT_NOTICE",
+    attachments: [
+      "산업기술혁신사업 공통 운영요령",
+      "[서식] 산업기술혁신사업 공통 운영요령",
+      "2026년 산업기술혁신사업 연구개발비 설명자료_삼화회계법인",
+      "권익위_복지보조금 부정신고선터",
+      "삼화회계법인_연구수당 간접비 관련 직접비 집행비율 산정 방법 template_참고용",
+      "인건비계상률 관리 예시 참고용_2026",
+    ],
+    status: "SUCCESS",
+    noticeSnapshot: {
+      docNumber: "삼화 2025-0003",
+      issuedDate: "2025.01.15",
+      statusRows: [
+        { label: "과제번호 (RCMS)", value: "RS-2024-00214837" },
+        { label: "과제명", value: "초정밀 광학 센서 모듈 개발 및 양산화" },
+        { label: "단계연구개발기간", value: "2023 년 03 월 01 일 ~ 2026 년 02 월 28 일" },
+        { label: "대상기간", value: "2023 년 03 월 01 일 ~ 2026 년 02 월 28 일" },
+        { label: "정산구분", value: "위탁정산" },
+        { label: "주관연구개발기관", value: "삼화전자(주)" },
+        { label: "연구책임자", value: "김기술" },
+        { label: "공동연구개발기관수", value: "2개" },
+      ],
+      template: {
+        title: "한국산업기술기획평가원(KEIT) 협약체결과제에 대한 정산 절차 안내 및 수수료 청구",
+        recipient: "주관연구개발기관 및 공동연구개발기관 대표",
+        reference: "연구책임자 및 실무담당자",
+        legalBasis: "산업기술혁신사업 공통운영요령 제7장 제34조(연구개발비 사용실적 보고 및 정산)",
+        bodyIntro: [
+          "귀 기관의 일익 번창하심을 기원합니다.",
+          "관련근거",
+          "당 회계법인은 한국산업기술기획평가원으로부터 산업기술개발사업을 수행하는 귀 기관의 위탁정산기관으로 통보를 받아 다음 사항을 안내하오니 업무에 참조하여 주시기 바랍니다.",
+        ],
+        scheduleRows: [
+          { category: "상시점검", institutionTask: "연구비 사용 및 증빙 업로드", firmTask: "과제 시작일 기준 월 단위 실시\n(RCMS 이체월 익월 점검 실시)" },
+          { category: "연차상시점검", institutionTask: "연차종료 후 2개월 이내\n계속비 설정 및 연차사용내역 보고", firmTask: "연차 사용내역 보고 후 2개월간\n해당 연차에 대한 상시점검 실시" },
+          { category: "최종정산", institutionTask: "단계종료 후 3개월 이내\nRCMS에 사용실적보고", firmTask: "사용실적 보고 후 2개월간\n단계 전체에 대한 정산 실시" },
+        ],
+        contactRows: [
+          { role: "KEIT 문의 전용", contact: "02-3453-9422~5", email: "keit_samhwa@shcpa.co.kr" },
+          { role: "총괄 : 강상일", contact: "02-3453-9422~5", email: "kangsi727@shcpa.co.kr" },
+          { role: "과제담당(정) : 김철진", contact: "070-4347-7505", email: "luffy1.5@shcpa.co.kr" },
+          { role: "과제담당(부) : 이청아", contact: "070-4347-7511", email: "cayi@shcpa.co.kr" },
+          { role: "세금계산서 : 천기현", contact: "070-4347-7516", email: "cgh62@shcpa.co.kr" },
+        ],
+        feeIntro: "세금계산서 발행을 위한 필요서류",
+        feeRequiredDocs: [
+          "사업자등록증 사본",
+          "연구개발계획서 앞장 혹은 연구개발비 구성 내역 표(연구비 재원 확인 용)",
+          "세금계산서 발행 담당 실무자 정보(성명, 전화번호, 이메일주소)",
+          "정산업무 실무담당자 정보(성명, 전화번호, 이메일 주소)",
+        ],
+        feeNotes: [
+          "상기 서류를 세금계산서 담당자(천기현 대리) 메일(cgh62@shcpa.co.kr)로 송부 부탁드립니다.",
+          "세부 산정내역은 첨부 파일 참조바랍니다.",
+          "협약 당시와 달리 공동기관 등의 변경이 있는 경우 수수료는 변경될 수 있습니다.",
+          "정산수수료는 주관연구개발기관이 부담하고 \"직접비>연구활동비>기타비용\"에서 처리하시면 됩니다.",
+        ],
+        attachments: [
+          "산업기술혁신사업 공통 운영요령",
+          "[서식] 산업기술혁신사업 공통 운영요령",
+          "2026년 산업기술혁신사업 연구개발비 설명자료_삼화회계법인",
+          "권익위_복지보조금 부정신고선터",
+          "삼화회계법인_연구수당 간접비 관련 직접비 집행비율 산정 방법 template_참고용",
+          "인건비계상률 관리 예시 참고용_2026",
+        ],
+      },
+    },
+  },
 ];
 
 // ============================================================
@@ -2266,6 +2428,10 @@ export interface SystemUser {
   status: "ACTIVE" | "INACTIVE";
   lastLoginAt: string | null;
   registeredAt: string;
+  /** 하이웍스 개인 메일 계정 (조회 전용 계정은 대상 아님) */
+  hiworksEmail?: string;
+  /** 하이웍스 메일 전용 비밀번호 (로그인 비밀번호 아님, SMTP 발송용) */
+  hiworksMailPassword?: string;
 }
 
 export const systemUsers: SystemUser[] = [
@@ -2503,3 +2669,183 @@ export const termFeeCalcs: TermFeeCalc[] = [
 export interface AgencyGuideRow { cells: string[]; em?: boolean }
 export interface AgencyGuideTable { caption?: string; headers: string[]; rows: AgencyGuideRow[]; note?: string }
 export interface AgencyGuideTab { label: string; tables: AgencyGuideTable[] }
+
+// ─── 공문 발신 회사 정보 (전담기관과 무관한 고정 레터헤드) ──────
+export const COMPANY_INFO = {
+  name: "삼화회계법인",
+  addressLine: "우 06097 서울특별시 강남구 봉은사로 407 (삼성동, 삼화빌딩 8층)",
+  tel: "02-3453-9422",
+  fax: "02-6442-9129",
+  preparedBy: "이진아",
+  ceoName: "구병주",
+  docNumberPrefix: "삼화",
+};
+
+// ─── 전담기관 공문(정산절차 안내) 템플릿 ──────────────────────
+export interface NoticeScheduleRow { category: string; institutionTask: string; firmTask: string }
+export interface NoticeContactRow { role: string; contact: string; email: string }
+export interface AgencyNoticeTemplate {
+  title: string;
+  recipient: string;
+  reference: string;
+  legalBasis: string;
+  bodyIntro: string[];
+  scheduleRows: NoticeScheduleRow[];
+  contactRows: NoticeContactRow[];
+  feeIntro: string;
+  feeRequiredDocs: string[];
+  feeNotes: string[];
+  attachments: string[];
+}
+// 전담기관 하나에 여러 개의 템플릿을 등록해두고 발송 시 선택할 수 있도록 리스트로 관리한다.
+export interface AgencyNoticeTemplateEntry {
+  id: string;
+  agencyShortName: string; // FundingAgency.shortName (KEIT 등)
+  name: string;            // 템플릿 이름 (목록에서 선택할 때 표시)
+  content: AgencyNoticeTemplate;
+}
+
+export const EMPTY_NOTICE_TEMPLATE: AgencyNoticeTemplate = {
+  title: "",
+  recipient: "주관연구개발기관 및 공동연구개발기관 대표",
+  reference: "연구책임자 및 실무담당자",
+  legalBasis: "",
+  bodyIntro: ["귀 기관의 일익 번창하심을 기원합니다."],
+  scheduleRows: [],
+  contactRows: [],
+  feeIntro: "세금계산서 발행을 위한 필요서류",
+  feeRequiredDocs: [],
+  feeNotes: [],
+  attachments: [],
+};
+
+export const agencyNoticeTemplates: AgencyNoticeTemplateEntry[] = [
+  {
+    id: "ant-keit-001",
+    agencyShortName: "KEIT",
+    name: "정산절차 안내 공문 (기본)",
+    content: {
+      title: "한국산업기술기획평가원(KEIT) 협약체결과제에 대한 정산 절차 안내 및 수수료 청구",
+      recipient: "주관연구개발기관 및 공동연구개발기관 대표",
+      reference: "연구책임자 및 실무담당자",
+      legalBasis: "산업기술혁신사업 공통운영요령 제7장 제34조(연구개발비 사용실적 보고 및 정산)",
+      bodyIntro: [
+        "귀 기관의 일익 번창하심을 기원합니다.",
+        "관련근거",
+        "당 회계법인은 한국산업기술기획평가원으로부터 산업기술개발사업을 수행하는 귀 기관의 위탁정산기관으로 통보를 받아 다음 사항을 안내하오니 업무에 참조하여 주시기 바랍니다.",
+      ],
+      scheduleRows: [
+        { category: "상시점검", institutionTask: "연구비 사용 및 증빙 업로드", firmTask: "과제 시작일 기준 월 단위 실시\n(RCMS 이체월 익월 점검 실시)" },
+        { category: "연차상시점검", institutionTask: "연차종료 후 2개월 이내\n계속비 설정 및 연차사용내역 보고", firmTask: "연차 사용내역 보고 후 2개월간\n해당 연차에 대한 상시점검 실시" },
+        { category: "최종정산", institutionTask: "단계종료 후 3개월 이내\nRCMS에 사용실적보고", firmTask: "사용실적 보고 후 2개월간\n단계 전체에 대한 정산 실시" },
+      ],
+      contactRows: [
+        { role: "KEIT 문의 전용", contact: "02-3453-9422~5", email: "keit_samhwa@shcpa.co.kr" },
+        { role: "총괄 : 강상일", contact: "02-3453-9422~5", email: "kangsi727@shcpa.co.kr" },
+        { role: "과제담당(정) : 김철진", contact: "070-4347-7505", email: "luffy1.5@shcpa.co.kr" },
+        { role: "과제담당(부) : 이청아", contact: "070-4347-7511", email: "cayi@shcpa.co.kr" },
+        { role: "세금계산서 : 천기현", contact: "070-4347-7516", email: "cgh62@shcpa.co.kr" },
+      ],
+      feeIntro: "세금계산서 발행을 위한 필요서류",
+      feeRequiredDocs: [
+        "사업자등록증 사본",
+        "연구개발계획서 앞장 혹은 연구개발비 구성 내역 표(연구비 재원 확인 용)",
+        "세금계산서 발행 담당 실무자 정보(성명, 전화번호, 이메일주소)",
+        "정산업무 실무담당자 정보(성명, 전화번호, 이메일 주소)",
+      ],
+      feeNotes: [
+        "상기 서류를 세금계산서 담당자(천기현 대리) 메일(cgh62@shcpa.co.kr)로 송부 부탁드립니다.",
+        "세부 산정내역은 첨부 파일 참조바랍니다.",
+        "협약 당시와 달리 공동기관 등의 변경이 있는 경우 수수료는 변경될 수 있습니다.",
+        "정산수수료는 주관연구개발기관이 부담하고 \"직접비>연구활동비>기타비용\"에서 처리하시면 됩니다.",
+      ],
+      attachments: [
+        "산업기술혁신사업 공통 운영요령",
+        "[서식] 산업기술혁신사업 공통 운영요령",
+        "2026년 산업기술혁신사업 연구개발비 설명자료_삼화회계법인",
+        "권익위_복지보조금 부정신고선터",
+        "삼화회계법인_연구수당 간접비 관련 직접비 집행비율 산정 방법 template_참고용",
+        "인건비계상률 관리 예시 참고용_2026",
+      ],
+    },
+  },
+  {
+    id: "ant-ketep-001",
+    agencyShortName: "KETEP",
+    name: "정산절차 안내 공문 (기본)",
+    content: {
+      title: "한국에너지기술평가원(KETEP) 협약체결과제에 대한 정산 절차 안내 및 수수료 청구",
+      recipient: "주관연구개발기관 및 공동연구개발기관 대표",
+      reference: "연구책임자 및 실무담당자",
+      legalBasis: "에너지기술개발사업 공통운영요령 중 연구개발비 사용실적 보고 및 정산 관련 조항",
+      bodyIntro: [
+        "귀 기관의 일익 번창하심을 기원합니다.",
+        "관련근거",
+        "당 회계법인은 한국에너지기술평가원으로부터 에너지기술개발사업을 수행하는 귀 기관의 위탁정산기관으로 통보를 받아 다음 사항을 안내하오니 업무에 참조하여 주시기 바랍니다.",
+      ],
+      scheduleRows: [
+        { category: "상시점검", institutionTask: "연구비 사용 및 증빙 업로드", firmTask: "과제 시작일 기준 월 단위 실시" },
+        { category: "연차상시점검", institutionTask: "연차종료 후 2개월 이내\n연차사용내역 보고", firmTask: "연차 사용내역 보고 후 2개월간\n상시점검 실시" },
+        { category: "최종정산", institutionTask: "단계종료 후 3개월 이내\n사용실적보고", firmTask: "사용실적 보고 후 2개월간\n정산 실시" },
+      ],
+      contactRows: [
+        { role: "KETEP 문의 전용", contact: "02-3453-9422~5", email: "ketep_samhwa@shcpa.co.kr" },
+        { role: "총괄 : 강상일", contact: "02-3453-9422~5", email: "kangsi727@shcpa.co.kr" },
+        { role: "세금계산서 : 천기현", contact: "070-4347-7516", email: "cgh62@shcpa.co.kr" },
+      ],
+      feeIntro: "세금계산서 발행을 위한 필요서류",
+      feeRequiredDocs: [
+        "사업자등록증 사본",
+        "연구개발계획서 앞장 혹은 연구개발비 구성 내역 표",
+        "세금계산서 발행 담당 실무자 정보(성명, 전화번호, 이메일주소)",
+        "정산업무 실무담당자 정보(성명, 전화번호, 이메일 주소)",
+      ],
+      feeNotes: [
+        "상기 서류를 세금계산서 담당자(천기현 대리) 메일(cgh62@shcpa.co.kr)로 송부 부탁드립니다.",
+        "협약 당시와 달리 공동기관 등의 변경이 있는 경우 수수료는 변경될 수 있습니다.",
+      ],
+      attachments: [
+        "에너지기술개발사업 공통 운영요령",
+        "세부 산정내역서",
+      ],
+    },
+  },
+  {
+    id: "ant-kofpi-001",
+    agencyShortName: "KOFPI",
+    name: "정산절차 안내 공문 (기본)",
+    content: {
+      title: "한국임업진흥원(KOFPI) 협약체결과제에 대한 정산 절차 안내 및 수수료 청구",
+      recipient: "주관연구개발기관 및 공동연구개발기관 대표",
+      reference: "연구책임자 및 실무담당자",
+      legalBasis: "임업기술개발사업 운영요령 중 연구개발비 사용실적 보고 및 정산 관련 조항",
+      bodyIntro: [
+        "귀 기관의 일익 번창하심을 기원합니다.",
+        "관련근거",
+        "당 회계법인은 한국임업진흥원으로부터 임업기술개발사업을 수행하는 귀 기관의 위탁정산기관으로 통보를 받아 다음 사항을 안내하오니 업무에 참조하여 주시기 바랍니다.",
+      ],
+      scheduleRows: [
+        { category: "상시점검", institutionTask: "연구비 사용 및 증빙 업로드", firmTask: "과제 시작일 기준 월 단위 실시" },
+        { category: "정산", institutionTask: "단계종료 후 3개월 이내\n사용실적보고", firmTask: "사용실적 보고 후 2개월간\n정산 실시" },
+      ],
+      contactRows: [
+        { role: "KOFPI 문의 전용", contact: "02-3453-9422~5", email: "kofpi_samhwa@shcpa.co.kr" },
+        { role: "총괄 : 강상일", contact: "02-3453-9422~5", email: "kangsi727@shcpa.co.kr" },
+        { role: "세금계산서 : 천기현", contact: "070-4347-7516", email: "cgh62@shcpa.co.kr" },
+      ],
+      feeIntro: "세금계산서 발행을 위한 필요서류",
+      feeRequiredDocs: [
+        "사업자등록증 사본",
+        "연구개발계획서 앞장 혹은 연구개발비 구성 내역 표",
+        "세금계산서 발행 담당 실무자 정보(성명, 전화번호, 이메일주소)",
+        "정산업무 실무담당자 정보(성명, 전화번호, 이메일 주소)",
+      ],
+      feeNotes: [
+        "상기 서류를 세금계산서 담당자(천기현 대리) 메일(cgh62@shcpa.co.kr)로 송부 부탁드립니다.",
+      ],
+      attachments: [
+        "임업기술개발사업 운영요령",
+      ],
+    },
+  },
+];

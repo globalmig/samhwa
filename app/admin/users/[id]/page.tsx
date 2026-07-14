@@ -3,7 +3,7 @@
 import { use, useState } from "react";
 import Link from "next/link";
 import { FiEdit2, FiCheck, FiX, FiArrowLeft } from "react-icons/fi";
-import { useStore, updateUser } from "@/lib/store";
+import { useStore, updateUser, updateUserHiworksCredentials } from "@/lib/store";
 import { type SystemUser } from "@/lib/mock";
 import { fmtDate } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
@@ -55,6 +55,10 @@ export default function UserDetailPage({ params }: { params: Promise<{ id: strin
   const [draftRole,   setDraftRole]   = useState<SystemUser["role"]>("VIEWER");
   const [draftStatus, setDraftStatus] = useState<SystemUser["status"]>("ACTIVE");
 
+  const [hiworksEditing, setHiworksEditing] = useState(false);
+  const [draftHiworksEmail, setDraftHiworksEmail] = useState("");
+  const [draftHiworksPassword, setDraftHiworksPassword] = useState("");
+
   if (!user) {
     return (
       <div className="flex flex-col items-center justify-center h-60 gap-3">
@@ -79,6 +83,20 @@ export default function UserDetailPage({ params }: { params: Promise<{ id: strin
   function saveEdit() {
     updateUser(user!.id, { role: draftRole, status: draftStatus });
     setEditing(false);
+  }
+
+  function startHiworksEdit() {
+    setDraftHiworksEmail(user!.hiworksEmail ?? "");
+    setDraftHiworksPassword("");
+    setHiworksEditing(true);
+  }
+
+  function saveHiworksEdit() {
+    updateUserHiworksCredentials(user!.id, {
+      hiworksEmail: draftHiworksEmail,
+      ...(draftHiworksPassword ? { hiworksMailPassword: draftHiworksPassword } : {}),
+    });
+    setHiworksEditing(false);
   }
 
   return (
@@ -186,6 +204,69 @@ export default function UserDetailPage({ params }: { params: Promise<{ id: strin
           </div>
         </div>
       </div>
+
+      {/* 하이웍스 메일 연동 (조회 전용 계정 제외) */}
+      {user.role !== "VIEWER" && (
+        <div className="bg-white rounded-xl border border-slate-200 px-5 py-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-xs font-semibold text-slate-700">하이웍스 메일 연동</h3>
+              <p className="text-[10px] text-slate-400 mt-0.5">공문 발송 시 이 계정 명의로 하이웍스 메일을 보내기 위한 연동 정보입니다.</p>
+            </div>
+            {canEdit && !hiworksEditing && (
+              <button onClick={startHiworksEdit}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                <FiEdit2 size={12} /> 연동정보 수정
+              </button>
+            )}
+            {hiworksEditing && (
+              <div className="flex items-center gap-2">
+                <button onClick={() => setHiworksEditing(false)}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs text-slate-500 hover:bg-slate-100 rounded-lg transition-colors">
+                  <FiX size={12} /> 취소
+                </button>
+                <button onClick={saveHiworksEdit}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
+                  <FiCheck size={12} /> 저장
+                </button>
+              </div>
+            )}
+          </div>
+
+          {hiworksEditing ? (
+            <div className="pt-2 border-t border-slate-100 space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">하이웍스 계정 이메일</label>
+                <input type="email" value={draftHiworksEmail} onChange={(e) => setDraftHiworksEmail(e.target.value)}
+                  placeholder="user@samhwa.hiworks.com"
+                  className="w-full text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">메일 전용 비밀번호</label>
+                <input type="password" value={draftHiworksPassword} onChange={(e) => setDraftHiworksPassword(e.target.value)}
+                  placeholder={user.hiworksMailPassword ? "변경하려면 새 값을 입력..." : "미등록"}
+                  className="w-full text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400" />
+                <p className="text-[10px] text-slate-400 mt-1">하이웍스 로그인 비밀번호가 아닌, 개인설정 &gt; 보안설정에서 발급하는 메일 전용 비밀번호를 입력하세요. 비워두면 기존 값이 유지됩니다.</p>
+              </div>
+            </div>
+          ) : (
+            <div className="pt-2 border-t border-slate-100 space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-xs text-slate-400">계정 이메일</span>
+                <span className="text-xs text-slate-700">{user.hiworksEmail || "미등록"}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-xs text-slate-400">메일 전용 비밀번호</span>
+                <StatusBadge label={user.hiworksMailPassword ? "등록됨" : "미등록"} color={user.hiworksMailPassword ? "green" : "slate"} />
+              </div>
+            </div>
+          )}
+
+          <p className="text-[10px] text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
+            현재 이 정보는 조회·기록 용도로만 저장됩니다. 실제 메일 발송 연동(SMTP 서버 연결)은 아직 준비 중입니다.
+          </p>
+        </div>
+      )}
 
       {/* 변경이력 */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">

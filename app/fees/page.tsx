@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useRef, useEffect } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { FiPlus, FiChevronDown, FiChevronUp, FiChevronRight, FiMail } from "react-icons/fi";
 import {
@@ -15,16 +15,19 @@ import {
   addEmailDispatch,
   addUnclaimedFee,
   updateUnclaimedFee,
+  addProject,
 } from "@/lib/store";
 import {
   type TermFee,
   type InstitutionType,
   type FeePolicy,
   type TaxInvoice,
+  type Project,
 } from "@/lib/mock";
 import { fmtWon, fmtDate } from "@/lib/utils";
 import Modal from "@/components/common/Modal";
 import DateInput from "@/components/common/DateInput";
+import InstitutionQuickAdd from "@/components/common/InstitutionQuickAdd";
 import { useCanWrite } from "@/lib/permissions";
 
 // ── 타입 ──────────────────────────────────────────────────────
@@ -127,6 +130,7 @@ type InfoEditTarget = {
 
 type ModalState =
   | { mode: "generate" }
+  | { mode: "project-add" }
   | { mode: "collection"; target: CollectionTarget }
   | { mode: "sales-issue"; target: SalesTarget }
   | { mode: "sales-cancel"; target: SalesTarget }
@@ -550,6 +554,7 @@ ${target.projectName} 과제의 ${termLabel} ${categoryLabel} 청구서를 첨�
         feeCategory:          target.feeCategory,
         attachments:          attachments.filter((a) => a.checked).map((a) => a.name),
         status:               "SUCCESS",
+        body,
       });
       setSending(false);
       setSent(true);
@@ -884,6 +889,208 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
   );
 }
 
+// ── ProjectAddForm (새 과제 개별 등록 — 엑셀 없이 직접 입력) ───
+type NewProjectDraft = {
+  projectNumber: string;
+  projectName: string;
+  agencyId: string;
+  leadInstitutionId: string;
+  startDate: string;
+  endDate: string;
+  totalTerms: number;
+  currentTerm: number;
+  status: Project["status"];
+  govGrant: number;
+  privateCash: number;
+  privateInKind: number;
+  projectType: "GENERAL" | "AUTONOMY_TRACK";
+  programType: "GENERAL" | "ICT_FUND";
+  researchLead: string;
+  assignedManager: string;
+  projectDivision: "" | "위탁" | "공동";
+};
+
+const EMPTY_NEW_PROJECT: NewProjectDraft = {
+  projectNumber: "",
+  projectName: "",
+  agencyId: "",
+  leadInstitutionId: "",
+  startDate: "",
+  endDate: "",
+  totalTerms: 1,
+  currentTerm: 1,
+  status: "ACTIVE",
+  govGrant: 0,
+  privateCash: 0,
+  privateInKind: 0,
+  projectType: "GENERAL",
+  programType: "GENERAL",
+  researchLead: "",
+  assignedManager: "",
+  projectDivision: "",
+};
+
+function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) {
+  const { fundingAgencies, institutions, projects } = useStore();
+  const [form, setForm] = useState<NewProjectDraft>(EMPTY_NEW_PROJECT);
+  const [error, setError] = useState("");
+  const s = <K extends keyof NewProjectDraft>(k: K, v: NewProjectDraft[K]) => setForm((p) => ({ ...p, [k]: v }));
+
+  const totalBudget = form.govGrant + form.privateCash + form.privateInKind;
+
+  function handleSubmit() {
+    if (!form.projectNumber.trim() || !form.projectName.trim() || !form.agencyId || !form.leadInstitutionId || !form.startDate || !form.endDate) {
+      setError("과제번호·과제명·전담기관·주관기관·당해시작일·당해종료일은 필수입니다.");
+      return;
+    }
+    if (projects.some((p) => p.projectNumber === form.projectNumber.trim())) {
+      setError("이미 등록된 과제번호입니다.");
+      return;
+    }
+    const agency = fundingAgencies.find((a) => a.id === form.agencyId);
+    const lead = institutions.find((i) => i.id === form.leadInstitutionId);
+    const created = addProject({
+      projectNumber: form.projectNumber.trim(),
+      projectName: form.projectName.trim(),
+      agencyId: form.agencyId,
+      agency: agency?.name ?? "",
+      leadInstitutionId: form.leadInstitutionId,
+      leadInstitutionName: lead?.name ?? "",
+      totalBudget,
+      startDate: form.startDate,
+      endDate: form.endDate,
+      totalTerms: form.totalTerms,
+      currentTerm: form.currentTerm,
+      status: form.status,
+      govGrant: form.govGrant || undefined,
+      privateCash: form.privateCash || undefined,
+      privateInKind: form.privateInKind || undefined,
+      projectType: form.projectType,
+      programType: form.agencyId === "fa-003" ? form.programType : undefined,
+      researchLead: form.researchLead || undefined,
+      assignedManager: form.assignedManager || undefined,
+      projectDivision: form.projectDivision || undefined,
+    });
+    onClose(created.id);
+  }
+
+  return (
+    <div className="p-6 space-y-4">
+      {error && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>
+      )}
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">과제번호 *</label>
+          <input className={inputCls} value={form.projectNumber} onChange={(e) => s("projectNumber", e.target.value)} placeholder="RS-2026-00000000" />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">과제명 *</label>
+          <input className={inputCls} value={form.projectName} onChange={(e) => s("projectName", e.target.value)} placeholder="과제명을 입력하세요" />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">전담기관 *</label>
+          <select className={selectCls} value={form.agencyId} onChange={(e) => s("agencyId", e.target.value)}>
+            <option value="">선택하세요</option>
+            {fundingAgencies.map((a) => <option key={a.id} value={a.id}>{a.shortName} · {a.name}</option>)}
+          </select>
+        </div>
+        <div>
+          <InstitutionQuickAdd
+            label="주관기관 *"
+            value={form.leadInstitutionId}
+            onChange={(id) => s("leadInstitutionId", id)}
+            institutions={institutions}
+          />
+        </div>
+      </div>
+      <div className="grid grid-cols-4 gap-4">
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">당해시작일 *</label>
+          <DateInput value={form.startDate} onChange={(v) => s("startDate", v)} className="w-full" />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">당해종료일 *</label>
+          <DateInput value={form.endDate} onChange={(v) => s("endDate", v)} className="w-full" />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">총연차</label>
+          <input className={inputCls} type="number" min={1} value={form.totalTerms} onChange={(e) => s("totalTerms", Number(e.target.value))} />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">현재연차</label>
+          <input className={inputCls} type="number" min={1} value={form.currentTerm} onChange={(e) => s("currentTerm", Number(e.target.value))} />
+        </div>
+      </div>
+      <div className="rounded-lg border border-slate-100 bg-slate-50/50 px-4 py-3 space-y-3">
+        <p className="text-xs font-semibold text-slate-600">사업비 구분 (당해 기준 — 참여기관·연차별 사업비는 등록 후 상세 화면에서 추가)</p>
+        <div className="grid grid-cols-3 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">당해 정부출연금</label>
+            <input className={inputCls} type="number" min={0} value={form.govGrant} onChange={(e) => s("govGrant", Number(e.target.value))} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">당해 민간원금</label>
+            <input className={inputCls} type="number" min={0} value={form.privateCash} onChange={(e) => s("privateCash", Number(e.target.value))} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">당해 민간현물</label>
+            <input className={inputCls} type="number" min={0} value={form.privateInKind} onChange={(e) => s("privateInKind", Number(e.target.value))} />
+          </div>
+        </div>
+        <p className="text-xs text-slate-500">당해 사업비 합계: <strong className="text-slate-800">{fmtWon(totalBudget)}</strong></p>
+      </div>
+      <div className="grid grid-cols-3 gap-4">
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">상태</label>
+          <select className={selectCls} value={form.status} onChange={(e) => s("status", e.target.value as Project["status"])}>
+            <option value="ACTIVE">진행중</option>
+            <option value="COMPLETED">완료</option>
+            <option value="SUSPENDED">중단</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">연구책임자</label>
+          <input className={inputCls} value={form.researchLead} onChange={(e) => s("researchLead", e.target.value)} placeholder="담당자명" />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">삼화담당자</label>
+          <input className={inputCls} value={form.assignedManager} onChange={(e) => s("assignedManager", e.target.value)} placeholder="담당자명" />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">자율성트랙 여부</label>
+          <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-medium">
+            <button type="button" onClick={() => s("projectType", "GENERAL")}
+              className={`flex-1 px-2 py-1.5 transition-colors ${form.projectType === "GENERAL" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"}`}>일반과제</button>
+            <button type="button" onClick={() => s("projectType", "AUTONOMY_TRACK")}
+              className={`flex-1 px-2 py-1.5 border-l border-slate-200 transition-colors ${form.projectType === "AUTONOMY_TRACK" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"}`}>자율성트랙</button>
+          </div>
+        </div>
+        {form.agencyId === "fa-003" && (
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">사업 유형 <span className="text-slate-400 font-normal">· IITP 전용</span></label>
+            <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-medium">
+              <button type="button" onClick={() => s("programType", "GENERAL")}
+                className={`flex-1 px-2 py-1.5 transition-colors ${form.programType === "GENERAL" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"}`}>일반 R&D</button>
+              <button type="button" onClick={() => s("programType", "ICT_FUND")}
+                className={`flex-1 px-2 py-1.5 border-l border-slate-200 transition-colors ${form.programType === "ICT_FUND" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"}`}>ICT 기금사업</button>
+            </div>
+          </div>
+        )}
+      </div>
+      <p className="text-xs text-slate-400">등록 후 과제 상세 화면에서 참여기관(주관·공동)과 연차별 사업비를 추가하면 수수료가 자동 산정됩니다.</p>
+      <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+        <button onClick={() => onClose()} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
+        <button onClick={handleSubmit} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">등록</button>
+      </div>
+    </div>
+  );
+}
+
 function gradeToRuleGrade(grade?: string): string {
   if (!grade) return "일반";
   if (grade === "최우수(S)") return "S";
@@ -910,9 +1117,10 @@ function useFeeRows(): FeeRow[] {
       const f0 = fees[0];
       const project = projects.find((p) => p.projectNumber === f0.projectNumber);
       const agency  = fundingAgencies.find((a) => a.id === (project?.agencyId ?? ""));
+      const programType = project?.programType ?? "GENERAL";
       const effectivePolicy =
-        feePolicies.find((p) => p.agencyId === project?.agencyId && p.status === "ACTIVE") ??
-        feePolicies.find((p) => p.agencyId === null && p.status === "ACTIVE") ??
+        feePolicies.find((p) => p.agencyId === project?.agencyId && p.status === "ACTIVE" && (p.programType ?? "GENERAL") === programType) ??
+        feePolicies.find((p) => p.agencyId === null && p.status === "ACTIVE" && (p.programType ?? "GENERAL") === programType) ??
         null;
 
       // 세금계산서
@@ -1045,10 +1253,25 @@ function UnclaimedAmountCell({ row, canEdit }: { row: FeeRow; canEdit: boolean }
 }
 
 // ── TermGenerateForm ──────────────────────────────────────────
-type RowState = { included: boolean; budget: number; feeRate: number; appliedFeeStr: string };
+type RowState = {
+  included: boolean;
+  budget: number;
+  feeRate: number;
+  appliedFeeStr: string;
+  registered?: boolean;
+  registeredFee?: number;
+  registeredStatus?: TermFee["status"];
+};
+
+const TERM_FEE_STATUS_LABEL: Record<TermFee["status"], string> = {
+  SCHEDULED: "예정",
+  DRAFT: "초안",
+  CONFIRMED: "확정",
+  BILLED: "발행완료",
+};
 
 function TermGenerateForm({ onClose }: { onClose: () => void }) {
-  const { projects, projectMembers, feePolicies, fundingAgencies } = useStore();
+  const { projects, projectMembers, feePolicies, fundingAgencies, termFees } = useStore();
   const [projectId, setProjectId]   = useState("");
   const [termYear, setTermYear]     = useState(new Date().getFullYear());
   const [termNumber, setTermNumber] = useState(1);
@@ -1061,9 +1284,10 @@ function TermGenerateForm({ onClose }: { onClose: () => void }) {
   );
 
   const selectedAgency   = fundingAgencies.find((a) => a.id === selectedProject?.agencyId);
+  const selectedProgramType = selectedProject?.programType ?? "GENERAL";
   const effectivePolicy  = selectedProject
-    ? (feePolicies.find((p) => p.agencyId === selectedProject.agencyId && p.status === "ACTIVE") ??
-       feePolicies.find((p) => p.agencyId === null && p.status === "ACTIVE") ?? null)
+    ? (feePolicies.find((p) => p.agencyId === selectedProject.agencyId && p.status === "ACTIVE" && (p.programType ?? "GENERAL") === selectedProgramType) ??
+       feePolicies.find((p) => p.agencyId === null && p.status === "ACTIVE" && (p.programType ?? "GENERAL") === selectedProgramType) ?? null)
     : null;
 
   function calcEffectiveRate(agencyId: string, grade?: string): number {
@@ -1078,17 +1302,37 @@ function TermGenerateForm({ onClose }: { onClose: () => void }) {
     return parseFloat((baseRate * annualRatio / 100).toFixed(2));
   }
 
-  function handleProjectChange(pid: string) {
-    const proj = projects.find((p) => p.id === pid);
-    setProjectId(pid);
-    const mems = projectMembers.filter((m) => m.projectId === pid);
+  // 과제·연도·연차를 고를 때마다 참여기관별 행을 다시 구성한다.
+  // 이미 등록된(자동/수동 무관) 기관은 included를 false로 두어 중복 생성을 막고 "등록됨"으로 표시한다.
+  useEffect(() => {
+    if (!projectId) { setRows({}); return; }
+    const proj = projects.find((p) => p.id === projectId) ?? null;
+    const mems = projectMembers.filter((m) => m.projectId === projectId);
     const init: Record<string, RowState> = {};
     mems.forEach((m) => {
       const rate = proj ? calcEffectiveRate(proj.agencyId, m.institutionGrade) : m.feeRate;
-      init[m.id] = { included: true, budget: m.budget, feeRate: rate, appliedFeeStr: "" };
+      const existing = proj
+        ? termFees.find(
+            (tf) =>
+              tf.projectNumber === proj.projectNumber &&
+              tf.termYear === termYear &&
+              tf.termNumber === termNumber &&
+              tf.institutionId === m.institutionId
+          )
+        : undefined;
+      init[m.id] = {
+        included: !existing,
+        budget: m.budget,
+        feeRate: rate,
+        appliedFeeStr: "",
+        registered: !!existing,
+        registeredFee: existing?.appliedFee,
+        registeredStatus: existing?.status,
+      };
     });
     setRows(init);
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, termYear, termNumber, projectMembers, termFees]);
 
   function calcFee(id: string) {
     const r = rows[id];
@@ -1100,6 +1344,7 @@ function TermGenerateForm({ onClose }: { onClose: () => void }) {
   }
 
   const included   = members.filter((m) => rows[m.id]?.included);
+  const registered = members.filter((m) => rows[m.id]?.registered);
   const totalCalc  = included.reduce((s, m) => s + calcFee(m.id), 0);
 
   function handleSubmit() {
@@ -1134,7 +1379,7 @@ function TermGenerateForm({ onClose }: { onClose: () => void }) {
       <div className="grid grid-cols-4 gap-4">
         <div className="col-span-2">
           <label className="block text-xs font-medium text-slate-600 mb-1">과제 선택</label>
-          <select className={selectCls} value={projectId} onChange={(e) => handleProjectChange(e.target.value)}>
+          <select className={selectCls} value={projectId} onChange={(e) => setProjectId(e.target.value)}>
             <option value="">과제를 선택하세요</option>
             {projects.map((p) => <option key={p.id} value={p.id}>{p.projectName}</option>)}
           </select>
@@ -1165,6 +1410,11 @@ function TermGenerateForm({ onClose }: { onClose: () => void }) {
               <span className="text-slate-500">표준요율 <span className="font-semibold text-slate-800">{effectivePolicy.standardRate}%</span></span>
             </div>
           )}
+          {effectivePolicy?.legacyTransitionNote && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-700 leading-relaxed">
+              <span className="font-semibold">경과조치 안내 · </span>{effectivePolicy.legacyTransitionNote}
+            </div>
+          )}
           <p className="text-xs text-slate-400">
             <span className="font-mono text-slate-500">{selectedProject.projectNumber}</span>
             {" · "}주관: <span className="text-slate-600">{selectedProject.leadInstitutionName}</span>
@@ -1176,7 +1426,10 @@ function TermGenerateForm({ onClose }: { onClose: () => void }) {
         <div className="rounded-xl border border-slate-200 overflow-hidden">
           <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-600">참여기관별 수수료 산정</span>
-            <span className="text-xs text-slate-400">{members.length}개 기관</span>
+            <span className="text-xs text-slate-400">
+              {members.length}개 기관
+              {registered.length > 0 && ` · 기존 등록 ${registered.length}건 제외`}
+            </span>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
@@ -1199,11 +1452,23 @@ function TermGenerateForm({ onClose }: { onClose: () => void }) {
                   return (
                     <tr key={m.id} className={`border-b border-slate-50 last:border-0 transition-opacity ${!r.included ? "opacity-35" : ""}`}>
                       <td className="px-3 py-2.5 text-center">
-                        <input type="checkbox" checked={r.included} onChange={(e) => setRow(m.id, { included: e.target.checked })} className="rounded" />
+                        {r.registered ? (
+                          <span
+                            title={`이미 등록된 연차 수수료가 있습니다 (${r.registeredStatus ? TERM_FEE_STATUS_LABEL[r.registeredStatus] : ""})`}
+                            className="inline-block whitespace-nowrap text-[10px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-1.5 py-0.5"
+                          >
+                            등록됨
+                          </span>
+                        ) : (
+                          <input type="checkbox" checked={r.included} onChange={(e) => setRow(m.id, { included: e.target.checked })} className="rounded" />
+                        )}
                       </td>
                       <td className="px-3 py-2.5">
                         <p className="font-medium text-slate-800">{m.institutionName}</p>
-                        <p className="text-slate-400">{m.role === "LEAD" ? "주관" : "참여"}</p>
+                        <p className="text-slate-400">
+                          {m.role === "LEAD" ? "주관" : "참여"}
+                          {r.registered && ` · 등록된 내용 (${r.registeredStatus ? TERM_FEE_STATUS_LABEL[r.registeredStatus] : ""}, ${fmtWon(r.registeredFee ?? 0)})`}
+                        </p>
                       </td>
                       <td className="px-3 py-2.5 text-center text-slate-600 whitespace-nowrap">{m.institutionType}</td>
                       <td className="px-3 py-2.5">
@@ -1362,6 +1627,7 @@ export default function FeesPage() {
   const allRows     = useFeeRows();
   const { fundingAgencies } = useStore();
   const searchParams = useSearchParams();
+  const router = useRouter();
   const [filterProjectNumber,   setFilterProjectNumber]   = useState("");
   const [filterProjectName,     setFilterProjectName]     = useState("");
   const [filterLeadInstitution, setFilterLeadInstitution] = useState("");
@@ -1603,13 +1869,22 @@ export default function FeesPage() {
       <div className="flex items-center justify-between">
         <p className="text-xs text-slate-500">과제별 수수료·세금계산서 관리 · 전체 {allRows.length}건</p>
         {canEdit && (
-          <button
-            onClick={() => setModal({ mode: "generate" })}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
-          >
-            <FiPlus size={12} />
-            연차 수수료 생성
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setModal({ mode: "project-add" })}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
+            >
+              <FiPlus size={12} />
+              새 과제 추가
+            </button>
+            <button
+              onClick={() => setModal({ mode: "generate" })}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              <FiPlus size={12} />
+              연차 수수료 생성
+            </button>
+          </div>
         )}
       </div>
 
@@ -2014,6 +2289,16 @@ export default function FeesPage() {
       {modal?.mode === "generate" && (
         <Modal title="연차 수수료 생성" onClose={() => setModal(null)} size="xl">
           <TermGenerateForm onClose={() => setModal(null)} />
+        </Modal>
+      )}
+      {modal?.mode === "project-add" && (
+        <Modal title="새 과제 추가" onClose={() => setModal(null)} size="xl">
+          <ProjectAddForm
+            onClose={(createdId) => {
+              setModal(null);
+              if (createdId) router.push(`/projects/${createdId}`);
+            }}
+          />
         </Modal>
       )}
       {modal?.mode === "collection" && (

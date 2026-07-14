@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { getCurrentUser } from "./auth";
-import { calcTermFee, resolvePolicy, normalizeGrade, type CalcMember } from "./fee-calculator";
+import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, type CalcMember } from "./fee-calculator";
 import {
   institutions as initialInstitutions,
   projects as initialProjects,
@@ -16,6 +16,7 @@ import {
   systemUsers as initialUsers,
   projectIssues as initialIssues,
   fundingAgencies as initialFundingAgencies,
+  agencyNoticeTemplates as initialAgencyNoticeTemplates,
   notices as initialNotices,
   type Institution,
   type Project,
@@ -33,6 +34,8 @@ import {
   type ProjectIssue,
   type FundingAgency,
   type AgencyGuideTab,
+  type AgencyNoticeTemplate,
+  type AgencyNoticeTemplateEntry,
   type Notice,
 } from "./mock";
 
@@ -94,6 +97,7 @@ interface StoreState {
   notificationState: Record<string, { readIds: string[]; dismissedIds: string[] }>;
   auditLog: AuditEntry[];
   agencyGuides: Record<string, AgencyGuideTab[]>;
+  agencyNoticeTemplates: AgencyNoticeTemplateEntry[];
 }
 
 const INITIAL_AUDIT_LOG: AuditEntry[] = [
@@ -232,6 +236,7 @@ let _state: StoreState = {
   notificationState: {},
   auditLog: [...INITIAL_AUDIT_LOG],
   agencyGuides: {},
+  agencyNoticeTemplates: [...initialAgencyNoticeTemplates],
 };
 
 const _listeners = new Set<() => void>();
@@ -249,8 +254,10 @@ function notify(): void {
   _listeners.forEach((l) => l());
 }
 
+let _idSeq = 0;
 function genId(prefix: string): string {
-  return `${prefix}-${Date.now()}`;
+  _idSeq += 1;
+  return `${prefix}-${Date.now()}-${_idSeq}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function diff(
@@ -349,13 +356,44 @@ export function deleteInstitution(id: string): void {
 // PROJECTS
 // ============================================================
 
+// 주관기관은 산정기준액(전체 사업비)에 포함되어야 하므로 참여기관 목록에도 role "LEAD"로 있어야 한다.
+// 기본정보의 주관기관과 참여기관 목록이 어긋나지 않도록, 아직 목록에 없으면 예산 0원짜리 행으로 자동 추가한다
+// (담당자가 이후 등급·연차별 사업비를 채워 넣으면 된다).
+function ensureLeadMember(project: Project): void {
+  if (!project.leadInstitutionId) return;
+  const alreadyMember = _state.projectMembers.some(
+    (m) => m.projectId === project.id && m.institutionId === project.leadInstitutionId,
+  );
+  if (alreadyMember) return;
+  const inst = _state.institutions.find((i) => i.id === project.leadInstitutionId);
+  addProjectMember({
+    projectId: project.id,
+    projectNumber: project.projectNumber,
+    institutionId: project.leadInstitutionId,
+    institutionName: project.leadInstitutionName || inst?.name || "",
+    institutionType: inst?.type ?? "중소기업",
+    role: "LEAD",
+    budget: 0,
+    feeRate: 0,
+    calculatedFee: 0,
+    institutionGrade: "일반",
+    settlementType: "위탁정산",
+    cashBudget: 0,
+    inKindBudget: 0,
+  });
+}
+
 export function addProject(data: Omit<Project, "id">): Project {
   const item: Project = { ...data, id: genId("p") };
   _state = { ..._state, projects: [..._state.projects, item] };
   record("project", item.id, item.projectName, "CREATE");
+  ensureLeadMember(item);
   notify();
   return item;
 }
+
+// 수수료 산정에 영향을 주는 필드 — 변경 시 해당 과제의 연차별 수수료를 자동 재산정한다.
+const PROJECT_FEE_AFFECTING_FIELDS = ["agencyId", "startDate", "totalTerms", "agreementType", "stages", "projectType"] as const;
 
 export function updateProject(id: string, data: Partial<Project>): void {
   const before = _state.projects.find((p) => p.id === id);
@@ -363,6 +401,12 @@ export function updateProject(id: string, data: Partial<Project>): void {
   const after = { ...before, ...data };
   _state = { ..._state, projects: _state.projects.map((p) => (p.id === id ? after : p)) };
   record("project", id, after.projectName, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
+  if (PROJECT_FEE_AFFECTING_FIELDS.some((f) => f in data)) {
+    autoGenerateTermFees(id);
+  }
+  if ("leadInstitutionId" in data) {
+    ensureLeadMember(after);
+  }
   notify();
 }
 
@@ -386,9 +430,13 @@ export function addProjectMember(data: Omit<ProjectMember, "id">): ProjectMember
   const item: ProjectMember = { ...data, id: genId("pm") };
   _state = { ..._state, projectMembers: [..._state.projectMembers, item] };
   record("projectMember", item.id, `${item.projectNumber} · ${item.institutionName}`, "CREATE");
+  autoGenerateTermFees(item.projectId);
   notify();
   return item;
 }
+
+// 수수료 산정에 영향을 주는 필드 — 변경 시 해당 과제의 연차별 수수료를 자동 재산정한다.
+const FEE_AFFECTING_FIELDS = ["budget", "cashBudget", "inKindBudget", "institutionGrade", "settlementType", "annualBudgets", "role"] as const;
 
 export function updateProjectMember(id: string, data: Partial<ProjectMember>): void {
   const before = _state.projectMembers.find((m) => m.id === id);
@@ -396,6 +444,9 @@ export function updateProjectMember(id: string, data: Partial<ProjectMember>): v
   const after = { ...before, ...data };
   _state = { ..._state, projectMembers: _state.projectMembers.map((m) => (m.id === id ? after : m)) };
   record("projectMember", id, `${after.projectNumber} · ${after.institutionName}`, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
+  if (FEE_AFFECTING_FIELDS.some((f) => f in data)) {
+    autoGenerateTermFees(before.projectId);
+  }
   notify();
 }
 
@@ -404,6 +455,7 @@ export function deleteProjectMember(id: string): void {
   if (!item) return;
   _state = { ..._state, projectMembers: _state.projectMembers.filter((m) => m.id !== id) };
   record("projectMember", id, `${item.projectNumber} · ${item.institutionName}`, "DELETE");
+  autoGenerateTermFees(item.projectId);
   notify();
 }
 
@@ -415,6 +467,7 @@ export function addFeePolicy(data: Omit<FeePolicy, "id">): FeePolicy {
   const item: FeePolicy = { ...data, id: genId("pol") };
   _state = { ..._state, feePolicies: [..._state.feePolicies, item] };
   record("feePolicy", item.id, item.name, "CREATE");
+  recalcProjectsUsingPolicy(item.id);
   notify();
   return item;
 }
@@ -425,7 +478,17 @@ export function updateFeePolicy(id: string, data: Partial<FeePolicy>): void {
   const after = { ...before, ...data };
   _state = { ..._state, feePolicies: _state.feePolicies.map((p) => (p.id === id ? after : p)) };
   record("feePolicy", id, after.name, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
+  recalcProjectsUsingPolicy(id);
   notify();
+}
+
+// 정책 변경이 실제로 적용되는(resolvePolicy가 이 정책으로 귀결되는) 과제들만 골라 연차별 수수료를 재산정한다.
+// CONFIRMED/BILLED로 확정된 연차는 autoGenerateTermFees 내부에서 보존되므로 여기서도 그대로 안전하다.
+function recalcProjectsUsingPolicy(policyId: string): void {
+  for (const project of _state.projects) {
+    const resolved = resolvePolicy(project.agencyId, _state.feePolicies, project.programType ?? "GENERAL");
+    if (resolved?.id === policyId) autoGenerateTermFees(project.id);
+  }
 }
 
 // ============================================================
@@ -752,6 +815,29 @@ export function updateUser(id: string, data: Partial<SystemUser>): void {
   notify();
 }
 
+/** 하이웍스 메일 연동 정보 저장. 조회 전용(VIEWER) 계정은 대상에서 제외되며,
+ *  비밀번호 값은 변경이력에 원문이 남지 않도록 마스킹해서 기록한다. */
+export function updateUserHiworksCredentials(
+  id: string,
+  data: { hiworksEmail?: string; hiworksMailPassword?: string }
+): void {
+  const before = _state.users.find((u) => u.id === id);
+  if (!before || before.role === "VIEWER") return;
+
+  const after = { ...before, ...data };
+  _state = { ..._state, users: _state.users.map((u) => (u.id === id ? after : u)) };
+
+  const changedFields: Record<string, { before: unknown; after: unknown }> = {};
+  if (data.hiworksEmail !== undefined && data.hiworksEmail !== before.hiworksEmail) {
+    changedFields.hiworksEmail = { before: before.hiworksEmail ?? "미등록", after: data.hiworksEmail };
+  }
+  if (data.hiworksMailPassword !== undefined && data.hiworksMailPassword !== before.hiworksMailPassword) {
+    changedFields.hiworksMailPassword = { before: before.hiworksMailPassword ? "등록됨" : "미등록", after: "등록됨" };
+  }
+  record("user", id, after.name, "UPDATE", Object.keys(changedFields).length > 0 ? changedFields : undefined);
+  notify();
+}
+
 export function deleteUser(id: string): void {
   const item = _state.users.find((u) => u.id === id);
   if (!item) return;
@@ -771,15 +857,53 @@ export function updateAgencyGuide(shortName: string, tabs: AgencyGuideTab[]): vo
 }
 
 // ============================================================
+// AGENCY NOTICE TEMPLATES (전담기관 공문 템플릿)
+// ============================================================
+
+export function addAgencyNoticeTemplate(
+  agencyShortName: string,
+  name: string,
+  content: AgencyNoticeTemplate
+): AgencyNoticeTemplateEntry {
+  const item: AgencyNoticeTemplateEntry = { id: genId("ant"), agencyShortName, name, content };
+  _state = { ..._state, agencyNoticeTemplates: [..._state.agencyNoticeTemplates, item] };
+  record("fundingAgency", agencyShortName, `${agencyShortName} 공문 템플릿 등록 (${name})`, "CREATE");
+  notify();
+  return item;
+}
+
+export function updateAgencyNoticeTemplate(
+  id: string,
+  data: Partial<Pick<AgencyNoticeTemplateEntry, "name" | "content">>
+): void {
+  const before = _state.agencyNoticeTemplates.find((t) => t.id === id);
+  if (!before) return;
+  const after = { ...before, ...data };
+  _state = { ..._state, agencyNoticeTemplates: _state.agencyNoticeTemplates.map((t) => (t.id === id ? after : t)) };
+  record("fundingAgency", after.agencyShortName, `${after.agencyShortName} 공문 템플릿 수정 (${after.name})`, "UPDATE");
+  notify();
+}
+
+export function deleteAgencyNoticeTemplate(id: string): void {
+  const item = _state.agencyNoticeTemplates.find((t) => t.id === id);
+  if (!item) return;
+  _state = { ..._state, agencyNoticeTemplates: _state.agencyNoticeTemplates.filter((t) => t.id !== id) };
+  record("fundingAgency", item.agencyShortName, `${item.agencyShortName} 공문 템플릿 삭제 (${item.name})`, "DELETE");
+  notify();
+}
+
+// ============================================================
 // 연차 수수료 자동 산정
 // ============================================================
 
 export function autoGenerateTermFees(projectId: string): void {
   const project = _state.projects.find((p) => p.id === projectId);
   if (!project) return;
+  // 완료된 과제는 정책·기관정보가 바뀌어도 재산정 대상에서 제외 — 과거 확정 내역을 그대로 보존한다.
+  if (project.status === "COMPLETED") return;
 
   const members = _state.projectMembers.filter((m) => m.projectId === projectId);
-  const policy = resolvePolicy(project.agencyId, _state.feePolicies);
+  const policy = resolvePolicy(project.agencyId, _state.feePolicies, project.programType ?? "GENERAL");
   if (!policy) return;
 
   const today = new Date().toISOString().slice(0, 10);
@@ -805,10 +929,16 @@ export function autoGenerateTermFees(projectId: string): void {
     return stage ? termNumber === stage.endTermNumber : termNumber === totalTerms;
   }
 
-  // 자동 생성 항목만 제거 (CONFIRMED/BILLED는 유지)
+  // CONFIRMED/BILLED로 확정된 연차별 항목은 자동/수동 생성 여부와 무관하게 보존한다.
   const keptFees = _state.termFees.filter(
     (tf) => tf.projectNumber !== project.projectNumber ||
-      (!tf.isAutoGenerated && (tf.status === "CONFIRMED" || tf.status === "BILLED"))
+      tf.status === "CONFIRMED" || tf.status === "BILLED"
+  );
+  // 이미 확정되어 보존되는 기관×연차 조합 — 아래 생성 루프에서 덮어쓰지 않도록 건너뛴다.
+  const lockedKeys = new Set(
+    keptFees
+      .filter((tf) => tf.projectNumber === project.projectNumber)
+      .map((tf) => `${tf.termYear}|${tf.termNumber}|${tf.institutionId}`)
   );
   const keptCalcs = _state.termFeeCalcs.filter(
     (c) => !(c.projectNumber === project.projectNumber && c.status === "DRAFT")
@@ -859,25 +989,41 @@ export function autoGenerateTermFees(projectId: string): void {
       carriedOverUnclaimed,
     });
 
-    // 면제기관 ID 집합
+    // 면제기관 / 완전제외기관 ID 집합
     const exemptIds = new Set(result.exemptBreakdown.map((e) => e.institutionId));
-    const nonExemptMembers = calcMembers.filter((m) => !exemptIds.has(m.institutionId));
-    const totalNonExemptCash = nonExemptMembers.reduce((s, m) => s + m.cashBudget, 0);
+    const excludedIds = new Set(result.excludedInstitutionIds);
+    const feeBasis = policy.feeBasis ?? "CASH";
+    const nonExemptMembers = calcMembers.filter(
+      (m) => !exemptIds.has(m.institutionId) && !excludedIds.has(m.institutionId)
+    );
+    const totalNonExemptCash = nonExemptMembers.reduce((s, m) => s + getMemberAmount(m, feeBasis), 0);
 
-    // 기관별 TermFee 생성
+    // 기관별 TermFee 생성 — 이미 확정(CONFIRMED/BILLED)되어 보존 중인 기관×연차는 건드리지 않는다.
     for (const cm of calcMembers) {
+      if (lockedKeys.has(`${termYear}|${termNumber}|${cm.institutionId}`)) continue;
+
       const member = members.find((m) => m.institutionId === cm.institutionId);
       const ab = member?.annualBudgets?.find((b) => b.termNumber === termNumber);
 
       let instCalcFee: number;
       let instAppliedFee: number;
 
-      if (exemptIds.has(cm.institutionId)) {
+      const perInst = result.perInstitutionFees?.find((e) => e.institutionId === cm.institutionId);
+
+      if (excludedIds.has(cm.institutionId)) {
+        // exemptionMode "EXCLUDE" 등급(또는 excludeLeadFromCalc 주관기관) — 산정기준액에서 완전히 빠지므로 수수료 없음
+        instCalcFee = 0;
+        instAppliedFee = 0;
+      } else if (perInst) {
+        // calcMode "PER_INSTITUTION" — 기관별로 각자의 사업비를 구간표에 대입해 개별 산정한 값을 그대로 사용
+        instCalcFee = perInst.calculatedFee;
+        instAppliedFee = perInst.billingFee;
+      } else if (exemptIds.has(cm.institutionId)) {
         const ed = result.exemptBreakdown.find((e) => e.institutionId === cm.institutionId);
         instCalcFee = ed?.calculatedFee ?? 0;
         instAppliedFee = ed?.billingFee ?? 0;
       } else {
-        const ratio = totalNonExemptCash > 0 ? cm.cashBudget / totalNonExemptCash : 0;
+        const ratio = totalNonExemptCash > 0 ? getMemberAmount(cm, feeBasis) / totalNonExemptCash : 0;
         instCalcFee = Math.round(result.generalFee * ratio);
         instAppliedFee = Math.round(result.generalBillingFee * ratio);
       }

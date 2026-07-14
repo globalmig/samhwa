@@ -9,6 +9,17 @@ export function normalizeGrade(grade: string): string {
   return "일반";
 }
 
+// ─── 완전 제외 대상 판정 (EXCLUDE 모드 정책의 면제등급) ──────────
+// IITP/RDA1/RDA2: 면제등급(S)은 연차상시도 수행하지 않으므로 산정기준액 자체에서 제외된다.
+export function isExcludedMember(grade: string, policy: FeePolicy): boolean {
+  return policy.exemptionMode === "EXCLUDE" && policy.exemptGrades.includes(normalizeGrade(grade));
+}
+
+// ─── 산정 기준액 (현금 또는 현금+현물) ────────────────────────────
+export function getMemberAmount(m: { cashBudget: number; inKindBudget?: number }, feeBasis: FeePolicy["feeBasis"]): number {
+  return feeBasis === "CASH_PLUS_INKIND" ? m.cashBudget + (m.inKindBudget ?? 0) : m.cashBudget;
+}
+
 // ─── 기본수수료 구간 조회 ────────────────────────────────────────
 export function getBaseFee(cashBudget: number, brackets: FeeRateBracket[]): number {
   const sorted = [...brackets].sort((a, b) => a.minAmount - b.minAmount);
@@ -32,6 +43,15 @@ export function getAddonFee(
   }
   // TIERED: 첫 1개 10% + 추가 N개 5%씩 (KEIT)
   return Math.round(baseFee * 0.1 + baseFee * 0.05 * (coInstCount - 1));
+}
+
+// ─── 공동기관 수 산정 ────────────────────────────────────────────
+// 기본: 공동(PARTICIPANT) 역할 기관 수.
+// excludeLeadFromCalc(RDA2): 주관기관이 산정기준액에서 완전히 빠지므로, 남은 기관 중 1개를
+// 가상의 주관기관으로 보정하여 -1 한다 (문서 예시: 공동기관 3개 중 면제기관 제외 후 2개 남으면 1개로 보정).
+function getCoInstCount(list: CalcMember[], policy: FeePolicy): number {
+  if (policy.excludeLeadFromCalc) return Math.max(0, list.length - 1);
+  return list.filter((m) => m.role === "PARTICIPANT").length;
 }
 
 // ─── 입력 타입 ───────────────────────────────────────────────────
@@ -72,6 +92,11 @@ export interface CalcResult {
   // 3. 면제기관 수수료
   exemptFeeTotal: number;
   exemptBreakdown: ExemptInstDetail[];
+  // exemptionMode "EXCLUDE" 정책에서 산정기준액 자체에서 완전히 제외된 기관 (연차상시 포함 수수료 없음)
+  excludedInstitutionIds: string[];
+
+  // calcMode "PER_INSTITUTION" 전용 — 참여기관별로 각자의 사업비를 구간표에 대입해 개별 산정한 내역 (IITP ICT기금사업)
+  perInstitutionFees?: ExemptInstDetail[];
 
   // 4. 과제 산정수수료
   calculatedFee: number;
@@ -88,16 +113,73 @@ export interface CalcResult {
 export function calcTermFee(input: CalcInput): CalcResult {
   const { members, workType, policy, projectType, carriedOverUnclaimed } = input;
   const { feeRateBrackets, coInstAddonMethod, exemptGrades, hasAutonomyTrack, annualBillingRate } = policy;
+  const feeBasis = policy.feeBasis ?? "CASH";
   const billingRatio = annualBillingRate ?? 0.85;
+  const minimumFee = policy.minimumFee ?? 0;
+  const amountOf = (m: CalcMember) => getMemberAmount(m, feeBasis);
 
-  // 현금사업비 있는 기관만 대상
-  const cashMembers = members.filter((m) => m.cashBudget > 0);
+  // EXCLUDE 모드 면제등급(S)은 연차상시도 하지 않으므로 산정기준액에서 완전히 빠진다.
+  // excludeLeadFromCalc(RDA2): 주관기관(농진청/소속기관)도 함께 완전히 제외된다.
+  const excludedMembers = members.filter(
+    (m) => isExcludedMember(m.grade, policy) || (policy.excludeLeadFromCalc === true && m.role === "LEAD"),
+  );
+  const excludedInstitutionIds = excludedMembers.map((m) => m.institutionId);
+  const eligibleMembers = members.filter((m) => !excludedMembers.includes(m));
+
+  // 산정 기준액(현금 또는 현금+현물)이 있는 기관만 대상
+  const cashMembers = eligibleMembers.filter((m) => amountOf(m) > 0);
   const coInstMembers = cashMembers.filter((m) => m.role === "PARTICIPANT");
 
+  // calcMode "PER_INSTITUTION" (IITP ICT기금사업): 공동기관 구분 없이 참여기관별로 각자의
+  // 사업비를 구간표에 각각 대입해 개별 산정하며, 매년 청구비율(annualBillingRate)을 그대로 적용한다.
+  if (policy.calcMode === "PER_INSTITUTION") {
+    const perInstitutionFees: ExemptInstDetail[] = cashMembers.map((m) => {
+      const amt = amountOf(m);
+      const std = Math.max(getBaseFee(amt, feeRateBrackets), minimumFee);
+      const bill = workType === "SETTLEMENT" ? std : Math.round(std * billingRatio);
+      return {
+        institutionId: m.institutionId,
+        institutionName: m.institutionName,
+        grade: m.grade,
+        cashBudget: m.cashBudget,
+        standardFee: std,
+        calculatedFee: std,
+        billingFee: bill,
+        unclaimedFee: std - bill,
+      };
+    });
+    const totalCashBudget = cashMembers.reduce((s, m) => s + amountOf(m), 0);
+    const standardFee = perInstitutionFees.reduce((s, e) => s + e.standardFee, 0);
+    const generalBillingFee = perInstitutionFees.reduce((s, e) => s + e.billingFee, 0);
+    const generalUnclaimedFee = perInstitutionFees.reduce((s, e) => s + e.unclaimedFee, 0);
+    return {
+      totalCashBudget,
+      coInstCount: Math.max(0, cashMembers.length - 1),
+      baseFee: 0,
+      addonFee: 0,
+      standardFee,
+      nonExemptCashBudget: totalCashBudget,
+      nonExemptCoInstCount: 0,
+      nonExemptBaseFee: 0,
+      nonExemptAddonFee: 0,
+      generalFee: standardFee,
+      exemptFeeTotal: 0,
+      exemptBreakdown: [],
+      excludedInstitutionIds,
+      calculatedFee: standardFee,
+      generalCalcFee: standardFee,
+      generalBillingFee,
+      generalUnclaimedFee,
+      carriedOverUnclaimed,
+      totalBillingFee: generalBillingFee + carriedOverUnclaimed,
+      perInstitutionFees,
+    };
+  }
+
   // 1. 표준수수료
-  const totalCashBudget = cashMembers.reduce((s, m) => s + m.cashBudget, 0);
-  const coInstCount = coInstMembers.length;
-  const baseFee = getBaseFee(totalCashBudget, feeRateBrackets);
+  const totalCashBudget = cashMembers.reduce((s, m) => s + amountOf(m), 0);
+  const coInstCount = getCoInstCount(cashMembers, policy);
+  const baseFee = Math.max(getBaseFee(totalCashBudget, feeRateBrackets), minimumFee);
   const addonFee = getAddonFee(baseFee, coInstCount, coInstAddonMethod);
   const standardFee = baseFee + addonFee;
 
@@ -117,6 +199,7 @@ export function calcTermFee(input: CalcInput): CalcResult {
       generalFee: standardFee,
       exemptFeeTotal: 0,
       exemptBreakdown: [],
+      excludedInstitutionIds,
       calculatedFee,
       generalCalcFee: calculatedFee,
       generalBillingFee: calculatedFee,
@@ -126,24 +209,27 @@ export function calcTermFee(input: CalcInput): CalcResult {
     };
   }
 
-  // 2. 면제기관 분리 (공동기관 중 exemptGrades에 속하고 자체정산 선택한 기관)
-  const exemptMembers = coInstMembers.filter(
-    (m) => exemptGrades.includes(normalizeGrade(m.grade)) && m.settlementType === "자체정산",
-  );
+  // 2. 면제기관 분리 (DISCOUNT 모드 정책에서만 — 공동기관 중 exemptGrades에 속하고 자체정산 선택한 기관)
+  // EXCLUDE 모드 정책은 면제등급이 이미 cashMembers 이전 단계에서 완전히 빠졌으므로 여기서는 항상 빈 배열이 된다.
+  const exemptMembers = policy.exemptionMode === "DISCOUNT"
+    ? coInstMembers.filter(
+        (m) => exemptGrades.includes(normalizeGrade(m.grade)) && m.settlementType === "자체정산",
+      )
+    : [];
   const nonExemptMembers = cashMembers.filter((m) => !exemptMembers.includes(m));
 
-  const nonExemptCashBudget = nonExemptMembers.reduce((s, m) => s + m.cashBudget, 0);
-  const nonExemptCoInstCount = nonExemptMembers.filter((m) => m.role === "PARTICIPANT").length;
-  const nonExemptBaseFee = getBaseFee(nonExemptCashBudget, feeRateBrackets);
+  const nonExemptCashBudget = nonExemptMembers.reduce((s, m) => s + amountOf(m), 0);
+  const nonExemptCoInstCount = getCoInstCount(nonExemptMembers, policy);
+  const nonExemptBaseFee = Math.max(getBaseFee(nonExemptCashBudget, feeRateBrackets), minimumFee);
   const nonExemptAddonFee = getAddonFee(nonExemptBaseFee, nonExemptCoInstCount, coInstAddonMethod);
   const generalFee = nonExemptBaseFee + nonExemptAddonFee;
 
   // 3. 면제기관 수수료 (비례 배분)
   const exemptFeeTotal = standardFee - generalFee;
-  const totalExemptCash = exemptMembers.reduce((s, m) => s + m.cashBudget, 0);
+  const totalExemptCash = exemptMembers.reduce((s, m) => s + amountOf(m), 0);
   const exemptBreakdown: ExemptInstDetail[] = exemptMembers.map((m) => {
     const stdFee = totalExemptCash > 0
-      ? Math.round(exemptFeeTotal * (m.cashBudget / totalExemptCash))
+      ? Math.round(exemptFeeTotal * (amountOf(m) / totalExemptCash))
       : 0;
     const calcFee = Math.round(stdFee * 0.85);
 
@@ -203,6 +289,7 @@ export function calcTermFee(input: CalcInput): CalcResult {
     generalFee,
     exemptFeeTotal,
     exemptBreakdown,
+    excludedInstitutionIds,
     calculatedFee,
     generalCalcFee,
     generalBillingFee,
@@ -222,15 +309,19 @@ export function applyOverrides(calc: TermFeeCalc): TermFeeCalc {
 }
 
 // ─── 과제에 적용할 정책 조회 헬퍼 ───────────────────────────────
+// programType: 동일 전담기관이 사업 유형별로 별도 정책을 둘 수 있음 (예: IITP 일반 R&D vs ICT기금사업).
+// 정책의 programType이 지정되지 않은 경우 "GENERAL"로 취급한다.
 export function resolvePolicy(
   agencyId: string,
   policies: FeePolicy[],
+  programType: "GENERAL" | "ICT_FUND" = "GENERAL",
 ): FeePolicy | undefined {
+  const matchesType = (p: FeePolicy) => (p.programType ?? "GENERAL") === programType;
   // 1. 전담기관 자체 정책 (ACTIVE)
   const agencyPolicy = policies.find(
-    (p) => p.agencyId === agencyId && p.status === "ACTIVE",
+    (p) => p.agencyId === agencyId && p.status === "ACTIVE" && matchesType(p),
   );
   if (agencyPolicy) return agencyPolicy;
   // 2. 공통 정책 (ACTIVE)
-  return policies.find((p) => p.agencyId === null && p.status === "ACTIVE");
+  return policies.find((p) => p.agencyId === null && p.status === "ACTIVE" && matchesType(p));
 }

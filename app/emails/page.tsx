@@ -1,13 +1,15 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { useStore } from "@/lib/store";
 import { type EmailDispatch } from "@/lib/mock";
 import StatusBadge from "@/components/common/StatusBadge";
 
-const TYPE_MAP: Record<EmailDispatch["emailType"], { label: string; color: "blue" | "indigo" }> = {
+const TYPE_MAP: Record<EmailDispatch["emailType"], { label: string; color: "blue" | "indigo" | "purple" }> = {
   TAX_INVOICE: { label: "세금계산서 공문", color: "blue" },
   FEE_DETAIL: { label: "수수료 산출내역 안내", color: "indigo" },
+  SETTLEMENT_NOTICE: { label: "정산절차 안내 공문", color: "purple" },
 };
 
 const CATEGORY_LABEL: Record<NonNullable<EmailDispatch["feeCategory"]>, string> = {
@@ -22,6 +24,7 @@ const STATUS_MAP: Record<EmailDispatch["status"], { label: string; color: "green
 };
 
 export default function EmailDispatchesPage() {
+  const router = useRouter();
   const { emailDispatches } = useStore();
   const [filterRecipient, setFilterRecipient] = useState("");
   const [filterSubject, setFilterSubject] = useState("");
@@ -91,6 +94,7 @@ export default function EmailDispatchesPage() {
             <option value="ALL">전체 유형</option>
             <option value="TAX_INVOICE">세금계산서 공문</option>
             <option value="FEE_DETAIL">수수료 산출내역 안내</option>
+            <option value="SETTLEMENT_NOTICE">정산절차 안내 공문</option>
           </select>
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="text-xs border border-slate-200 rounded-lg px-3 py-1.5 text-slate-600 bg-white">
             <option value="ALL">전체 상태</option>
@@ -119,7 +123,11 @@ export default function EmailDispatchesPage() {
                 <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-slate-400">검색 결과가 없습니다</td></tr>
               ) : (
                 filtered.map((e) => (
-                  <tr key={e.id} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
+                  <tr
+                    key={e.id}
+                    onClick={() => router.push(`/emails/${e.id}`)}
+                    className="border-b border-slate-50 hover:bg-slate-50 transition-colors cursor-pointer"
+                  >
                     <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap font-mono">{e.sentAt}</td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <p className="text-sm font-medium text-slate-800">{e.recipientInstitution}</p>

@@ -75,6 +75,15 @@ const navGroups: NavGroup[] = [
           </svg>
         ),
       },
+      {
+        label: "공문 양식 관리",
+        href: "/notice-templates",
+        icon: (
+          <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+            <path fillRule="evenodd" d="M4 2a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7.414A2 2 0 0 0 13.414 6L10 2.586A2 2 0 0 0 8.586 2H4zm1 9a1 1 0 0 0 0 2h6a1 1 0 1 0 0-2H5zm0 4a1 1 0 1 0 0 2h4a1 1 0 1 0 0-2H5zm0-8a1 1 0 0 0 0 2h2a1 1 0 1 0 0-2H5z" clipRule="evenodd" />
+          </svg>
+        ),
+      },
     ],
   },
 

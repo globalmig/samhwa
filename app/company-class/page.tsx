@@ -200,8 +200,15 @@ function makePolicyEmpty(agencyId: string | null, templatePolicy: FeePolicy | nu
     feeRateBrackets: templatePolicy?.feeRateBrackets ?? KEIT_BRACKETS,
     coInstAddonMethod: templatePolicy?.coInstAddonMethod ?? "TIERED",
     exemptGrades: templatePolicy?.exemptGrades ?? ["S", "A~C"],
+    exemptionMode: templatePolicy?.exemptionMode ?? "DISCOUNT",
+    feeBasis: templatePolicy?.feeBasis ?? "CASH",
     hasAutonomyTrack: templatePolicy?.hasAutonomyTrack ?? true,
     annualBillingRate: templatePolicy?.annualBillingRate ?? 0.85,
+    minimumFee: templatePolicy?.minimumFee ?? 0,
+    excludeLeadFromCalc: templatePolicy?.excludeLeadFromCalc ?? false,
+    calcMode: templatePolicy?.calcMode ?? "AGGREGATE",
+    programType: templatePolicy?.programType ?? "GENERAL",
+    legacyTransitionNote: templatePolicy?.legacyTransitionNote ?? "",
   };
 }
 
@@ -291,7 +298,24 @@ const AGENCY_SPECIAL_NOTES: Record<string, string[]> = {
     "가산금 일률 방식: 공동기관 수 × 기본수수료 10% (KEIT 누진 방식과 다름)",
     "S등급만 면제 (A~C는 면제 아님)",
     "자율성트랙 없음",
-    "2026년 이전 미청구액은 수기 이월 입력 필요",
+  ],
+  IITP: [
+    "위탁기관 있음 — 수수료 산정 시 공동기관과 동일하게 취급",
+    "S등급은 업무 자체를 하지 않아 산정기준액에서 완전 제외 (연차상시도 없음)",
+    "A~C 등급은 면제 없음 — 일반기관과 동일하게 위탁정산 처리",
+    "자율성트랙 없음",
+    "ICT 기금사업은 별도 정책(사업 유형: ICT 기금사업)으로 관리 — 공동기관 구분 없이 참여기관별 개별 산정, 매년 100% 청구",
+  ],
+  RDA1: [
+    "현금 + 현물 합산 기준으로 산정 (다른 전담기관은 현금만)",
+    "S등급은 산정기준액에서 완전 제외 (연차상시도 없음)",
+    "연차별 산정수수료가 10만원 미만이면 10만원을 기준으로 하고 차액은 이월",
+    "자율성트랙 없음",
+  ],
+  RDA2: [
+    "RDA1과 동일 기준 + 주관기관(농진청 또는 소속기관)을 산정기준액에서 완전 제외하고 공동기관수 -1 보정",
+    "일반수수료를 공동기관별 사업비 비율로 배분 — 다만 공동기관별 개별 세금계산서 발행(분리 청구) 기능은 아직 미구현",
+    "연차별 산정수수료 10만원 미만 시 10만원 기준 적용, 차액 이월",
   ],
 };
 
@@ -299,7 +323,8 @@ const AGENCY_SPECIAL_NOTES: Record<string, string[]> = {
 // ─── 전담기관 수수료 산정 특성 요약 ─────────────────────────
 function AgencyFeeModelSummary({ agency, policy }: { agency: { shortName: string; name: string } | undefined; policy: FeePolicy }) {
   const [showBrackets, setShowBrackets] = useState(false);
-  const notes = agency ? (AGENCY_SPECIAL_NOTES[agency.shortName] ?? []) : [];
+  const staticNotes = agency ? (AGENCY_SPECIAL_NOTES[agency.shortName] ?? []) : [];
+  const notes = policy.legacyTransitionNote ? [...staticNotes, policy.legacyTransitionNote] : staticNotes;
 
   const addonLabel = policy.coInstAddonMethod === "TIERED"
     ? "누진형 — 1번째 10% + 이후 추가 5%씩"
@@ -307,11 +332,29 @@ function AgencyFeeModelSummary({ agency, policy }: { agency: { shortName: string
 
   const exemptLabel = policy.exemptGrades.length === 0
     ? "없음 (모든 기관 일반 취급)"
-    : policy.exemptGrades.join("·") + " 등급 (자체정산 선택 시)";
+    : policy.exemptionMode === "EXCLUDE"
+    ? policy.exemptGrades.join("·") + " 등급 — 산정기준액에서 완전 제외(연차상시도 안함)"
+    : policy.exemptGrades.join("·") + " 등급 (자체정산 선택 시 85% 할인)";
+
+  const feeBasisLabel = policy.feeBasis === "CASH_PLUS_INKIND" ? "현금 + 현물 합산" : "현금사업비만";
 
   const billingLabel = policy.annualBillingRate >= 1
     ? "100% — 연차상시·정산 모두 동일 (미청구 개념 없음)"
     : `${Math.round(policy.annualBillingRate * 100)}% 연차상시 / 100% 정산`;
+
+  const calcModeLabel = policy.calcMode === "PER_INSTITUTION"
+    ? "기관별 개별 산정 — 공동기관 구분 없이 각자의 사업비를 구간표에 대입"
+    : "과제 전체 사업비 기준 산정 후 배분";
+
+  const programTypeLabel = policy.programType === "ICT_FUND" ? "ICT 기금사업 전용" : "일반 R&D";
+
+  const minimumFeeLabel = policy.minimumFee && policy.minimumFee > 0
+    ? `${fmtWonFull(policy.minimumFee)} — 미만 시 이 금액 기준, 차액은 이월`
+    : "없음";
+
+  const excludeLeadLabel = policy.excludeLeadFromCalc
+    ? "주관기관을 산정기준액에서 완전 제외 (공동기관수 -1 보정)"
+    : "포함 (일반)";
 
   const fmtAmt = (n: number) => n >= 1_000_000_000 ? `${n / 100_000_000}억` : n >= 100_000_000 ? `${n / 100_000_000}억` : n >= 10_000_000 ? `${n / 10_000_000}천만` : n >= 1_000_000 ? `${n / 1_000_000}백만` : n >= 10_000 ? `${n / 10_000}만` : String(n);
   const fmtFee = fmtWonFull;
@@ -334,6 +377,10 @@ function AgencyFeeModelSummary({ agency, policy }: { agency: { shortName: string
             <span className="text-slate-700">{addonLabel}</span>
           </div>
           <div className="flex items-start gap-2">
+            <span className="shrink-0 w-24 text-slate-400 font-medium">산정 기준액</span>
+            <span className="text-slate-700">{feeBasisLabel}</span>
+          </div>
+          <div className="flex items-start gap-2">
             <span className="shrink-0 w-24 text-slate-400 font-medium">자율성트랙</span>
             <span className={policy.hasAutonomyTrack ? "text-purple-700 font-medium" : "text-slate-500 italic"}>
               {policy.hasAutonomyTrack ? "있음 — 해당 과제 전 연도 85% 청구" : "없음"}
@@ -342,6 +389,22 @@ function AgencyFeeModelSummary({ agency, policy }: { agency: { shortName: string
           <div className="flex items-start gap-2">
             <span className="shrink-0 w-24 text-slate-400 font-medium">연차상시 청구</span>
             <span className={policy.annualBillingRate >= 1 ? "text-emerald-700 font-medium" : "text-sky-700 font-medium"}>{billingLabel}</span>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="shrink-0 w-24 text-slate-400 font-medium">산정 방식</span>
+            <span className={policy.calcMode === "PER_INSTITUTION" ? "text-fuchsia-700 font-medium" : "text-slate-700"}>{calcModeLabel}</span>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="shrink-0 w-24 text-slate-400 font-medium">사업 유형</span>
+            <span className={policy.programType === "ICT_FUND" ? "text-fuchsia-700 font-medium" : "text-slate-700"}>{programTypeLabel}</span>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="shrink-0 w-24 text-slate-400 font-medium">최소수수료</span>
+            <span className={policy.minimumFee ? "text-orange-700 font-medium" : "text-slate-500 italic"}>{minimumFeeLabel}</span>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="shrink-0 w-24 text-slate-400 font-medium">주관기관 산정</span>
+            <span className={policy.excludeLeadFromCalc ? "text-orange-700 font-medium" : "text-slate-700"}>{excludeLeadLabel}</span>
           </div>
         </div>
 
@@ -487,6 +550,24 @@ function PolicyForm({ initial, onSubmit, onClose }: { initial: PolicyFormData; o
             </div>
           </div>
         </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">면제기관 처리 방식</label>
+            <select className={inputCls} value={form.exemptionMode ?? "DISCOUNT"}
+              onChange={(e) => sf("exemptionMode", e.target.value as "DISCOUNT" | "EXCLUDE")}>
+              <option value="DISCOUNT">할인 — 산정기준액 포함 후 85% 할인 (KEIT/KETEP)</option>
+              <option value="EXCLUDE">완전 제외 — 연차상시도 안 함 (IITP/RDA)</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">산정 기준액</label>
+            <select className={inputCls} value={form.feeBasis ?? "CASH"}
+              onChange={(e) => sf("feeBasis", e.target.value as "CASH" | "CASH_PLUS_INKIND")}>
+              <option value="CASH">현금사업비만</option>
+              <option value="CASH_PLUS_INKIND">현금 + 현물 합산 (RDA)</option>
+            </select>
+          </div>
+        </div>
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">
             연차상시 청구 비율 <span className="font-bold text-blue-700">{Math.round((form.annualBillingRate ?? 0.85) * 100)}%</span>
@@ -504,6 +585,47 @@ function PolicyForm({ initial, onSubmit, onClose }: { initial: PolicyFormData; o
             <span className="text-xs text-slate-500">%</span>
           </div>
         </div>
+
+        <div className="grid grid-cols-3 gap-4 pt-1 border-t border-slate-200">
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">최소수수료 (원)</label>
+            <input className={inputCls} type="number" min={0} step={10_000} value={form.minimumFee ?? 0}
+              onChange={(e) => sf("minimumFee", Number(e.target.value))} placeholder="0 = 없음" />
+            <p className="text-[10px] text-slate-400 mt-1">연차별 산정수수료가 이 금액 미만이면 이 금액을 기준으로 하고 차액은 이월 (RDA1/RDA2: 100,000원)</p>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">산정 방식</label>
+            <select className={inputCls} value={form.calcMode ?? "AGGREGATE"}
+              onChange={(e) => sf("calcMode", e.target.value as "AGGREGATE" | "PER_INSTITUTION")}>
+              <option value="AGGREGATE">과제 전체 사업비 기준 (기본)</option>
+              <option value="PER_INSTITUTION">기관별 개별 산정 (IITP ICT기금사업)</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">사업 유형</label>
+            <select className={inputCls} value={form.programType ?? "GENERAL"}
+              onChange={(e) => sf("programType", e.target.value as "GENERAL" | "ICT_FUND")}>
+              <option value="GENERAL">일반 R&D</option>
+              <option value="ICT_FUND">ICT 기금사업</option>
+            </select>
+            <p className="text-[10px] text-slate-400 mt-1">동일 전담기관에 사업 유형별로 별도 정책을 둘 수 있음</p>
+          </div>
+        </div>
+        <div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={form.excludeLeadFromCalc ?? false}
+              onChange={(e) => sf("excludeLeadFromCalc", e.target.checked)}
+              className="rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+            <span className="text-xs font-medium text-slate-700">주관기관을 산정기준액에서 완전 제외</span>
+          </label>
+          <p className="text-[10px] text-slate-400 mt-1 ml-6">주관기관이 산정에서 빠지고 공동기관수 -1 보정 후, 남은 기관에 사업비 비율로 배분 (RDA2: 주관기관이 농진청/소속기관인 경우)</p>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">경과조치 안내</label>
+          <textarea className={`${inputCls} resize-y`} rows={2} value={form.legacyTransitionNote ?? ""}
+            onChange={(e) => sf("legacyTransitionNote", e.target.value)}
+            placeholder="예: 26년 이후 수수료체계 변경 — 이전 과제 미청구수수료는 수기 조정 필요 (KETEP 등)" />
+        </div>
         <BracketEditor brackets={form.feeRateBrackets ?? []} onChange={(b) => sf("feeRateBrackets", b)} />
       </div>
 
@@ -520,6 +642,7 @@ function PolicyForm({ initial, onSubmit, onClose }: { initial: PolicyFormData; o
 const EMPTY_AGENCY: Omit<FundingAgency, "id"> = {
   name: "", shortName: "", code: "", contactName: "", contactEmail: "",
   contactPhone: "", status: "ACTIVE", registeredAt: new Date().toISOString().slice(0, 10), website: "",
+  noticeRecipientScope: "LEAD_ONLY",
 };
 
 function AgencyForm({ initial, onSubmit, onClose }: { initial: Omit<FundingAgency, "id">; onSubmit: (d: Omit<FundingAgency, "id">) => void; onClose: () => void }) {
@@ -573,6 +696,13 @@ function AgencyForm({ initial, onSubmit, onClose }: { initial: Omit<FundingAgenc
           <input className={inputCls} value={form.website ?? ""} onChange={(e) => s("website", e.target.value)} placeholder="https://..." />
         </div>
       </div>
+      <div>
+        <label className="block text-xs font-medium text-slate-600 mb-1">공문·세금계산서 발송 대상</label>
+        <select className={inputCls} value={form.noticeRecipientScope} onChange={(e) => s("noticeRecipientScope", e.target.value as FundingAgency["noticeRecipientScope"])}>
+          <option value="LEAD_ONLY">주관기관만</option>
+          <option value="LEAD_AND_PARTICIPANTS">주관+참여기관 모두</option>
+        </select>
+      </div>
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
         <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
         <button onClick={() => onSubmit(form)} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">저장</button>
@@ -586,6 +716,11 @@ const AGENCY_STATUS_MAP: Record<FundingAgency["status"], { label: string; color:
   INACTIVE: { label: "비활성", color: "slate" },
 };
 
+const NOTICE_SCOPE_LABEL: Record<FundingAgency["noticeRecipientScope"], string> = {
+  LEAD_ONLY: "주관기관만",
+  LEAD_AND_PARTICIPANTS: "주관+참여기관 모두",
+};
+
 function AgencyTable({ agencies, canEdit, onEdit, onDelete }: { agencies: FundingAgency[]; canEdit: boolean; onEdit: (a: FundingAgency) => void; onDelete: (a: FundingAgency) => void }) {
   if (agencies.length === 0) return <div className="text-center py-10 text-sm text-slate-400">등록된 전담기관이 없습니다.</div>;
   return (
@@ -597,6 +732,7 @@ function AgencyTable({ agencies, canEdit, onEdit, onDelete }: { agencies: Fundin
             <th className="text-center px-4 py-3 text-xs font-medium text-slate-500">코드</th>
             <th className="text-left px-4 py-3 text-xs font-medium text-slate-500">담당자</th>
             <th className="text-left px-4 py-3 text-xs font-medium text-slate-500">연락처</th>
+            <th className="text-center px-4 py-3 text-xs font-medium text-slate-500">발송 대상</th>
             <th className="text-center px-4 py-3 text-xs font-medium text-slate-500">상태</th>
             {canEdit && <th className="w-16 px-3 py-3" />}
           </tr>
@@ -618,6 +754,12 @@ function AgencyTable({ agencies, canEdit, onEdit, onDelete }: { agencies: Fundin
               <td className="px-4 py-3 text-xs text-slate-500">
                 <p>{agency.contactEmail || "-"}</p>
                 <p className="mt-0.5">{agency.contactPhone || "-"}</p>
+              </td>
+              <td className="px-4 py-3 text-center">
+                <StatusBadge
+                  label={NOTICE_SCOPE_LABEL[agency.noticeRecipientScope]}
+                  color={agency.noticeRecipientScope === "LEAD_AND_PARTICIPANTS" ? "amber" : "slate"}
+                />
               </td>
               <td className="px-4 py-3 text-center">
                 <StatusBadge label={AGENCY_STATUS_MAP[agency.status].label} color={AGENCY_STATUS_MAP[agency.status].color} />

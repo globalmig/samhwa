@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import Link from "next/link";
 import { FiEdit2, FiExternalLink } from "react-icons/fi";
 import { useStore, addFundingAgency, updateFundingAgency, updateAgencyGuide } from "@/lib/store";
-import { type FundingAgency, type AgencyGuideRow as GuideRow, type AgencyGuideTable as GuideTable, type AgencyGuideTab as GuideTab } from "@/lib/mock";
+import { type FundingAgency, type FeePolicy, type AgencyGuideRow as GuideRow, type AgencyGuideTable as GuideTable, type AgencyGuideTab as GuideTab } from "@/lib/mock";
 import { fmtDate, fmtWon } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
@@ -468,10 +469,15 @@ const EMPTY: Omit<FundingAgency, "id"> = {
   contactName: "",
   contactEmail: "",
   contactPhone: "",
-  feePolicyId: null,
   status: "ACTIVE",
   registeredAt: new Date().toISOString().slice(0, 10),
   website: "",
+  noticeRecipientScope: "LEAD_ONLY",
+};
+
+const NOTICE_SCOPE_LABEL: Record<FundingAgency["noticeRecipientScope"], string> = {
+  LEAD_ONLY: "주관기관만",
+  LEAD_AND_PARTICIPANTS: "주관+참여기관 모두",
 };
 
 const inputCls = "w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400";
@@ -487,18 +493,25 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 function AgencyForm({
+  agencyId,
   initial,
   feePolicies,
   onSubmit,
   onClose,
 }: {
+  agencyId: string | null;
   initial: Omit<FundingAgency, "id">;
-  feePolicies: { id: string; name: string; version: string }[];
+  feePolicies: FeePolicy[];
   onSubmit: (d: Omit<FundingAgency, "id">) => void;
   onClose: () => void;
 }) {
   const [form, setForm] = useState(initial);
   const s = (k: keyof typeof form, v: unknown) => setForm((p) => ({ ...p, [k]: v }));
+
+  const activePolicy = agencyId
+    ? feePolicies.find((p) => p.agencyId === agencyId && p.status === "ACTIVE")
+    : undefined;
+  const activeCommonPolicy = feePolicies.find((p) => p.agencyId === null && p.status === "ACTIVE");
 
   return (
     <div className="p-6 space-y-4">
@@ -527,13 +540,25 @@ function AgencyForm({
         </Field>
       </div>
       <div className="grid grid-cols-2 gap-4">
-        <Field label="수수료 정책">
-          <select className={selectCls} value={form.feePolicyId ?? ""} onChange={(e) => s("feePolicyId", e.target.value || null)}>
-            <option value="">공통 정책 사용</option>
-            {feePolicies.map((p) => (
-              <option key={p.id} value={p.id}>{p.name} ({p.version})</option>
-            ))}
-          </select>
+        <Field label="수수료 정책 (진행중인 정책 자동 적용)">
+          <div className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 flex items-center justify-between gap-2">
+            {activePolicy ? (
+              <span className="text-slate-700">
+                <span className="font-medium">{activePolicy.name}</span> ({activePolicy.version}) · 자체 정책
+              </span>
+            ) : activeCommonPolicy ? (
+              <span className="text-slate-500">
+                {activeCommonPolicy.name} ({activeCommonPolicy.version}) · 공통 정책 사용 중
+              </span>
+            ) : (
+              <span className="text-slate-400">
+                {agencyId ? "적용 중인 정책 없음" : "저장 후 자동 적용됩니다"}
+              </span>
+            )}
+            <Link href="/company-class" className="text-xs text-blue-600 hover:underline whitespace-nowrap">
+              정책 관리 →
+            </Link>
+          </div>
         </Field>
         <Field label="상태">
           <select className={selectCls} value={form.status} onChange={(e) => s("status", e.target.value as FundingAgency["status"])}>
@@ -543,9 +568,17 @@ function AgencyForm({
         </Field>
       </div>
       <div className="grid grid-cols-2 gap-4">
+        <Field label="공문·세금계산서 발송 대상">
+          <select className={selectCls} value={form.noticeRecipientScope} onChange={(e) => s("noticeRecipientScope", e.target.value as FundingAgency["noticeRecipientScope"])}>
+            <option value="LEAD_ONLY">주관기관만</option>
+            <option value="LEAD_AND_PARTICIPANTS">주관+참여기관 모두</option>
+          </select>
+        </Field>
         <Field label="등록일">
           <input className={inputCls} type="date" value={form.registeredAt} onChange={(e) => s("registeredAt", e.target.value)} />
         </Field>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
         <Field label="웹사이트 (선택)">
           <input className={inputCls} value={form.website ?? ""} onChange={(e) => s("website", e.target.value)} placeholder="https://www.agency.re.kr" />
         </Field>
@@ -562,7 +595,7 @@ function DetailModal({ agency, projects, termFees, feePolicies, onClose }: {
   agency: FundingAgency;
   projects: { id: string; projectName: string; projectNumber: string; status: string; currentTerm: number; totalTerms: number }[];
   termFees: { projectNumber: string; appliedFee: number; status: string }[];
-  feePolicies: { id: string; name: string; version: string }[];
+  feePolicies: FeePolicy[];
   onClose: () => void;
 }) {
   const agencyProjects = projects.filter((p) => (p as unknown as { agencyId: string }).agencyId === agency.id);
@@ -570,7 +603,7 @@ function DetailModal({ agency, projects, termFees, feePolicies, onClose }: {
   const agencyFees = termFees.filter((f) => agencyProjectNumbers.has(f.projectNumber));
   const totalFee = agencyFees.reduce((s, f) => s + f.appliedFee, 0);
   const billedFee = agencyFees.filter((f) => f.status === "BILLED").reduce((s, f) => s + f.appliedFee, 0);
-  const ownPolicy = feePolicies.find((p) => p.id === agency.feePolicyId);
+  const ownPolicy = feePolicies.find((p) => p.agencyId === agency.id && p.status === "ACTIVE");
 
   return (
     <div className="p-6 space-y-5">
@@ -591,6 +624,7 @@ function DetailModal({ agency, projects, termFees, feePolicies, onClose }: {
         <div><span className="text-xs text-slate-400">담당자</span><p className="text-slate-700 mt-0.5">{agency.contactName} · {agency.contactPhone}</p></div>
         <div><span className="text-xs text-slate-400">이메일</span><p className="text-slate-700 mt-0.5">{agency.contactEmail}</p></div>
         <div><span className="text-xs text-slate-400">수수료 정책</span><p className="text-slate-700 mt-0.5">{ownPolicy ? `${ownPolicy.name} (${ownPolicy.version}) — 자체 정책` : "공통 정책 사용"}</p></div>
+        <div><span className="text-xs text-slate-400">공문·세금계산서 발송 대상</span><p className="text-slate-700 mt-0.5">{NOTICE_SCOPE_LABEL[agency.noticeRecipientScope]}</p></div>
         <div><span className="text-xs text-slate-400">웹사이트</span>
           {agency.website ? (
             <a href={agency.website} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-blue-600 hover:underline mt-0.5 text-sm">
@@ -756,6 +790,7 @@ export default function FundingAgenciesPage() {
               <th className="text-left px-5 py-3 text-xs font-medium text-slate-500">전담기관명</th>
               <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">약칭</th>
               <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">수수료 정책</th>
+              <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">발송 대상</th>
               <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">관리 과제</th>
               <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">수수료 합계</th>
               <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">청구 완료</th>
@@ -766,11 +801,11 @@ export default function FundingAgenciesPage() {
           </thead>
           <tbody>
             {filtered.length === 0 ? (
-              <tr><td colSpan={9} className="px-4 py-10 text-center text-sm text-slate-400">검색 결과가 없습니다</td></tr>
+              <tr><td colSpan={10} className="px-4 py-10 text-center text-sm text-slate-400">검색 결과가 없습니다</td></tr>
             ) : (
               filtered.map((agency) => {
                 const st = statsById[agency.id] ?? { projectCount: 0, totalFee: 0, billedFee: 0 };
-                const ownPolicy = feePolicies.find((p) => p.id === agency.feePolicyId);
+                const ownPolicy = feePolicies.find((p) => p.agencyId === agency.id && p.status === "ACTIVE");
                 return (
                   <tr key={agency.id} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
                     <td className="px-5 py-4">
@@ -791,6 +826,12 @@ export default function FundingAgenciesPage() {
                       ) : (
                         <StatusBadge label="공통 정책" color="slate" />
                       )}
+                    </td>
+                    <td className="px-4 py-4 text-center">
+                      <StatusBadge
+                        label={NOTICE_SCOPE_LABEL[agency.noticeRecipientScope]}
+                        color={agency.noticeRecipientScope === "LEAD_AND_PARTICIPANTS" ? "amber" : "slate"}
+                      />
                     </td>
                     <td className="px-4 py-4 text-center text-sm font-medium text-slate-700">{st.projectCount}건</td>
                     <td className="px-4 py-4 text-right text-sm font-medium text-slate-800 whitespace-nowrap">{fmtWon(st.totalFee)}</td>
@@ -858,6 +899,7 @@ export default function FundingAgenciesPage() {
           size="xl"
         >
           <AgencyForm
+            agencyId={modal.mode === "edit" ? modal.target.id : null}
             initial={modal.mode === "edit" ? modal.target : EMPTY}
             feePolicies={feePolicies}
             onSubmit={handleSubmit}
