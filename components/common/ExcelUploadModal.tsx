@@ -18,7 +18,12 @@ import {
   addProject,
   addProjectMember,
   updateProject,
+  updateProjectMember,
+  recalcProjectTotalBudget,
 } from "@/lib/store";
+import type { Project, ProjectMember } from "@/lib/mock";
+
+type InstitutionGrade = NonNullable<ProjectMember["institutionGrade"]>;
 
 // ============================================================
 // 타입
@@ -60,6 +65,26 @@ interface PreviewRow extends ExtractedRow {
   willRegister: { agency: boolean; project: boolean; institution: boolean };
 }
 
+// 재업로드 시 "이미 등록된 과제"를 엑셀에 담긴 연차와 비교해 어떻게 처리할지 판단하는 정보.
+// next: 진행중 연차보다 앞선 연차 데이터 → 다음 연차로 진행, 자동 반영
+// same: 진행중 연차와 같은 연차 데이터 재제출 → 사용자 확인 후 반영
+// behind: 이미 지난 연차 데이터 → 사용자 확인 후 반영 (기본은 반영 안 함)
+type ProjectUpdateStatus = "next" | "same" | "behind";
+
+interface ProjectUpdateInfo {
+  normNum: string;
+  projectId: string;
+  projectNumber: string;
+  projectName: string;
+  currentTerm: number;
+  excelTerm: number;
+  status: ProjectUpdateStatus;
+}
+
+function defaultChoiceForStatus(status: ProjectUpdateStatus): boolean {
+  return status === "next";
+}
+
 // 참여기관(ProjectMember) 자동 등록 — "연차별기관별" + "단계기관별" 시트를 과제+기관 단위로 합산
 interface AggregatedBudget {
   termYear: number;
@@ -75,8 +100,26 @@ interface MemberAggregate {
   institutionName: string;
   role: "LEAD" | "PARTICIPANT";
   settlementType: "위탁정산" | "자체정산";
+  // 엑셀에 등급 컬럼이 없거나 값이 비어 있으면 undefined — 기존에 입력돼 있던 등급을 실수로
+  // "일반"으로 덮어쓰지 않기 위해, "값이 아예 없었다"와 "일반으로 명시됨"을 구분해서 담아둔다.
+  institutionGrade?: InstitutionGrade;
   budgetsByTerm: Map<number, AggregatedBudget>;
   totalCashBudgetFallback: number;
+}
+
+// "최우수(S)" / "우수(A~C)" / "일반" 텍스트를 institutionGrade 값으로 변환.
+// 세부등급(A/B/C)은 수수료 계산상 어차피 동일하게 취급되므로(normalizeGrade), "우수"만 있으면 A로 둔다.
+function parseGrade(raw: string): InstitutionGrade | undefined {
+  const s = raw.trim();
+  if (!s) return undefined;
+  if (s.includes("최우수") || s === "S") return "최우수(S)";
+  if (s.includes("우수")) {
+    if (s.includes("B")) return "우수(B)";
+    if (s.includes("C")) return "우수(C)";
+    return "우수(A)";
+  }
+  if (s.includes("일반")) return "일반";
+  return undefined;
 }
 
 // ============================================================
@@ -154,6 +197,7 @@ function buildMemberAggregates(sheets: ParsedSheet[]): {
           institutionName: get("institutionName", row) || "미입력",
           role: "PARTICIPANT",
           settlementType: "위탁정산",
+          institutionGrade: undefined,
           budgetsByTerm: new Map(),
           totalCashBudgetFallback: 0,
         };
@@ -166,13 +210,18 @@ function buildMemberAggregates(sheets: ParsedSheet[]): {
       const settlementStr = get("settlementType", row);
       if (settlementStr) agg.settlementType = settlementStr.includes("자체") ? "자체정산" : "위탁정산";
 
+      const gradeStr = get("institutionGrade", row);
+      const parsedGrade = parseGrade(gradeStr);
+      if (parsedGrade) agg.institutionGrade = parsedGrade;
+
       if (sheet.def.key === "annual") {
         // rcms-columns.ts 상 field명은 "termYear"지만 실제로는 "연차"(회차) 값이고,
         // 달력상 실제 연도는 "supportYear"(지원연도) 컬럼이 담당한다.
         const termNumber = parseInt(get("termYear", row), 10) || 1;
         const supportYear = parseInt(get("supportYear", row), 10) || new Date().getFullYear();
         const cashBudget = parseAmount(get("cashBudget", row));
-        agg.budgetsByTerm.set(termNumber, { termYear: supportYear, termNumber, cashBudget, inKindBudget: 0 });
+        const inKindBudget = parseAmount(get("inKindBudget", row));
+        agg.budgetsByTerm.set(termNumber, { termYear: supportYear, termNumber, cashBudget, inKindBudget });
         projectMaxTerm.set(normNum, Math.max(projectMaxTerm.get(normNum) ?? 0, termNumber));
       } else {
         const totalCash = parseAmount(get("totalCashBudget", row));
@@ -182,6 +231,36 @@ function buildMemberAggregates(sheets: ParsedSheet[]): {
   }
 
   return { members: Array.from(memberMap.values()), projectMaxTerm };
+}
+
+// 엑셀에 담긴 과제 중 이미 등록된 과제를, 진행중인 연차(currentTerm)와 비교해
+// 신규/다음연차/동일연차/과거연차로 분류한다 (신규 과제는 여기서 다루지 않는다).
+function computeProjectUpdates(
+  projects: Project[],
+  memberAggregates: MemberAggregate[],
+  projectMaxTerm: Map<string, number>
+): ProjectUpdateInfo[] {
+  const normNums = new Set(memberAggregates.map((m) => normProjectNum(m.projectNumber)));
+  const updates: ProjectUpdateInfo[] = [];
+  for (const normNum of normNums) {
+    const existing = projects.find((p) => normProjectNum(p.projectNumber) === normNum);
+    if (!existing) continue; // 신규 과제는 별도 처리
+    const currentTerm = existing.currentTerm ?? 1;
+    // 엑셀에 연차 정보가 없으면(단계기관별 시트만 있는 경우 등) 동일 연차로 보수적으로 취급해
+    // 사용자 확인 없이 조용히 반영되지 않게 한다.
+    const excelTerm = projectMaxTerm.get(normNum) ?? currentTerm;
+    const status: ProjectUpdateStatus = excelTerm > currentTerm ? "next" : excelTerm === currentTerm ? "same" : "behind";
+    updates.push({
+      normNum,
+      projectId: existing.id,
+      projectNumber: existing.projectNumber,
+      projectName: existing.projectName,
+      currentTerm,
+      excelTerm,
+      status,
+    });
+  }
+  return updates;
 }
 
 // autoGenerateTermFees와 동일한 방식(startDate + 연차-1년)으로 "현재 몇 연차인지" 추정
@@ -428,15 +507,27 @@ function MappingStep({
 
 // ── 4. 미리보기 + 등록 ──────────────────────────────────────────
 
+const STATUS_BADGE: Record<ProjectUpdateStatus, { label: string; cls: string }> = {
+  next: { label: "다음 연차 — 자동 반영", cls: "bg-blue-100 text-blue-700" },
+  same: { label: "동일 연차 재제출 — 확인 필요", cls: "bg-amber-100 text-amber-700" },
+  behind: { label: "과거 연차 데이터 — 확인 필요", cls: "bg-red-100 text-red-700" },
+};
+
 function PreviewStep({
   previewRows,
   newMemberCount,
+  projectUpdates,
+  updateChoices,
+  onToggleUpdate,
   onConfirm,
   onBack,
   loading,
 }: {
   previewRows: PreviewRow[];
   newMemberCount: number;
+  projectUpdates: ProjectUpdateInfo[];
+  updateChoices: Record<string, boolean>;
+  onToggleUpdate: (normNum: string, next: boolean) => void;
   onConfirm: () => void;
   onBack: () => void;
   loading: boolean;
@@ -460,6 +551,9 @@ function PreviewStep({
 
   const dupRows = previewRows.filter((r) => r.duplicates.length > 0);
   const totalNew = newAgency + newProject + newInst + newMemberCount;
+  const approvedUpdateCount = projectUpdates.filter(
+    (u) => updateChoices[u.normNum] ?? defaultChoiceForStatus(u.status)
+  ).length;
 
   return (
     <div className="p-6 space-y-4">
@@ -500,9 +594,40 @@ function PreviewStep({
         </div>
       )}
 
-      {totalNew === 0 && (
+      {/* 기존 과제 갱신 */}
+      {projectUpdates.length > 0 && (
+        <div className="rounded-xl border border-slate-200 overflow-hidden">
+          <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200">
+            <p className="text-xs font-semibold text-slate-700">기존 과제 갱신 ({projectUpdates.length}건)</p>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {projectUpdates.map((u) => {
+              const checked = updateChoices[u.normNum] ?? defaultChoiceForStatus(u.status);
+              const badge = STATUS_BADGE[u.status];
+              return (
+                <label key={u.normNum} className="flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-slate-50">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) => onToggleUpdate(u.normNum, e.target.checked)}
+                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-slate-700 truncate">{u.projectName}</p>
+                    <p className="text-[10px] text-slate-400 font-mono">{u.projectNumber}</p>
+                  </div>
+                  <span className="text-[10px] text-slate-500 shrink-0">{u.currentTerm}연차 → {u.excelTerm}연차</span>
+                  <span className={`text-[10px] font-medium px-2 py-0.5 rounded shrink-0 ${badge.cls}`}>{badge.label}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {totalNew === 0 && approvedUpdateCount === 0 && (
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
-          등록할 신규 항목이 없습니다.
+          등록하거나 반영할 항목이 없습니다.
         </div>
       )}
 
@@ -510,10 +635,10 @@ function PreviewStep({
         <button onClick={onBack} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">이전</button>
         <button
           onClick={onConfirm}
-          disabled={loading || totalNew === 0}
+          disabled={loading || (totalNew === 0 && approvedUpdateCount === 0)}
           className="px-4 py-2 text-sm font-medium text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-40 transition-colors"
         >
-          {loading ? "등록 중..." : `등록 (전담기관 ${newAgency} · 과제 ${newProject} · 기관 ${newInst} · 참여기관 ${newMemberCount})`}
+          {loading ? "등록 중..." : `등록 (전담기관 ${newAgency} · 과제 ${newProject} · 기관 ${newInst} · 참여기관 ${newMemberCount}${approvedUpdateCount > 0 ? ` · 과제갱신 ${approvedUpdateCount}` : ""})`}
         </button>
       </div>
     </div>
@@ -522,7 +647,16 @@ function PreviewStep({
 
 // ── 완료 ────────────────────────────────────────────────────────
 
-function DoneStep({ result, onClose }: { result: { agency: number; project: number; inst: number; member: number }; onClose: () => void }) {
+interface DoneResult {
+  agency: number;
+  project: number;
+  inst: number;
+  member: number;
+  memberUpdated: number;
+  projectAdvanced: number;
+}
+
+function DoneStep({ result, onClose }: { result: DoneResult; onClose: () => void }) {
   return (
     <div className="p-6 flex flex-col items-center gap-4">
       <div className="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center">
@@ -544,8 +678,23 @@ function DoneStep({ result, onClose }: { result: { agency: number; project: numb
           </div>
         ))}
       </div>
+      {(result.memberUpdated > 0 || result.projectAdvanced > 0) && (
+        <div className="grid grid-cols-2 gap-3 w-full">
+          <div className="bg-blue-50 rounded-xl border border-blue-100 px-4 py-3 text-center">
+            <p className="text-xl font-bold text-blue-700">{result.projectAdvanced}</p>
+            <p className="text-xs text-slate-500 mt-0.5">다음 연차로 진행된 과제</p>
+          </div>
+          <div className="bg-blue-50 rounded-xl border border-blue-100 px-4 py-3 text-center">
+            <p className="text-xl font-bold text-blue-700">{result.memberUpdated}</p>
+            <p className="text-xs text-slate-500 mt-0.5">갱신된 참여기관</p>
+          </div>
+        </div>
+      )}
       {result.member > 0 && (
         <p className="text-[11px] text-slate-400 -mt-2">참여기관이 등록된 과제는 연차 수수료가 자동으로 계산되었습니다.</p>
+      )}
+      {result.projectAdvanced > 0 && (
+        <p className="text-[11px] text-slate-400 -mt-2">연차/참여기관 변경 내역은 각 과제의 변경이력에서 확인할 수 있습니다.</p>
       )}
       <button onClick={onClose} className="mt-2 px-6 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
         닫기
@@ -564,30 +713,30 @@ export function downloadExcelTemplate() {
     "※필수 (YYYY-MM-DD)", "※필수 (YYYY-MM-DD)",
     "선택", "선택", "선택",
     "※필수", "※필수 (000-00-00000)",
-    "선택 (주관/공동/위탁)", "선택 (원 단위)", "선택 (Y/N)",
+    "선택 (주관/공동/위탁)", "선택 (원 단위)", "선택 (원 단위)", "선택 (Y/N)",
   ];
   const headers = [
     "전문기관명", "과제번호", "과제명",
     "총개발시작일자", "총개발종료일자",
     "단계", "연차", "지원연도",
     "연구개발기관명", "기관사업자등록번호",
-    "기관역할구분", "현금사업비총액", "배정대상",
+    "기관역할구분", "현금사업비총액", "현물사업비총액", "배정대상",
   ];
   const rows = [
     [
       "한국산업기술기획평가원", "RS-2024-00000001", "스마트 제조 AI 시스템 개발",
       "2024-03-01", "2027-02-28", "1", "1", "2024",
-      "삼화기술경영(주)", "123-45-67890", "주관", "500000000", "Y",
+      "삼화기술경영(주)", "123-45-67890", "주관", "500000000", "0", "Y",
     ],
     [
       "한국산업기술기획평가원", "RS-2024-00000001", "스마트 제조 AI 시스템 개발",
       "2024-03-01", "2027-02-28", "1", "1", "2024",
-      "참여기업(주)", "234-56-78901", "공동", "200000000", "Y",
+      "참여기업(주)", "234-56-78901", "공동", "200000000", "0", "Y",
     ],
     [
       "한국에너지기술평가원", "RS-2024-00000002", "신재생에너지 효율화 연구",
       "2024-06-01", "2026-05-31", "0", "1", "2024",
-      "에너지연구소", "345-67-89012", "주관", "800000000", "Y",
+      "에너지연구소", "345-67-89012", "주관", "800000000", "0", "Y",
     ],
   ];
 
@@ -597,28 +746,28 @@ export function downloadExcelTemplate() {
   const stageNotes = [
     "선택", "※필수", "선택", "※필수", "※필수",
     "※필수 (YYYY-MM-DD)", "※필수 (YYYY-MM-DD)", "선택",
-    "※필수", "※필수 (000-00-00000)", "선택 (주관/공동/위탁)", "선택", "선택 (원 단위)", "선택",
+    "※필수", "※필수 (000-00-00000)", "선택 (주관/공동/위탁)", "선택 (최우수/우수/일반)", "선택", "선택 (원 단위)", "선택",
   ];
   const stageHeaders = [
     "과제번호(숫자)", "전문기관명", "RCMS사업명", "과제번호", "과제명",
     "총개발시작일자", "총개발종료일자", "정산형태구분",
-    "연구기관명", "기관사업자등록번호", "기관역할구분", "기관책임자", "기관_총사업비(현금)", "회계법인",
+    "연구기관명", "기관사업자등록번호", "기관역할구분", "기관등급", "기관책임자", "기관_총사업비(현금)", "회계법인",
   ];
   const stageRows = [
     [
       "1", "한국산업기술기획평가원", "스마트제조혁신사업", "RS-2024-00000001", "스마트 제조 AI 시스템 개발",
       "2024-03-01", "2027-02-28", "위탁정산",
-      "삼화기술경영(주)", "123-45-67890", "주관", "홍길동", "500000000", "삼일회계법인",
+      "삼화기술경영(주)", "123-45-67890", "주관", "일반", "홍길동", "500000000", "삼일회계법인",
     ],
     [
       "1", "한국산업기술기획평가원", "스마트제조혁신사업", "RS-2024-00000001", "스마트 제조 AI 시스템 개발",
       "2024-03-01", "2027-02-28", "위탁정산",
-      "참여기업(주)", "234-56-78901", "공동", "김참여", "200000000", "삼일회계법인",
+      "참여기업(주)", "234-56-78901", "공동", "우수", "김참여", "200000000", "삼일회계법인",
     ],
     [
       "2", "한국에너지기술평가원", "신재생에너지핵심기술개발", "RS-2024-00000002", "신재생에너지 효율화 연구",
       "2024-06-01", "2026-05-31", "위탁정산",
-      "에너지연구소", "345-67-89012", "주관", "박연구", "800000000", "한영회계법인",
+      "에너지연구소", "345-67-89012", "주관", "최우수", "박연구", "800000000", "한영회계법인",
     ],
   ];
 
@@ -642,16 +791,27 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
   const [matchedSheets, setMatchedSheets] = useState<{ sheetName: string; def: SheetDef }[]>([]);
   const [parsedSheets, setParsedSheets] = useState<ParsedSheet[]>([]);
   const [previewRows, setPreviewRows] = useState<PreviewRow[]>([]);
-  const [doneResult, setDoneResult] = useState({ agency: 0, project: 0, inst: 0, member: 0 });
+  const [doneResult, setDoneResult] = useState<DoneResult>({ agency: 0, project: 0, inst: 0, member: 0, memberUpdated: 0, projectAdvanced: 0 });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [previewBackStep, setPreviewBackStep] = useState<Step>("mapping");
+  const [projectUpdateChoices, setProjectUpdateChoices] = useState<Record<string, boolean>>({});
 
   // "연차별기관별" + "단계기관별" 시트를 과제+기관 단위로 합산 — 참여기관(ProjectMember) 등록에 사용
   const { members: memberAggregates, projectMaxTerm } = useMemo(
     () => buildMemberAggregates(parsedSheets),
     [parsedSheets]
   );
+
+  // 이미 등록된 과제 중 이번 엑셀이 다음/동일/과거 연차 중 무엇에 해당하는지 판단
+  const projectUpdates = useMemo(
+    () => computeProjectUpdates(projects, memberAggregates, projectMaxTerm),
+    [projects, memberAggregates, projectMaxTerm]
+  );
+
+  function toggleProjectUpdate(normNum: string, next: boolean) {
+    setProjectUpdateChoices((prev) => ({ ...prev, [normNum]: next }));
+  }
 
   // 이미 참여기관으로 연결된 (과제, 기관) 쌍은 제외하고 새로 등록될 참여기관 수를 계산
   const newMemberCount = useMemo(() => {
@@ -914,40 +1074,101 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       }
     }
 
-    // 참여기관 — 이게 등록돼야 연차 수수료가 자동으로 계산된다 (autoGenerateTermFees 트리거)
+    // 기존 과제(이미 등록됨) 중, 이번 회차에 반영하기로 승인된 것만 True
+    function isApprovedUpdate(normNum: string): boolean {
+      const info = projectUpdates.find((u) => u.normNum === normNum);
+      if (!info) return true; // 비교 대상 정보가 없으면 신규 과제 — 항상 진행
+      return projectUpdateChoices[normNum] ?? defaultChoiceForStatus(info.status);
+    }
+
+    let memberUpdatedCount = 0;
+    const touchedProjectIds = new Set<string>();
+
+    // 참여기관 등록/갱신 — 이게 등록돼야 연차 수수료가 자동으로 계산된다 (autoGenerateTermFees 트리거)
     for (const agg of memberAggregates) {
-      const projectId = registeredProjects.get(normProjectNum(agg.projectNumber));
+      const normNum = normProjectNum(agg.projectNumber);
+      const projectId = registeredProjects.get(normNum);
       const institutionId = registeredInst.get(normBiz(agg.bizNumber));
       if (!projectId || !institutionId) continue;
 
-      const alreadyMember = projectMembers.some(
-        (m) => m.projectId === projectId && m.institutionId === institutionId
-      );
-      if (alreadyMember) continue;
+      // 이 실행 이전부터 있던(=신규로 만든 게 아닌) 과제인지 — 승인 안 됐으면 통째로 건너뛴다
+      const isPreexistingProject = projects.some((p) => p.id === projectId);
+      if (isPreexistingProject && !isApprovedUpdate(normNum)) continue;
 
+      touchedProjectIds.add(projectId);
       const institution = institutions.find((i) => i.id === institutionId);
       const annualBudgets = Array.from(agg.budgetsByTerm.values()).sort((a, b) => a.termNumber - b.termNumber);
-      const totalBudget = annualBudgets.length > 0
-        ? annualBudgets.reduce((s, b) => s + b.cashBudget + b.inKindBudget, 0)
-        : agg.totalCashBudgetFallback;
+      const existingMember = projectMembers.find(
+        (m) => m.projectId === projectId && m.institutionId === institutionId
+      );
 
-      addProjectMember({
-        projectId,
-        projectNumber: agg.projectNumber,
-        institutionId,
-        institutionName: agg.institutionName,
-        institutionType: institution?.type ?? "중소기업",
-        role: agg.role,
-        budget: totalBudget,
-        feeRate: 0,
-        calculatedFee: 0,
-        institutionGrade: "일반",
-        settlementType: agg.settlementType,
-        cashBudget: totalBudget,
-        inKindBudget: 0,
-        annualBudgets: annualBudgets.length > 0 ? annualBudgets : undefined,
+      if (!existingMember) {
+        // 신규 참여기관
+        const totalCash = annualBudgets.length > 0
+          ? annualBudgets.reduce((s, b) => s + b.cashBudget, 0)
+          : agg.totalCashBudgetFallback;
+        const totalInKind = annualBudgets.reduce((s, b) => s + b.inKindBudget, 0);
+        addProjectMember({
+          projectId,
+          projectNumber: agg.projectNumber,
+          institutionId,
+          institutionName: agg.institutionName,
+          institutionType: institution?.type ?? "중소기업",
+          role: agg.role,
+          budget: totalCash + totalInKind,
+          feeRate: 0,
+          calculatedFee: 0,
+          institutionGrade: agg.institutionGrade ?? "일반",
+          settlementType: agg.settlementType,
+          cashBudget: totalCash,
+          inKindBudget: totalInKind,
+          annualBudgets: annualBudgets.length > 0 ? annualBudgets : undefined,
+        });
+        memberCount++;
+      } else if (isPreexistingProject) {
+        // 기존 참여기관 갱신 — 다른 연차 데이터는 보존하고, 이번 엑셀에 담긴 연차만 추가/교체한다.
+        const newTermNumbers = new Set(annualBudgets.map((b) => b.termNumber));
+        const mergedBudgets = [
+          ...(existingMember.annualBudgets ?? []).filter((b) => !newTermNumbers.has(b.termNumber)),
+          ...annualBudgets,
+        ].sort((a, b) => a.termNumber - b.termNumber);
+        const totalCash = mergedBudgets.reduce((s, b) => s + b.cashBudget, 0);
+        const totalInKind = mergedBudgets.reduce((s, b) => s + b.inKindBudget, 0);
+
+        const updates: Partial<ProjectMember> = {
+          annualBudgets: mergedBudgets,
+          budget: totalCash + totalInKind,
+          cashBudget: totalCash,
+          inKindBudget: totalInKind,
+          role: agg.role,
+          settlementType: agg.settlementType,
+        };
+        if (agg.institutionGrade) updates.institutionGrade = agg.institutionGrade;
+
+        // 실제로 달라진 게 있을 때만 갱신 — 동일한 파일을 다시 올려도 변경이력에 빈 UPDATE가 쌓이지 않게 한다.
+        const changed =
+          JSON.stringify(mergedBudgets) !== JSON.stringify(existingMember.annualBudgets ?? []) ||
+          updates.role !== existingMember.role ||
+          updates.settlementType !== existingMember.settlementType ||
+          (updates.institutionGrade !== undefined && updates.institutionGrade !== existingMember.institutionGrade);
+
+        if (changed) {
+          updateProjectMember(existingMember.id, updates);
+          memberUpdatedCount++;
+        }
+      }
+    }
+
+    // 다음 연차로 진행된 것으로 승인된 과제는 진행연차(및 필요 시 총연차)를 갱신한다.
+    for (const info of projectUpdates) {
+      if (info.status !== "next" || !isApprovedUpdate(info.normNum)) continue;
+      const existingProject = projects.find((p) => p.id === info.projectId);
+      if (!existingProject) continue;
+      touchedProjectIds.add(info.projectId);
+      updateProject(info.projectId, {
+        currentTerm: info.excelTerm,
+        totalTerms: Math.max(existingProject.totalTerms, info.excelTerm),
       });
-      memberCount++;
     }
 
     // 주관기관 정보 보정 — 과제 생성 시점엔 어느 행이 주관기관인지 알 수 없어 비워뒀으므로,
@@ -967,7 +1188,21 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       });
     }
 
-    setDoneResult({ agency: agencyCount, project: projectCount, inst: instCount, member: memberCount });
+    // 총사업비 재계산 — 이번에 새로 만들었거나 갱신한 과제만 대상으로, 참여기관 사업비 합계로 맞춘다.
+    touchedProjectIds.forEach((pid) => recalcProjectTotalBudget(pid));
+
+    const advancedProjectCount = projectUpdates.filter(
+      (u) => u.status === "next" && isApprovedUpdate(u.normNum)
+    ).length;
+
+    setDoneResult({
+      agency: agencyCount,
+      project: projectCount,
+      inst: instCount,
+      member: memberCount,
+      memberUpdated: memberUpdatedCount,
+      projectAdvanced: advancedProjectCount,
+    });
     setLoading(false);
     setStep("done");
   }
@@ -1041,6 +1276,9 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         <PreviewStep
           previewRows={previewRows}
           newMemberCount={newMemberCount}
+          projectUpdates={projectUpdates}
+          updateChoices={projectUpdateChoices}
+          onToggleUpdate={toggleProjectUpdate}
           onConfirm={doRegister}
           onBack={() => setStep(previewBackStep)}
           loading={loading}

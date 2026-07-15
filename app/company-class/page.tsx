@@ -11,6 +11,7 @@ import {
   deleteFundingAgency,
 } from "@/lib/store";
 import { type PolicyRule, type FeePolicy, type FundingAgency, type FeeRateBracket, KEIT_BRACKETS, KETEP_BRACKETS, KOFPI_BRACKETS } from "@/lib/mock";
+import { buildPolicyDisplayRules } from "@/lib/fee-calculator";
 import Modal from "@/components/common/Modal";
 import StatusBadge from "@/components/common/StatusBadge";
 import { useCanWrite } from "@/lib/permissions";
@@ -20,10 +21,6 @@ import { fmtDate, fmtWonFull } from "@/lib/utils";
 const inputCls = "w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400";
 
 // ─── 등급 상수 ──────────────────────────────────────────────────
-const GRADE_OPTIONS = ["일반", "S", "A~C", "자율성트랙"];
-const GRADE_NAME_MAP: Record<string, string> = {
-  일반: "일반", S: "최우수", "A~C": "우수", 자율성트랙: "자율성트랙",
-};
 const GRADE_BADGE: Record<string, string> = {
   일반: "bg-slate-100 text-slate-600",
   S: "bg-yellow-100 text-yellow-700",
@@ -37,11 +34,8 @@ const POLICY_STATUS_MAP: Record<FeePolicy["status"], { label: string; color: "gr
   DRAFT: { label: "초안", color: "amber" },
 };
 
-// ─── 기준표 (읽기 전용) ─────────────────────────────────────────
+// ─── 기준표 (읽기 전용 — exemptGrades·exemptionMode·hasAutonomyTrack·annualBillingRate로부터 자동 생성) ──
 function RuleTable({ rules, standardRate }: { rules: PolicyRule[]; standardRate: number }) {
-  if (rules.length === 0) {
-    return <p className="text-xs text-slate-400 py-4 text-center">공통 기준표가 적용됩니다.</p>;
-  }
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
@@ -58,6 +52,7 @@ function RuleTable({ rules, standardRate }: { rules: PolicyRule[]; standardRate:
         </thead>
         <tbody>
           {rules.map((r, i) => {
+            const excluded = r.settlementType === "제외대상";
             const effectiveAnnual = parseFloat((standardRate * r.annualRate / 100).toFixed(2));
             const effectiveSettlement = parseFloat((standardRate * r.settlementRate / 100).toFixed(2));
             return (
@@ -72,111 +67,30 @@ function RuleTable({ rules, standardRate }: { rules: PolicyRule[]; standardRate:
                 </td>
                 <td className="px-3 py-2.5 text-center text-xs text-slate-600">{r.gradeName}</td>
                 <td className="px-3 py-2.5 text-center">
-                  <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${r.settlementType === "자체정산" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                  <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${
+                    r.settlementType === "자체정산" ? "bg-emerald-50 text-emerald-700" :
+                    r.settlementType === "위탁정산" ? "bg-amber-50 text-amber-700" :
+                    "bg-slate-100 text-slate-500"
+                  }`}>
                     {r.settlementType}
                   </span>
                 </td>
-                <td className="px-3 py-2.5 text-center text-xs text-slate-500">{r.annualRate}%</td>
-                <td className="px-3 py-2.5 text-center text-xs text-slate-500">{r.settlementRate}%</td>
+                <td className="px-3 py-2.5 text-center text-xs text-slate-500">{excluded ? "—" : `${r.annualRate}%`}</td>
+                <td className="px-3 py-2.5 text-center text-xs text-slate-500">{excluded ? "—" : `${r.settlementRate}%`}</td>
                 <td className="px-3 py-2.5 text-center">
-                  <span className="text-xs font-semibold text-blue-700">
-                    연{effectiveAnnual}% / 정{effectiveSettlement}%
-                  </span>
+                  {excluded ? (
+                    <span className="text-xs text-slate-400">산정 제외</span>
+                  ) : (
+                    <span className="text-xs font-semibold text-blue-700">
+                      연{effectiveAnnual}% / 정{effectiveSettlement}%
+                    </span>
+                  )}
                 </td>
               </tr>
             );
           })}
         </tbody>
       </table>
-    </div>
-  );
-}
-
-// ─── 기준 행 편집기 (PolicyForm 내부) ───────────────────────────
-const EMPTY_RULE: PolicyRule = { subject: "기관", grade: "일반", gradeName: "일반", settlementType: "위탁정산", annualRate: 85, settlementRate: 100 };
-
-function RuleEditor({ rules, onChange }: { rules: PolicyRule[]; onChange: (rules: PolicyRule[]) => void }) {
-  function add() { onChange([...rules, { ...EMPTY_RULE }]); }
-  function remove(i: number) { onChange(rules.filter((_, idx) => idx !== i)); }
-  function set(i: number, k: keyof PolicyRule, v: string | number) {
-    onChange(rules.map((r, idx) => idx === i ? { ...r, [k]: v } : r));
-  }
-  function handleGrade(i: number, grade: string) {
-    onChange(rules.map((r, idx) => idx === i ? { ...r, grade, gradeName: GRADE_NAME_MAP[grade] ?? grade } : r));
-  }
-
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-2">
-        <label className="text-xs font-medium text-slate-700">등급별 산출 비율 기준표</label>
-        <button type="button" onClick={add} className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors">
-          <FiPlus size={11} />행 추가
-        </button>
-      </div>
-      <div className="border border-slate-200 rounded-lg overflow-hidden">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="bg-slate-50 border-b border-slate-200">
-              <th className="text-left px-2 py-2 font-medium text-slate-500">대상</th>
-              <th className="text-left px-2 py-2 font-medium text-slate-500">구분</th>
-              <th className="text-left px-2 py-2 font-medium text-slate-500">구분2</th>
-              <th className="text-left px-2 py-2 font-medium text-slate-500">정산구분</th>
-              <th className="text-left px-2 py-2 font-medium text-slate-500">연차(%)</th>
-              <th className="text-left px-2 py-2 font-medium text-slate-500">정산(%)</th>
-              <th className="w-6 px-2 py-2" />
-            </tr>
-          </thead>
-          <tbody>
-            {rules.length === 0 && (
-              <tr><td colSpan={7} className="px-3 py-4 text-center text-slate-400">공통 기준이 적용됩니다. 행 추가로 자체 기준을 설정할 수 있습니다.</td></tr>
-            )}
-            {rules.map((r, i) => (
-              <tr key={i} className="border-b border-slate-100 last:border-0">
-                <td className="px-2 py-1.5">
-                  <select className="text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                    value={r.subject} onChange={(e) => set(i, "subject", e.target.value as PolicyRule["subject"])}>
-                    <option value="기관">기관</option>
-                    <option value="과제">과제</option>
-                  </select>
-                </td>
-                <td className="px-2 py-1.5">
-                  <select className="text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                    value={r.grade} onChange={(e) => handleGrade(i, e.target.value)}>
-                    {GRADE_OPTIONS.map((g) => <option key={g} value={g}>{g}</option>)}
-                  </select>
-                </td>
-                <td className="px-2 py-1.5">
-                  <input className="w-20 text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                    value={r.gradeName} onChange={(e) => set(i, "gradeName", e.target.value)} />
-                </td>
-                <td className="px-2 py-1.5">
-                  <select className="text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                    value={r.settlementType} onChange={(e) => set(i, "settlementType", e.target.value as PolicyRule["settlementType"])}>
-                    <option value="위탁정산">위탁정산</option>
-                    <option value="자체정산">자체정산</option>
-                  </select>
-                </td>
-                <td className="px-2 py-1.5">
-                  <input type="number" min={0} max={100} step={1}
-                    className="w-16 text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                    value={r.annualRate} onChange={(e) => set(i, "annualRate", Number(e.target.value))} />
-                </td>
-                <td className="px-2 py-1.5">
-                  <input type="number" min={0} max={100} step={1}
-                    className="w-16 text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                    value={r.settlementRate} onChange={(e) => set(i, "settlementRate", Number(e.target.value))} />
-                </td>
-                <td className="px-2 py-1.5 text-center">
-                  <button type="button" onClick={() => remove(i)} className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors">
-                    <FiTrash2 size={12} />
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <p className="text-xs text-slate-400 mt-1.5">비율(%)은 표준수수료율에 곱하는 배율입니다. 빈 기준표는 공통 기준으로 대체됩니다.</p>
     </div>
   );
 }
@@ -193,7 +107,6 @@ function makePolicyEmpty(agencyId: string | null, templatePolicy: FeePolicy | nu
     effectiveTo: null,
     status: "DRAFT",
     standardRate: 3.0,
-    rules: templatePolicy?.rules ?? [],
     description: "",
     createdAt: new Date().toISOString().slice(0, 10),
     createdBy: "김관리",
@@ -629,7 +542,14 @@ function PolicyForm({ initial, onSubmit, onClose }: { initial: PolicyFormData; o
         <BracketEditor brackets={form.feeRateBrackets ?? []} onChange={(b) => sf("feeRateBrackets", b)} />
       </div>
 
-      <RuleEditor rules={form.rules} onChange={(rules) => sf("rules", rules)} />
+      <div>
+        <label className="block text-xs font-medium text-slate-700 mb-2">
+          실제 수수료율 미리보기 <span className="text-slate-400 font-normal">— 위 파라미터로부터 자동 계산됨</span>
+        </label>
+        <div className="border border-slate-200 rounded-lg overflow-hidden">
+          <RuleTable rules={buildPolicyDisplayRules(form)} standardRate={form.standardRate} />
+        </div>
+      </div>
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
         <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
         <button onClick={() => onSubmit(form)} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">저장</button>
@@ -949,7 +869,7 @@ export default function CompanyClassPage() {
             {selectedAgencyId !== null && commonActivePolicy && (
               <div className="mt-4 mx-auto max-w-xl rounded-lg bg-slate-50 border border-slate-200 p-4 text-left">
                 <p className="text-xs font-medium text-slate-600 mb-3">공통 기준 ({commonActivePolicy.version}) 적용 중</p>
-                <RuleTable rules={commonActivePolicy.rules} standardRate={commonActivePolicy.standardRate} />
+                <RuleTable rules={buildPolicyDisplayRules(commonActivePolicy)} standardRate={commonActivePolicy.standardRate} />
               </div>
             )}
           </div>
@@ -958,8 +878,6 @@ export default function CompanyClassPage() {
             {agencyPolicies.map((policy) => {
               const isActive = policy.status === "ACTIVE";
               const isExpanded = isActive || expandedIds.has(policy.id);
-              const displayRules = policy.rules.length > 0 ? policy.rules : (commonActivePolicy?.rules ?? []);
-              const displayRate = policy.rules.length > 0 ? policy.standardRate : (commonActivePolicy?.standardRate ?? policy.standardRate);
 
               return (
                 <div key={policy.id} className={isActive ? "bg-blue-50/30" : undefined}>
@@ -993,10 +911,7 @@ export default function CompanyClassPage() {
                   {/* 기준표 (펼쳐진 상태) */}
                   {isExpanded && (
                     <div className={`px-5 pb-4 ${isActive ? "" : "pt-1"}`}>
-                      {policy.rules.length === 0 && commonActivePolicy && (
-                        <p className="text-xs text-slate-400 mb-2">공통 기준표 적용 ({commonActivePolicy.version})</p>
-                      )}
-                      <RuleTable rules={displayRules} standardRate={displayRate} />
+                      <RuleTable rules={buildPolicyDisplayRules(policy)} standardRate={policy.standardRate} />
                     </div>
                   )}
                 </div>

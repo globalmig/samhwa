@@ -782,10 +782,10 @@ export interface ProjectMember {
 
 export const projectMembers: ProjectMember[] = [
   // p-001: 삼화전자 주관, 4개 기관
-  { id: "pm-001", projectId: "p-001", projectNumber: "RS-2024-00214837", institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", role: "LEAD", budget: 700_000_000, feeRate: 3.0, calculatedFee: 21_000_000, institutionGrade: "일반", contactName: "김연구", contactEmail: "research@samhwa.co.kr", contactPhone: "02-1234-5678", annualBudgets: [{ termYear: 2024, termNumber: 2, cashBudget: 700_000_000, inKindBudget: 0 }] },
-  { id: "pm-002", projectId: "p-001", projectNumber: "RS-2024-00214837", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 1_200_000_000, feeRate: 2.0, calculatedFee: 24_000_000, institutionGrade: "우수(A)", contactName: "이박사", contactEmail: "lee@kist.re.kr", contactPhone: "02-2055-1000", annualBudgets: [{ termYear: 2024, termNumber: 2, cashBudget: 1_200_000_000, inKindBudget: 0 }] },
-  { id: "pm-003", projectId: "p-001", projectNumber: "RS-2024-00214837", institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", role: "PARTICIPANT", budget: 500_000_000, feeRate: 2.0, calculatedFee: 10_000_000, institutionGrade: "최우수(S)", contactName: "박교수", contactEmail: "park@yonsei.ac.kr", contactPhone: "02-2123-3456", annualBudgets: [{ termYear: 2024, termNumber: 2, cashBudget: 500_000_000, inKindBudget: 0 }] },
-  { id: "pm-004", projectId: "p-001", projectNumber: "RS-2024-00214837", institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", role: "PARTICIPANT", budget: 400_000_000, feeRate: 2.5, calculatedFee: 10_000_000, institutionGrade: "일반", contactName: "최담당", contactEmail: "choi@nanomat.co.kr", contactPhone: "031-456-7890", annualBudgets: [{ termYear: 2024, termNumber: 2, cashBudget: 400_000_000, inKindBudget: 0 }] },
+  { id: "pm-001", projectId: "p-001", projectNumber: "RS-2024-00214837", institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", role: "LEAD", budget: 700_000_000, feeRate: 3.0, calculatedFee: 21_000_000, institutionGrade: "일반", contactName: "김연구", contactEmail: "research@samhwa.co.kr", contactPhone: "02-1234-5678", annualBudgets: [{ termYear: 2023, termNumber: 1, cashBudget: 500_000_000, inKindBudget: 0 }, { termYear: 2024, termNumber: 2, cashBudget: 700_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 3, cashBudget: 600_000_000, inKindBudget: 0 }] },
+  { id: "pm-002", projectId: "p-001", projectNumber: "RS-2024-00214837", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 1_200_000_000, feeRate: 2.0, calculatedFee: 24_000_000, institutionGrade: "우수(A)", contactName: "이박사", contactEmail: "lee@kist.re.kr", contactPhone: "02-2055-1000", annualBudgets: [{ termYear: 2023, termNumber: 1, cashBudget: 900_000_000, inKindBudget: 0 }, { termYear: 2024, termNumber: 2, cashBudget: 1_200_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 3, cashBudget: 1_000_000_000, inKindBudget: 0 }] },
+  { id: "pm-003", projectId: "p-001", projectNumber: "RS-2024-00214837", institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", role: "PARTICIPANT", budget: 500_000_000, feeRate: 2.0, calculatedFee: 10_000_000, institutionGrade: "최우수(S)", contactName: "박교수", contactEmail: "park@yonsei.ac.kr", contactPhone: "02-2123-3456", annualBudgets: [{ termYear: 2023, termNumber: 1, cashBudget: 400_000_000, inKindBudget: 0 }, { termYear: 2024, termNumber: 2, cashBudget: 500_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 3, cashBudget: 450_000_000, inKindBudget: 0 }] },
+  { id: "pm-004", projectId: "p-001", projectNumber: "RS-2024-00214837", institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", role: "PARTICIPANT", budget: 400_000_000, feeRate: 2.5, calculatedFee: 10_000_000, institutionGrade: "일반", contactName: "최담당", contactEmail: "choi@nanomat.co.kr", contactPhone: "031-456-7890", annualBudgets: [{ termYear: 2023, termNumber: 1, cashBudget: 300_000_000, inKindBudget: 0 }, { termYear: 2024, termNumber: 2, cashBudget: 400_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 3, cashBudget: 350_000_000, inKindBudget: 0 }] },
 
   // p-002: (주)에너텍솔루션 주관, 6개 기관
   { id: "pm-005", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", role: "LEAD", budget: 1_500_000_000, feeRate: 2.5, calculatedFee: 37_500_000, institutionGrade: "우수(B)", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 1_500_000_000, inKindBudget: 0 }] },
@@ -796,39 +796,39 @@ export const projectMembers: ProjectMember[] = [
   { id: "pm-010", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-011", institutionName: "하이테크머티리얼(주)", institutionType: "스타트업", role: "PARTICIPANT", budget: 100_000_000, feeRate: 2.5, calculatedFee: 2_500_000, institutionGrade: "일반", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 100_000_000, inKindBudget: 0 }] },
 
   // p-003: 나노소재기술 주관, 3개 기관
-  { id: "pm-011", projectId: "p-003", projectNumber: "RS-2024-00201547", institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", role: "LEAD", budget: 600_000_000, feeRate: 2.5, calculatedFee: 15_000_000, institutionGrade: "일반", annualBudgets: [{ termYear: 2022, termNumber: 1, cashBudget: 600_000_000, inKindBudget: 0 }] },
-  { id: "pm-012", projectId: "p-003", projectNumber: "RS-2024-00201547", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 400_000_000, feeRate: 2.0, calculatedFee: 8_000_000, institutionGrade: "우수(A)", annualBudgets: [{ termYear: 2022, termNumber: 1, cashBudget: 400_000_000, inKindBudget: 0 }] },
-  { id: "pm-013", projectId: "p-003", projectNumber: "RS-2024-00201547", institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", role: "PARTICIPANT", budget: 200_000_000, feeRate: 2.0, calculatedFee: 4_000_000, institutionGrade: "우수(B)", annualBudgets: [{ termYear: 2022, termNumber: 1, cashBudget: 200_000_000, inKindBudget: 0 }] },
+  { id: "pm-011", projectId: "p-003", projectNumber: "RS-2024-00201547", institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", role: "LEAD", budget: 600_000_000, feeRate: 2.5, calculatedFee: 15_000_000, institutionGrade: "일반", annualBudgets: [{ termYear: 2022, termNumber: 1, cashBudget: 600_000_000, inKindBudget: 0 }, { termYear: 2023, termNumber: 2, cashBudget: 700_000_000, inKindBudget: 0 }, { termYear: 2024, termNumber: 3, cashBudget: 800_000_000, inKindBudget: 0 }] },
+  { id: "pm-012", projectId: "p-003", projectNumber: "RS-2024-00201547", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 400_000_000, feeRate: 2.0, calculatedFee: 8_000_000, institutionGrade: "우수(A)", annualBudgets: [{ termYear: 2022, termNumber: 1, cashBudget: 400_000_000, inKindBudget: 0 }, { termYear: 2023, termNumber: 2, cashBudget: 450_000_000, inKindBudget: 0 }, { termYear: 2024, termNumber: 3, cashBudget: 500_000_000, inKindBudget: 0 }] },
+  { id: "pm-013", projectId: "p-003", projectNumber: "RS-2024-00201547", institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", role: "PARTICIPANT", budget: 200_000_000, feeRate: 2.0, calculatedFee: 4_000_000, institutionGrade: "우수(B)", annualBudgets: [{ termYear: 2022, termNumber: 1, cashBudget: 200_000_000, inKindBudget: 0 }, { termYear: 2023, termNumber: 2, cashBudget: 230_000_000, inKindBudget: 0 }, { termYear: 2024, termNumber: 3, cashBudget: 250_000_000, inKindBudget: 0 }] },
 
   // p-004: 연세대학교 주관, 5개 기관
-  { id: "pm-014", projectId: "p-004", projectNumber: "RS-2023-00187652", institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", role: "LEAD", budget: 1_500_000_000, feeRate: 2.0, calculatedFee: 30_000_000, institutionGrade: "최우수(S)", annualBudgets: [{ termYear: 2024, termNumber: 2, cashBudget: 1_500_000_000, inKindBudget: 0 }] },
-  { id: "pm-015", projectId: "p-004", projectNumber: "RS-2023-00187652", institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", role: "PARTICIPANT", budget: 800_000_000, feeRate: 2.5, calculatedFee: 20_000_000, institutionGrade: "우수(B)", annualBudgets: [{ termYear: 2024, termNumber: 2, cashBudget: 800_000_000, inKindBudget: 0 }] },
-  { id: "pm-016", projectId: "p-004", projectNumber: "RS-2023-00187652", institutionId: "inst-008", institutionName: "그린바이오텍(주)", institutionType: "중소기업", role: "PARTICIPANT", budget: 500_000_000, feeRate: 3.0, calculatedFee: 15_000_000, institutionGrade: "우수(C)", annualBudgets: [{ termYear: 2024, termNumber: 2, cashBudget: 500_000_000, inKindBudget: 0 }] },
-  { id: "pm-017", projectId: "p-004", projectNumber: "RS-2023-00187652", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 200_000_000, feeRate: 2.0, calculatedFee: 4_000_000, institutionGrade: "우수(A)", annualBudgets: [{ termYear: 2024, termNumber: 2, cashBudget: 200_000_000, inKindBudget: 0 }] },
-  { id: "pm-018", projectId: "p-004", projectNumber: "RS-2023-00187652", institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", role: "PARTICIPANT", budget: 100_000_000, feeRate: 2.0, calculatedFee: 2_000_000, institutionGrade: "우수(B)", annualBudgets: [{ termYear: 2024, termNumber: 2, cashBudget: 100_000_000, inKindBudget: 0 }] },
+  { id: "pm-014", projectId: "p-004", projectNumber: "RS-2023-00187652", institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", role: "LEAD", budget: 1_500_000_000, feeRate: 2.0, calculatedFee: 30_000_000, institutionGrade: "최우수(S)", annualBudgets: [{ termYear: 2023, termNumber: 1, cashBudget: 1_300_000_000, inKindBudget: 0 }, { termYear: 2024, termNumber: 2, cashBudget: 1_500_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 3, cashBudget: 1_600_000_000, inKindBudget: 0 }] },
+  { id: "pm-015", projectId: "p-004", projectNumber: "RS-2023-00187652", institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", role: "PARTICIPANT", budget: 800_000_000, feeRate: 2.5, calculatedFee: 20_000_000, institutionGrade: "우수(B)", annualBudgets: [{ termYear: 2023, termNumber: 1, cashBudget: 700_000_000, inKindBudget: 0 }, { termYear: 2024, termNumber: 2, cashBudget: 800_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 3, cashBudget: 850_000_000, inKindBudget: 0 }] },
+  { id: "pm-016", projectId: "p-004", projectNumber: "RS-2023-00187652", institutionId: "inst-008", institutionName: "그린바이오텍(주)", institutionType: "중소기업", role: "PARTICIPANT", budget: 500_000_000, feeRate: 3.0, calculatedFee: 15_000_000, institutionGrade: "우수(C)", annualBudgets: [{ termYear: 2023, termNumber: 1, cashBudget: 450_000_000, inKindBudget: 0 }, { termYear: 2024, termNumber: 2, cashBudget: 500_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 3, cashBudget: 550_000_000, inKindBudget: 0 }] },
+  { id: "pm-017", projectId: "p-004", projectNumber: "RS-2023-00187652", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 200_000_000, feeRate: 2.0, calculatedFee: 4_000_000, institutionGrade: "우수(A)", annualBudgets: [{ termYear: 2023, termNumber: 1, cashBudget: 180_000_000, inKindBudget: 0 }, { termYear: 2024, termNumber: 2, cashBudget: 200_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 3, cashBudget: 220_000_000, inKindBudget: 0 }] },
+  { id: "pm-018", projectId: "p-004", projectNumber: "RS-2023-00187652", institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", role: "PARTICIPANT", budget: 100_000_000, feeRate: 2.0, calculatedFee: 2_000_000, institutionGrade: "우수(B)", annualBudgets: [{ termYear: 2023, termNumber: 1, cashBudget: 90_000_000, inKindBudget: 0 }, { termYear: 2024, termNumber: 2, cashBudget: 100_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 3, cashBudget: 110_000_000, inKindBudget: 0 }] },
 
   // p-005: 한국과학기술연구원 주관, 2개 기관
-  { id: "pm-019", projectId: "p-005", projectNumber: "RS-2024-00225198", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "LEAD", budget: 800_000_000, feeRate: 2.0, calculatedFee: 16_000_000, institutionGrade: "최우수(S)" },
-  { id: "pm-020", projectId: "p-005", projectNumber: "RS-2024-00225198", institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", role: "PARTICIPANT", budget: 1_400_000_000, feeRate: 3.0, calculatedFee: 42_000_000, institutionGrade: "일반" },
+  { id: "pm-019", projectId: "p-005", projectNumber: "RS-2024-00225198", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "LEAD", budget: 800_000_000, feeRate: 2.0, calculatedFee: 16_000_000, institutionGrade: "최우수(S)", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 800_000_000, inKindBudget: 0 }] },
+  { id: "pm-020", projectId: "p-005", projectNumber: "RS-2024-00225198", institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", role: "PARTICIPANT", budget: 1_400_000_000, feeRate: 3.0, calculatedFee: 42_000_000, institutionGrade: "일반", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 1_400_000_000, inKindBudget: 0 }] },
 
   // p-006: (주)미래반도체 주관, 3개 기관
-  { id: "pm-023", projectId: "p-006", projectNumber: "RS-2024-00231087", institutionId: "inst-009", institutionName: "(주)미래반도체", institutionType: "중소기업", role: "LEAD", budget: 480_000_000, feeRate: 3.0, calculatedFee: 14_400_000, institutionGrade: "일반" },
-  { id: "pm-024", projectId: "p-006", projectNumber: "RS-2024-00231087", institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", role: "PARTICIPANT", budget: 300_000_000, feeRate: 2.5, calculatedFee: 7_500_000, institutionGrade: "일반" },
-  { id: "pm-025", projectId: "p-006", projectNumber: "RS-2024-00231087", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 200_000_000, feeRate: 2.0, calculatedFee: 4_000_000, institutionGrade: "우수(A)" },
+  { id: "pm-023", projectId: "p-006", projectNumber: "RS-2024-00231087", institutionId: "inst-009", institutionName: "(주)미래반도체", institutionType: "중소기업", role: "LEAD", budget: 480_000_000, feeRate: 3.0, calculatedFee: 14_400_000, institutionGrade: "일반", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 480_000_000, inKindBudget: 0 }] },
+  { id: "pm-024", projectId: "p-006", projectNumber: "RS-2024-00231087", institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", role: "PARTICIPANT", budget: 300_000_000, feeRate: 2.5, calculatedFee: 7_500_000, institutionGrade: "일반", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 300_000_000, inKindBudget: 0 }] },
+  { id: "pm-025", projectId: "p-006", projectNumber: "RS-2024-00231087", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 200_000_000, feeRate: 2.0, calculatedFee: 4_000_000, institutionGrade: "우수(A)", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 200_000_000, inKindBudget: 0 }] },
 
   // p-007: (주)한국항공우주 주관, 7개 기관
-  { id: "pm-026", projectId: "p-007", projectNumber: "RS-2023-00176431", institutionId: "inst-006", institutionName: "(주)한국항공우주", institutionType: "중견기업", role: "LEAD", budget: 1_200_000_000, feeRate: 2.5, calculatedFee: 30_000_000, institutionGrade: "우수(B)" },
-  { id: "pm-027", projectId: "p-007", projectNumber: "RS-2023-00176431", institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", role: "PARTICIPANT", budget: 1_200_000_000, feeRate: 3.0, calculatedFee: 36_000_000, institutionGrade: "우수(C)" },
-  { id: "pm-028", projectId: "p-007", projectNumber: "RS-2023-00176431", institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", role: "PARTICIPANT", budget: 1_500_000_000, feeRate: 2.0, calculatedFee: 30_000_000, institutionGrade: "최우수(S)" },
-  { id: "pm-029", projectId: "p-007", projectNumber: "RS-2023-00176431", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 1_000_000_000, feeRate: 2.0, calculatedFee: 20_000_000, institutionGrade: "우수(A)" },
-  { id: "pm-030", projectId: "p-007", projectNumber: "RS-2023-00176431", institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", role: "PARTICIPANT", budget: 500_000_000, feeRate: 2.0, calculatedFee: 10_000_000, institutionGrade: "우수(B)" },
-  { id: "pm-031", projectId: "p-007", projectNumber: "RS-2023-00176431", institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", role: "PARTICIPANT", budget: 200_000_000, feeRate: 2.5, calculatedFee: 5_000_000, institutionGrade: "우수(C)" },
-  { id: "pm-032", projectId: "p-007", projectNumber: "RS-2023-00176431", institutionId: "inst-011", institutionName: "하이테크머티리얼(주)", institutionType: "스타트업", role: "PARTICIPANT", budget: 200_000_000, feeRate: 2.5, calculatedFee: 5_000_000, institutionGrade: "일반" },
+  { id: "pm-026", projectId: "p-007", projectNumber: "RS-2023-00176431", institutionId: "inst-006", institutionName: "(주)한국항공우주", institutionType: "중견기업", role: "LEAD", budget: 1_200_000_000, feeRate: 2.5, calculatedFee: 30_000_000, institutionGrade: "우수(B)", annualBudgets: [{ termYear: 2022, termNumber: 1, cashBudget: 900_000_000, inKindBudget: 90_000_000 }, { termYear: 2023, termNumber: 2, cashBudget: 1_050_000_000, inKindBudget: 100_000_000 }, { termYear: 2024, termNumber: 3, cashBudget: 1_200_000_000, inKindBudget: 120_000_000 }] },
+  { id: "pm-027", projectId: "p-007", projectNumber: "RS-2023-00176431", institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", role: "PARTICIPANT", budget: 1_200_000_000, feeRate: 3.0, calculatedFee: 36_000_000, institutionGrade: "우수(C)", annualBudgets: [{ termYear: 2022, termNumber: 1, cashBudget: 900_000_000, inKindBudget: 90_000_000 }, { termYear: 2023, termNumber: 2, cashBudget: 1_050_000_000, inKindBudget: 100_000_000 }, { termYear: 2024, termNumber: 3, cashBudget: 1_200_000_000, inKindBudget: 120_000_000 }] },
+  { id: "pm-028", projectId: "p-007", projectNumber: "RS-2023-00176431", institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", role: "PARTICIPANT", budget: 1_500_000_000, feeRate: 2.0, calculatedFee: 30_000_000, institutionGrade: "최우수(S)", annualBudgets: [{ termYear: 2022, termNumber: 1, cashBudget: 1_100_000_000, inKindBudget: 110_000_000 }, { termYear: 2023, termNumber: 2, cashBudget: 1_300_000_000, inKindBudget: 130_000_000 }, { termYear: 2024, termNumber: 3, cashBudget: 1_500_000_000, inKindBudget: 150_000_000 }] },
+  { id: "pm-029", projectId: "p-007", projectNumber: "RS-2023-00176431", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 1_000_000_000, feeRate: 2.0, calculatedFee: 20_000_000, institutionGrade: "우수(A)", annualBudgets: [{ termYear: 2022, termNumber: 1, cashBudget: 750_000_000, inKindBudget: 75_000_000 }, { termYear: 2023, termNumber: 2, cashBudget: 900_000_000, inKindBudget: 90_000_000 }, { termYear: 2024, termNumber: 3, cashBudget: 1_000_000_000, inKindBudget: 100_000_000 }] },
+  { id: "pm-030", projectId: "p-007", projectNumber: "RS-2023-00176431", institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", role: "PARTICIPANT", budget: 500_000_000, feeRate: 2.0, calculatedFee: 10_000_000, institutionGrade: "우수(B)", annualBudgets: [{ termYear: 2022, termNumber: 1, cashBudget: 350_000_000, inKindBudget: 35_000_000 }, { termYear: 2023, termNumber: 2, cashBudget: 420_000_000, inKindBudget: 40_000_000 }, { termYear: 2024, termNumber: 3, cashBudget: 500_000_000, inKindBudget: 50_000_000 }] },
+  { id: "pm-031", projectId: "p-007", projectNumber: "RS-2023-00176431", institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", role: "PARTICIPANT", budget: 200_000_000, feeRate: 2.5, calculatedFee: 5_000_000, institutionGrade: "우수(C)", annualBudgets: [{ termYear: 2022, termNumber: 1, cashBudget: 150_000_000, inKindBudget: 15_000_000 }, { termYear: 2023, termNumber: 2, cashBudget: 170_000_000, inKindBudget: 20_000_000 }, { termYear: 2024, termNumber: 3, cashBudget: 200_000_000, inKindBudget: 20_000_000 }] },
+  { id: "pm-032", projectId: "p-007", projectNumber: "RS-2023-00176431", institutionId: "inst-011", institutionName: "하이테크머티리얼(주)", institutionType: "스타트업", role: "PARTICIPANT", budget: 200_000_000, feeRate: 2.5, calculatedFee: 5_000_000, institutionGrade: "일반", annualBudgets: [{ termYear: 2022, termNumber: 1, cashBudget: 150_000_000, inKindBudget: 15_000_000 }, { termYear: 2023, termNumber: 2, cashBudget: 170_000_000, inKindBudget: 20_000_000 }, { termYear: 2024, termNumber: 3, cashBudget: 200_000_000, inKindBudget: 20_000_000 }] },
 
   // p-008: 그린바이오텍 주관, 3개 기관
-  { id: "pm-033", projectId: "p-008", projectNumber: "RS-2024-00219874", institutionId: "inst-008", institutionName: "그린바이오텍(주)", institutionType: "중소기업", role: "LEAD", budget: 1_100_000_000, feeRate: 3.0, calculatedFee: 33_000_000, institutionGrade: "우수(C)" },
-  { id: "pm-034", projectId: "p-008", projectNumber: "RS-2024-00219874", institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", role: "PARTICIPANT", budget: 350_000_000, feeRate: 2.0, calculatedFee: 7_000_000, institutionGrade: "최우수(S)" },
-  { id: "pm-035", projectId: "p-008", projectNumber: "RS-2024-00219874", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 200_000_000, feeRate: 2.0, calculatedFee: 4_000_000, institutionGrade: "우수(A)" },
+  { id: "pm-033", projectId: "p-008", projectNumber: "RS-2024-00219874", institutionId: "inst-008", institutionName: "그린바이오텍(주)", institutionType: "중소기업", role: "LEAD", budget: 1_100_000_000, feeRate: 3.0, calculatedFee: 33_000_000, institutionGrade: "우수(C)", annualBudgets: [{ termYear: 2023, termNumber: 1, cashBudget: 1_100_000_000, inKindBudget: 0 }, { termYear: 2024, termNumber: 2, cashBudget: 1_250_000_000, inKindBudget: 100_000_000 }, { termYear: 2025, termNumber: 3, cashBudget: 1_400_000_000, inKindBudget: 120_000_000 }] },
+  { id: "pm-034", projectId: "p-008", projectNumber: "RS-2024-00219874", institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", role: "PARTICIPANT", budget: 350_000_000, feeRate: 2.0, calculatedFee: 7_000_000, institutionGrade: "최우수(S)", annualBudgets: [{ termYear: 2023, termNumber: 1, cashBudget: 350_000_000, inKindBudget: 0 }, { termYear: 2024, termNumber: 2, cashBudget: 400_000_000, inKindBudget: 40_000_000 }, { termYear: 2025, termNumber: 3, cashBudget: 450_000_000, inKindBudget: 45_000_000 }] },
+  { id: "pm-035", projectId: "p-008", projectNumber: "RS-2024-00219874", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 200_000_000, feeRate: 2.0, calculatedFee: 4_000_000, institutionGrade: "우수(A)", annualBudgets: [{ termYear: 2023, termNumber: 1, cashBudget: 200_000_000, inKindBudget: 0 }, { termYear: 2024, termNumber: 2, cashBudget: 230_000_000, inKindBudget: 20_000_000 }, { termYear: 2025, termNumber: 3, cashBudget: 260_000_000, inKindBudget: 25_000_000 }] },
 
   // p-009: 부산대학교 주관, 3개 기관 (탄소섬유 — 완료 과제)
   { id: "pm-036", projectId: "p-009", projectNumber: "RS-2022-00158234", institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", role: "LEAD", budget: 1_400_000_000, feeRate: 2.0, calculatedFee: 28_000_000, institutionGrade: "우수(A)" },
@@ -843,16 +843,16 @@ export const projectMembers: ProjectMember[] = [
 
 // ============================================================
 // 수수료 기준 정책 (등급별 산출 비율 + 버전 이력)
-// ─ PolicyRule: 대상·등급·정산구분별 수수료 적용 비율 (standardRate에 곱하는 배율)
+// ─ PolicyRule: 대상·등급·정산구분별 수수료 적용 비율 (standardRate에 곱하는 배율) — buildPolicyDisplayRules()가 정책 파라미터로부터 생성
 // ─ FeePolicy: 특정 기간에 적용된 수수료 기준표의 버전 스냅샷
-// ─ agencyId=null은 공통(전역) 기준, 기관별 rules가 없으면 공통 기준 사용
+// ─ agencyId=null은 공통(전역) 기준, 기관별 정책이 없으면 공통 기준 사용
 // ============================================================
 
 export interface PolicyRule {
   subject: "기관" | "과제";
   grade: string;
   gradeName: string;
-  settlementType: "자체정산" | "위탁정산";
+  settlementType: "자체정산" | "위탁정산" | "제외대상";
   annualRate: number;
   settlementRate: number;
 }
@@ -873,7 +873,6 @@ export interface FeePolicy {
   effectiveTo: string | null;
   status: "ACTIVE" | "EXPIRED" | "DRAFT";
   standardRate: number;
-  rules: PolicyRule[];
   description: string;
   createdAt: string;
   createdBy: string;
@@ -965,26 +964,6 @@ export const RDA_BRACKETS: FeeRateBracket[] = [
   { minAmount: 1_000_000_000,  maxAmount: null,            baseFee: 1_800_000 },
 ];
 
-const COMMON_RULES: PolicyRule[] = [
-  { subject: "기관", grade: "일반",       gradeName: "일반",       settlementType: "위탁정산", annualRate: 85, settlementRate: 100 },
-  { subject: "기관", grade: "S",          gradeName: "최우수",     settlementType: "자체정산", annualRate: 85, settlementRate: 85  },
-  { subject: "기관", grade: "S",          gradeName: "최우수",     settlementType: "위탁정산", annualRate: 85, settlementRate: 100 },
-  { subject: "기관", grade: "A~C",        gradeName: "우수",       settlementType: "자체정산", annualRate: 85, settlementRate: 85  },
-  { subject: "기관", grade: "A~C",        gradeName: "우수",       settlementType: "위탁정산", annualRate: 85, settlementRate: 100 },
-  { subject: "과제", grade: "자율성트랙", gradeName: "자율성트랙", settlementType: "자체정산", annualRate: 85, settlementRate: 85  },
-  { subject: "과제", grade: "자율성트랙", gradeName: "자율성트랙", settlementType: "위탁정산", annualRate: 85, settlementRate: 100 },
-];
-
-const KEIT_RULES: PolicyRule[] = [
-  { subject: "기관", grade: "일반",       gradeName: "일반",       settlementType: "위탁정산", annualRate: 85, settlementRate: 100 },
-  { subject: "기관", grade: "S",          gradeName: "최우수",     settlementType: "자체정산", annualRate: 85, settlementRate: 85  },
-  { subject: "기관", grade: "S",          gradeName: "최우수",     settlementType: "위탁정산", annualRate: 85, settlementRate: 100 },
-  { subject: "기관", grade: "A~C",        gradeName: "우수",       settlementType: "자체정산", annualRate: 85, settlementRate: 85  },
-  { subject: "기관", grade: "A~C",        gradeName: "우수",       settlementType: "위탁정산", annualRate: 85, settlementRate: 100 },
-  { subject: "과제", grade: "자율성트랙", gradeName: "자율성트랙", settlementType: "자체정산", annualRate: 85, settlementRate: 85  },
-  { subject: "과제", grade: "자율성트랙", gradeName: "자율성트랙", settlementType: "위탁정산", annualRate: 85, settlementRate: 100 },
-];
-
 export const feePolicies: FeePolicy[] = [
   // ─── 공통(전역) 정책 ───────────────────────────────────────
   {
@@ -996,7 +975,6 @@ export const feePolicies: FeePolicy[] = [
     effectiveTo: null,
     status: "ACTIVE",
     standardRate: 3.0,
-    rules: COMMON_RULES,
     description: "표준수수료율 3.0% 기준 — 등급별 산출 비율은 아래 기준표 참조",
     createdAt: "2024-06-20",
     createdBy: "김관리",
@@ -1017,7 +995,6 @@ export const feePolicies: FeePolicy[] = [
     effectiveTo: "2024-06-30",
     status: "EXPIRED",
     standardRate: 2.8,
-    rules: COMMON_RULES,
     description: "표준수수료율 2.8% 기준",
     createdAt: "2023-12-15",
     createdBy: "김관리",
@@ -1038,7 +1015,6 @@ export const feePolicies: FeePolicy[] = [
     effectiveTo: "2023-12-31",
     status: "EXPIRED",
     standardRate: 2.8,
-    rules: COMMON_RULES,
     description: "표준수수료율 2.8% 기준",
     createdAt: "2022-12-20",
     createdBy: "이회계",
@@ -1060,7 +1036,6 @@ export const feePolicies: FeePolicy[] = [
     effectiveTo: null,
     status: "ACTIVE",
     standardRate: 2.8,
-    rules: KEIT_RULES,
     description: "KEIT 자체 표준수수료율 2.8% — 공통 대비 0.2%p 인하",
     createdAt: "2024-06-15",
     createdBy: "김관리",
@@ -1081,7 +1056,6 @@ export const feePolicies: FeePolicy[] = [
     effectiveTo: "2024-06-30",
     status: "EXPIRED",
     standardRate: 2.8,
-    rules: KEIT_RULES,
     description: "KEIT 최초 자체 정책 도입",
     createdAt: "2022-12-10",
     createdBy: "이회계",
@@ -1103,7 +1077,6 @@ export const feePolicies: FeePolicy[] = [
     effectiveTo: null,
     status: "ACTIVE",
     standardRate: 3.5,
-    rules: COMMON_RULES,
     description: "KETEP 자체 정책 — S등급만 면제, 가산금 일률 10%×N, 자율성트랙 없음",
     createdAt: "2023-12-20",
     createdBy: "김관리",
@@ -1129,7 +1102,6 @@ export const feePolicies: FeePolicy[] = [
     effectiveTo: null,
     status: "ACTIVE",
     standardRate: 3.0,
-    rules: [],
     description: "정보통신 분야 표준수수료율 3.0% — IITP 전용 구간표, S등급 완전 제외, 자율성트랙 없음",
     createdAt: "2023-12-20",
     createdBy: "김관리",
@@ -1153,7 +1125,6 @@ export const feePolicies: FeePolicy[] = [
     effectiveTo: null,
     status: "ACTIVE",
     standardRate: 3.0,
-    rules: [],
     description: "ICT 기금사업 전용 — IITP 일반 R&D 구간표와 다른 별도 구간표 적용, 참여기관별 개별 산정, 매년 100% 청구(단계정산 없음)",
     createdAt: "2023-12-20",
     createdBy: "김관리",
@@ -1178,11 +1149,6 @@ export const feePolicies: FeePolicy[] = [
     effectiveTo: null,
     status: "ACTIVE",
     standardRate: 2.5,
-    rules: [
-      { subject: "기관", grade: "일반", gradeName: "일반",   settlementType: "위탁정산", annualRate: 100, settlementRate: 100 },
-      { subject: "기관", grade: "S",    gradeName: "최우수", settlementType: "위탁정산", annualRate: 100, settlementRate: 100 },
-      { subject: "기관", grade: "A~C",  gradeName: "우수",   settlementType: "위탁정산", annualRate: 100, settlementRate: 100 },
-    ],
     description: "KOFPI — S·A~C 면제 없음, 연차상시 100% 청구, 자율성트랙 없음",
     createdAt: "2023-12-20",
     createdBy: "김관리",
@@ -1205,7 +1171,6 @@ export const feePolicies: FeePolicy[] = [
     effectiveTo: null,
     status: "ACTIVE",
     standardRate: 2.8,
-    rules: [],
     description: "농촌진흥청 1유형(일반기관 트랙) — RDA 전용 구간표(현금+현물 기준), S등급 완전 제외, 자율성트랙 없음",
     createdAt: "2023-12-20",
     createdBy: "김관리",
@@ -1228,7 +1193,6 @@ export const feePolicies: FeePolicy[] = [
     effectiveTo: null,
     status: "ACTIVE",
     standardRate: 2.8,
-    rules: [],
     description: "농촌진흥청 2유형(소속기관 트랙) — RDA1과 동일 기준(현금+현물, S등급 완전 제외). " +
       "주관기관이 농촌진흥청 소속기관인 경우 주관기관을 산정기준에서 제외하고 공동기관수를 -1 보정한 뒤 " +
       "일반 수수료를 공동기관별 사업비 비율로 배분해 표시함(excludeLeadFromCalc). " +

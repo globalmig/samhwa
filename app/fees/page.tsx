@@ -6,7 +6,6 @@ import Link from "next/link";
 import { FiPlus, FiChevronDown, FiChevronUp, FiChevronRight, FiMail } from "react-icons/fi";
 import {
   useStore,
-  addTermFee,
   updateReceivable,
   updateProject,
   updateProjectMember,
@@ -19,7 +18,6 @@ import {
 } from "@/lib/store";
 import {
   type TermFee,
-  type InstitutionType,
   type FeePolicy,
   type TaxInvoice,
   type Project,
@@ -129,7 +127,6 @@ type InfoEditTarget = {
 };
 
 type ModalState =
-  | { mode: "generate" }
   | { mode: "project-add" }
   | { mode: "collection"; target: CollectionTarget }
   | { mode: "sales-issue"; target: SalesTarget }
@@ -1091,13 +1088,6 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
   );
 }
 
-function gradeToRuleGrade(grade?: string): string {
-  if (!grade) return "일반";
-  if (grade === "최우수(S)") return "S";
-  if (grade.startsWith("우수")) return "A~C";
-  return "일반";
-}
-
 // ── useFeeRows ────────────────────────────────────────────────
 function useFeeRows(): FeeRow[] {
   const {
@@ -1249,268 +1239,6 @@ function UnclaimedAmountCell({ row, canEdit }: { row: FeeRow; canEdit: boolean }
       title="회수불가(손실) 금액 직접 입력"
       className="w-24 text-xs text-right border border-transparent hover:border-slate-200 focus:border-blue-400 rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500/30 bg-transparent focus:bg-white"
     />
-  );
-}
-
-// ── TermGenerateForm ──────────────────────────────────────────
-type RowState = {
-  included: boolean;
-  budget: number;
-  feeRate: number;
-  appliedFeeStr: string;
-  registered?: boolean;
-  registeredFee?: number;
-  registeredStatus?: TermFee["status"];
-};
-
-const TERM_FEE_STATUS_LABEL: Record<TermFee["status"], string> = {
-  SCHEDULED: "예정",
-  DRAFT: "초안",
-  CONFIRMED: "확정",
-  BILLED: "발행완료",
-};
-
-function TermGenerateForm({ onClose }: { onClose: () => void }) {
-  const { projects, projectMembers, feePolicies, fundingAgencies, termFees } = useStore();
-  const [projectId, setProjectId]   = useState("");
-  const [termYear, setTermYear]     = useState(new Date().getFullYear());
-  const [termNumber, setTermNumber] = useState(1);
-  const [rows, setRows]             = useState<Record<string, RowState>>({});
-
-  const selectedProject = projects.find((p) => p.id === projectId) ?? null;
-  const members = useMemo(
-    () => (projectId ? projectMembers.filter((m) => m.projectId === projectId) : []),
-    [projectId, projectMembers]
-  );
-
-  const selectedAgency   = fundingAgencies.find((a) => a.id === selectedProject?.agencyId);
-  const selectedProgramType = selectedProject?.programType ?? "GENERAL";
-  const effectivePolicy  = selectedProject
-    ? (feePolicies.find((p) => p.agencyId === selectedProject.agencyId && p.status === "ACTIVE" && (p.programType ?? "GENERAL") === selectedProgramType) ??
-       feePolicies.find((p) => p.agencyId === null && p.status === "ACTIVE" && (p.programType ?? "GENERAL") === selectedProgramType) ?? null)
-    : null;
-
-  function calcEffectiveRate(agencyId: string, grade?: string): number {
-    const ruleGrade    = gradeToRuleGrade(grade);
-    const agencyPolicy = feePolicies.find((p) => p.status === "ACTIVE" && p.agencyId === agencyId);
-    const commonPolicy = feePolicies.find((p) => p.status === "ACTIVE" && p.agencyId === null);
-    const activePolicy = agencyPolicy ?? commonPolicy;
-    const baseRate     = activePolicy?.standardRate ?? 3.0;
-    const rules        = (agencyPolicy?.rules.length ? agencyPolicy.rules : commonPolicy?.rules) ?? [];
-    const rule         = rules.find((r) => r.grade === ruleGrade && r.settlementType === "위탁정산");
-    const annualRatio  = rule?.annualRate ?? 85;
-    return parseFloat((baseRate * annualRatio / 100).toFixed(2));
-  }
-
-  // 과제·연도·연차를 고를 때마다 참여기관별 행을 다시 구성한다.
-  // 이미 등록된(자동/수동 무관) 기관은 included를 false로 두어 중복 생성을 막고 "등록됨"으로 표시한다.
-  useEffect(() => {
-    if (!projectId) { setRows({}); return; }
-    const proj = projects.find((p) => p.id === projectId) ?? null;
-    const mems = projectMembers.filter((m) => m.projectId === projectId);
-    const init: Record<string, RowState> = {};
-    mems.forEach((m) => {
-      const rate = proj ? calcEffectiveRate(proj.agencyId, m.institutionGrade) : m.feeRate;
-      const existing = proj
-        ? termFees.find(
-            (tf) =>
-              tf.projectNumber === proj.projectNumber &&
-              tf.termYear === termYear &&
-              tf.termNumber === termNumber &&
-              tf.institutionId === m.institutionId
-          )
-        : undefined;
-      init[m.id] = {
-        included: !existing,
-        budget: m.budget,
-        feeRate: rate,
-        appliedFeeStr: "",
-        registered: !!existing,
-        registeredFee: existing?.appliedFee,
-        registeredStatus: existing?.status,
-      };
-    });
-    setRows(init);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, termYear, termNumber, projectMembers, termFees]);
-
-  function calcFee(id: string) {
-    const r = rows[id];
-    return r ? Math.round((r.budget * r.feeRate) / 100) : 0;
-  }
-
-  function setRow(id: string, patch: Partial<RowState>) {
-    setRows((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
-  }
-
-  const included   = members.filter((m) => rows[m.id]?.included);
-  const registered = members.filter((m) => rows[m.id]?.registered);
-  const totalCalc  = included.reduce((s, m) => s + calcFee(m.id), 0);
-
-  function handleSubmit() {
-    if (!selectedProject) return;
-    included.forEach((m) => {
-      const r          = rows[m.id];
-      const calculated = calcFee(m.id);
-      addTermFee({
-        projectNumber:   selectedProject.projectNumber,
-        projectName:     selectedProject.projectName,
-        termYear, termNumber,
-        institutionId:   m.institutionId,
-        institutionName: m.institutionName,
-        institutionType: m.institutionType,
-        budget:          r.budget,
-        feeRate:         r.feeRate,
-        calculatedFee:   calculated,
-        appliedFee:      r.appliedFeeStr !== "" ? Number(r.appliedFeeStr) : calculated,
-        status:          "DRAFT",
-      });
-    });
-    onClose();
-  }
-
-  const INSTITUTION_TYPES: InstitutionType[] = [
-    "대기업", "중견기업", "중소기업", "스타트업", "대학", "정부출연연구소", "공공기관",
-  ];
-  void INSTITUTION_TYPES;
-
-  return (
-    <div className="p-6 space-y-5">
-      <div className="grid grid-cols-4 gap-4">
-        <div className="col-span-2">
-          <label className="block text-xs font-medium text-slate-600 mb-1">과제 선택</label>
-          <select className={selectCls} value={projectId} onChange={(e) => setProjectId(e.target.value)}>
-            <option value="">과제를 선택하세요</option>
-            {projects.map((p) => <option key={p.id} value={p.id}>{p.projectName}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">연도</label>
-          <input className={inputCls} type="number" value={termYear} onChange={(e) => setTermYear(Number(e.target.value))} />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">연차</label>
-          <input className={inputCls} type="number" min={1} value={termNumber} onChange={(e) => setTermNumber(Number(e.target.value))} />
-        </div>
-      </div>
-
-      {selectedProject && (
-        <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 px-4 py-3 space-y-2">
-          <div className="flex items-center gap-4 text-xs">
-            <span className="text-indigo-500 font-medium">전담기관</span>
-            <span className="font-mono font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded">
-              {selectedAgency?.shortName ?? "—"}
-            </span>
-            <span className="text-slate-600">{selectedAgency?.name ?? "—"}</span>
-          </div>
-          {effectivePolicy && (
-            <div className="flex items-center gap-4 text-xs flex-wrap">
-              <span className="text-indigo-500 font-medium">수수료 기준</span>
-              <span className="text-slate-700">{effectivePolicy.name} ({effectivePolicy.version})</span>
-              <span className="text-slate-500">표준요율 <span className="font-semibold text-slate-800">{effectivePolicy.standardRate}%</span></span>
-            </div>
-          )}
-          {effectivePolicy?.legacyTransitionNote && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-700 leading-relaxed">
-              <span className="font-semibold">경과조치 안내 · </span>{effectivePolicy.legacyTransitionNote}
-            </div>
-          )}
-          <p className="text-xs text-slate-400">
-            <span className="font-mono text-slate-500">{selectedProject.projectNumber}</span>
-            {" · "}주관: <span className="text-slate-600">{selectedProject.leadInstitutionName}</span>
-          </p>
-        </div>
-      )}
-
-      {members.length > 0 ? (
-        <div className="rounded-xl border border-slate-200 overflow-hidden">
-          <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-600">참여기관별 수수료 산정</span>
-            <span className="text-xs text-slate-400">
-              {members.length}개 기관
-              {registered.length > 0 && ` · 기존 등록 ${registered.length}건 제외`}
-            </span>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-slate-100 bg-slate-50/50 text-slate-500 font-medium">
-                  <th className="px-3 py-2.5 text-center w-8">포함</th>
-                  <th className="px-3 py-2.5 text-left">기관명</th>
-                  <th className="px-3 py-2.5 text-center whitespace-nowrap">구분</th>
-                  <th className="px-3 py-2.5 text-right whitespace-nowrap">연차 사업비(원)</th>
-                  <th className="px-3 py-2.5 text-center whitespace-nowrap">요율</th>
-                  <th className="px-3 py-2.5 text-right whitespace-nowrap">산정수수료</th>
-                  <th className="px-3 py-2.5 text-right whitespace-nowrap">적용수수료 (조정시 입력)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {members.map((m) => {
-                  const r = rows[m.id];
-                  if (!r) return null;
-                  const calc = calcFee(m.id);
-                  return (
-                    <tr key={m.id} className={`border-b border-slate-50 last:border-0 transition-opacity ${!r.included ? "opacity-35" : ""}`}>
-                      <td className="px-3 py-2.5 text-center">
-                        {r.registered ? (
-                          <span
-                            title={`이미 등록된 연차 수수료가 있습니다 (${r.registeredStatus ? TERM_FEE_STATUS_LABEL[r.registeredStatus] : ""})`}
-                            className="inline-block whitespace-nowrap text-[10px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-1.5 py-0.5"
-                          >
-                            등록됨
-                          </span>
-                        ) : (
-                          <input type="checkbox" checked={r.included} onChange={(e) => setRow(m.id, { included: e.target.checked })} className="rounded" />
-                        )}
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <p className="font-medium text-slate-800">{m.institutionName}</p>
-                        <p className="text-slate-400">
-                          {m.role === "LEAD" ? "주관" : "참여"}
-                          {r.registered && ` · 등록된 내용 (${r.registeredStatus ? TERM_FEE_STATUS_LABEL[r.registeredStatus] : ""}, ${fmtWon(r.registeredFee ?? 0)})`}
-                        </p>
-                      </td>
-                      <td className="px-3 py-2.5 text-center text-slate-600 whitespace-nowrap">{m.institutionType}</td>
-                      <td className="px-3 py-2.5">
-                        <input type="number" disabled={!r.included} value={r.budget}
-                          onChange={(e) => setRow(m.id, { budget: Number(e.target.value) })}
-                          className="w-32 text-right border border-slate-200 rounded px-2 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:bg-slate-50 disabled:text-slate-300" />
-                      </td>
-                      <td className="px-3 py-2.5 text-center text-blue-700 font-medium whitespace-nowrap">{r.feeRate}%</td>
-                      <td className="px-3 py-2.5 text-right text-slate-700 whitespace-nowrap font-medium">{fmtWon(calc)}</td>
-                      <td className="px-3 py-2.5">
-                        <input type="number" disabled={!r.included} value={r.appliedFeeStr} placeholder={String(calc)}
-                          onChange={(e) => setRow(m.id, { appliedFeeStr: e.target.value })}
-                          className="w-32 text-right border border-slate-200 rounded px-2 py-1 text-slate-700 placeholder-slate-300 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:bg-slate-50 disabled:text-slate-300" />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-xs">
-            <span className="text-slate-400">포함 {included.length}개 기관 · 산정수수료 합계</span>
-            <span className="font-semibold text-slate-700">{fmtWon(totalCalc)}</span>
-          </div>
-        </div>
-      ) : (
-        <div className="rounded-xl border border-dashed border-slate-200 py-8 text-center text-sm text-slate-400">
-          과제를 선택하면 참여기관 목록이 자동으로 불러와집니다
-        </div>
-      )}
-
-      <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-        <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
-        <button
-          onClick={handleSubmit}
-          disabled={!projectId || included.length === 0}
-          className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          {included.length > 0 ? `${included.length}개 기관 수수료 생성` : "수수료 생성"}
-        </button>
-      </div>
-    </div>
   );
 }
 
@@ -1876,13 +1604,6 @@ export default function FeesPage() {
             >
               <FiPlus size={12} />
               새 과제 추가
-            </button>
-            <button
-              onClick={() => setModal({ mode: "generate" })}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              <FiPlus size={12} />
-              연차 수수료 생성
             </button>
           </div>
         )}
@@ -2286,11 +2007,6 @@ export default function FeesPage() {
         </div>
       </div>
 
-      {modal?.mode === "generate" && (
-        <Modal title="연차 수수료 생성" onClose={() => setModal(null)} size="xl">
-          <TermGenerateForm onClose={() => setModal(null)} />
-        </Modal>
-      )}
       {modal?.mode === "project-add" && (
         <Modal title="새 과제 추가" onClose={() => setModal(null)} size="xl">
           <ProjectAddForm

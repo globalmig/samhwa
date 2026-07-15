@@ -99,6 +99,12 @@ const annualColumns: ColumnDef[] = [
     required: false,
   },
   {
+    field: "inKindBudget",
+    label: "현물사업비총액",
+    aliases: ["현물사업비총액", "현물사업비 총액", "현물총액", "사업비(현물)"],
+    required: false,
+  },
+  {
     field: "isTarget",
     label: "배정대상",
     aliases: ["배정대상", "이번배정대상", "배정 대상"],
@@ -176,6 +182,12 @@ const stageColumns: ColumnDef[] = [
     field: "institutionRole",
     label: "기관역할구분",
     aliases: ["기관역할구분", "역할구분", "기관역할", "역할"],
+    required: false,
+  },
+  {
+    field: "institutionGrade",
+    label: "기관등급",
+    aliases: ["기관등급", "참여기관등급", "기관평가등급", "등급"],
     required: false,
   },
   {

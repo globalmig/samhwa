@@ -1,4 +1,4 @@
-import type { FeePolicy, FeeRateBracket, ExemptInstDetail, TermFeeCalc } from "./mock";
+import type { FeePolicy, FeeRateBracket, ExemptInstDetail, TermFeeCalc, PolicyRule, Project } from "./mock";
 
 // ─── 등급 정규화 ─────────────────────────────────────────────────
 // "최우수(S)", "최우수" → "S"   /   "우수(A/B/C)", "우수" → "A~C"   /   나머지 → "일반"
@@ -7,6 +7,55 @@ export function normalizeGrade(grade: string): string {
   if (grade === "S" || grade.startsWith("최우수")) return "S";
   if (grade === "A~C" || grade.startsWith("우수")) return "A~C";
   return "일반";
+}
+
+// ─── 정산(SETTLEMENT) 연차 판정 ───────────────────────────────────
+// 일괄협약: 총연차의 마지막 연차만 정산. 단계협약: 각 단계의 마지막 연차가 정산.
+// autoGenerateTermFees(store.ts)와 과제 상세 화면(연차별 수수료 현황·참여기관 목록)이
+// 동일한 기준으로 판정해야 화면마다 다른 workType이 표시되는 일이 없다.
+export function isSettlementTerm(
+  project: Pick<Project, "agreementType" | "stages" | "totalTerms">,
+  termNumber: number,
+): boolean {
+  const isBatch = !project.agreementType || project.agreementType === "BATCH";
+  if (isBatch) return termNumber === project.totalTerms;
+  const stages = project.stages ?? [];
+  const stage = stages.find((s) => termNumber >= s.startTermNumber && termNumber <= s.endTermNumber);
+  return stage ? termNumber === stage.endTermNumber : termNumber === project.totalTerms;
+}
+
+// ─── 정책 파라미터로부터 "등급별 산출 비율" 참고표 생성 ────────────
+// exemptGrades/exemptionMode/hasAutonomyTrack/annualBillingRate가 정책의 유일한 진실 소스이며,
+// 이 표는 그 값들로부터 매번 다시 계산한다 — 손으로 별도 관리하는 rules 데이터를 두면
+// 정책 파라미터가 바뀌거나 새 전담기관이 추가될 때 표가 조용히 어긋날 수 있기 때문.
+export function buildPolicyDisplayRules(
+  policy: Pick<FeePolicy, "exemptGrades" | "exemptionMode" | "hasAutonomyTrack" | "annualBillingRate">
+): PolicyRule[] {
+  const annualPct = Math.round(policy.annualBillingRate * 100);
+  const gradeName: Record<"S" | "A~C", string> = { S: "최우수", "A~C": "우수" };
+  const rows: PolicyRule[] = [
+    { subject: "기관", grade: "일반", gradeName: "일반", settlementType: "위탁정산", annualRate: annualPct, settlementRate: 100 },
+  ];
+
+  (["S", "A~C"] as const).forEach((grade) => {
+    if (!policy.exemptGrades.includes(grade)) {
+      rows.push({ subject: "기관", grade, gradeName: gradeName[grade], settlementType: "위탁정산", annualRate: annualPct, settlementRate: 100 });
+      return;
+    }
+    if (policy.exemptionMode === "EXCLUDE") {
+      rows.push({ subject: "기관", grade, gradeName: gradeName[grade], settlementType: "제외대상", annualRate: 0, settlementRate: 0 });
+      return;
+    }
+    rows.push({ subject: "기관", grade, gradeName: gradeName[grade], settlementType: "자체정산", annualRate: annualPct, settlementRate: annualPct });
+    rows.push({ subject: "기관", grade, gradeName: gradeName[grade], settlementType: "위탁정산", annualRate: annualPct, settlementRate: 100 });
+  });
+
+  if (policy.hasAutonomyTrack) {
+    rows.push({ subject: "과제", grade: "자율성트랙", gradeName: "자율성트랙", settlementType: "자체정산", annualRate: annualPct, settlementRate: annualPct });
+    rows.push({ subject: "과제", grade: "자율성트랙", gradeName: "자율성트랙", settlementType: "위탁정산", annualRate: annualPct, settlementRate: 100 });
+  }
+
+  return rows;
 }
 
 // ─── 완전 제외 대상 판정 (EXCLUDE 모드 정책의 면제등급) ──────────

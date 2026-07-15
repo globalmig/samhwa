@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { getCurrentUser } from "./auth";
-import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, type CalcMember } from "./fee-calculator";
+import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, type CalcMember } from "./fee-calculator";
 import {
   institutions as initialInstitutions,
   projects as initialProjects,
@@ -410,15 +410,37 @@ export function updateProject(id: string, data: Partial<Project>): void {
   notify();
 }
 
+// 과제 삭제 시 연결된 참여기관·수수료·이슈·미청구액·미수금·세금계산서까지 함께 정리해
+// 존재하지 않는 과제를 참조하는 레코드가 남지 않도록 한다 (발송 이력은 과거 발송 사실 자체를 보존하기 위해 남겨둔다).
 export function deleteProject(id: string): void {
   const item = _state.projects.find((p) => p.id === id);
   if (!item) return;
+  const num = item.projectNumber;
   _state = {
     ..._state,
     projects: _state.projects.filter((p) => p.id !== id),
     projectMembers: _state.projectMembers.filter((m) => m.projectId !== id),
+    termFees: _state.termFees.filter((f) => f.projectNumber !== num),
+    termFeeCalcs: _state.termFeeCalcs.filter((c) => c.projectNumber !== num),
+    projectIssues: _state.projectIssues.filter((i) => i.projectId !== id),
+    unclaimedFees: _state.unclaimedFees.filter((u) => u.projectNumber !== num),
+    receivables: _state.receivables.filter((r) => r.projectNumber !== num),
+    taxInvoices: _state.taxInvoices.filter((t) => t.projectNumber !== num),
   };
   record("project", id, item.projectName, "DELETE");
+  notify();
+}
+
+// 참여기관 사업비 합계로 과제의 총사업비를 다시 맞춘다 (감사로그를 남기지 않는 파생값 재계산 —
+// 엑셀 일괄등록처럼 참여기관을 프로그램적으로 추가/갱신한 뒤 사후 정리 용도).
+export function recalcProjectTotalBudget(projectId: string): void {
+  const project = _state.projects.find((p) => p.id === projectId);
+  if (!project) return;
+  const total = _state.projectMembers
+    .filter((m) => m.projectId === projectId)
+    .reduce((s, m) => s + (m.cashBudget ?? 0) + (m.inKindBudget ?? 0), 0);
+  if (total === project.totalBudget) return;
+  _state = { ..._state, projects: _state.projects.map((p) => (p.id === projectId ? { ...p, totalBudget: total } : p)) };
   notify();
 }
 
@@ -920,15 +942,6 @@ export function autoGenerateTermFees(projectId: string): void {
     return stage?.stageNumber ?? 1;
   }
 
-  // 각 단계의 마지막 연차 = 정산(SETTLEMENT)
-  const totalTerms = project.totalTerms;
-  function isSettlementTerm(termNumber: number): boolean {
-    if (isBatch) return termNumber === totalTerms;
-    const stageNum = getStageNumber(termNumber);
-    const stage = stages.find((s) => s.stageNumber === stageNum);
-    return stage ? termNumber === stage.endTermNumber : termNumber === totalTerms;
-  }
-
   // CONFIRMED/BILLED로 확정된 연차별 항목은 자동/수동 생성 여부와 무관하게 보존한다.
   const keptFees = _state.termFees.filter(
     (tf) => tf.projectNumber !== project.projectNumber ||
@@ -959,7 +972,7 @@ export function autoGenerateTermFees(projectId: string): void {
     const isActive = termStartStr <= today;
     const feeStatus: TermFee["status"] = isActive ? "DRAFT" : "SCHEDULED";
     const stageNumber = getStageNumber(termNumber);
-    const workType: "ANNUAL" | "SETTLEMENT" = isSettlementTerm(termNumber) ? "SETTLEMENT" : "ANNUAL";
+    const workType: "ANNUAL" | "SETTLEMENT" = isSettlementTerm(project, termNumber) ? "SETTLEMENT" : "ANNUAL";
 
     // 단계 내 누적 미청구 계산
     const carriedOverUnclaimed = stageUnclaimed[stageNumber] ?? 0;
@@ -1023,9 +1036,12 @@ export function autoGenerateTermFees(projectId: string): void {
         instCalcFee = ed?.calculatedFee ?? 0;
         instAppliedFee = ed?.billingFee ?? 0;
       } else {
+        // 정산 연차는 이전 연차들의 일반 미청구 누적액(carriedOverUnclaimed)도 이번 청구에 함께 걷어야 하므로
+        // 일반기관 청구 풀에 더한 뒤 사업비 비율로 배분한다 (그렇지 않으면 이전 연차 미청구분이 영영 청구되지 않음).
         const ratio = totalNonExemptCash > 0 ? getMemberAmount(cm, feeBasis) / totalNonExemptCash : 0;
+        const nonExemptBillingPool = result.generalBillingFee + (workType === "SETTLEMENT" ? carriedOverUnclaimed : 0);
         instCalcFee = Math.round(result.generalFee * ratio);
-        instAppliedFee = Math.round(result.generalBillingFee * ratio);
+        instAppliedFee = Math.round(nonExemptBillingPool * ratio);
       }
 
       newFees.push({
