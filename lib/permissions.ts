@@ -6,20 +6,20 @@ type Role = "ADMIN" | "ACCOUNTANT" | "SETTLEMENT" | "VIEWER";
 
 // ─── 페이지 접근 권한 ────────────────────────────────────────
 const PAGE_ACCESS: Record<string, Role[]> = {
-  "/":               ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
-  "/projects":          ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "/":               ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "/projects":          ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
   "/funding-agencies":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   "/notice-templates":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   "/institutions":      ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  "/fees":           ["ADMIN", "ACCOUNTANT", "VIEWER"],
-  "/fee-calculation":["ADMIN", "ACCOUNTANT"],
-  "/company-class":  ["ADMIN", "ACCOUNTANT"],
-  "/emails":         ["ADMIN", "ACCOUNTANT", "VIEWER"],
+  "/fees":           ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
+  "/fee-calculation":["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "/company-class":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "/emails":         ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
   "/issues":         ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
   "/unclaimed":      ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   "/receivables":    ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   "/settlements":    ["ADMIN", "SETTLEMENT"],
-  "/tax-invoices":   ["ADMIN", "ACCOUNTANT"],
+  "/tax-invoices":   ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   "/policy-history": ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   "/audit-log":      ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
   "/admin/users":    ["ADMIN"],
@@ -27,21 +27,31 @@ const PAGE_ACCESS: Record<string, Role[]> = {
 
 // ─── 쓰기(생성/수정/삭제) 권한 ──────────────────────────────
 const WRITE_ACCESS: Record<string, Role[]> = {
-  fees:           ["ADMIN", "ACCOUNTANT"],
-  "company-class":["ADMIN", "ACCOUNTANT"],
+  fees:           ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  // 매출발행·매출취소·수금관리: 전담기관담당자·조회전용은 입력 불가
+  "fees-sales":   ["ADMIN", "ACCOUNTANT"],
+  "company-class":["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   unclaimed:      ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   receivables:    ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   settlements:    ["ADMIN", "SETTLEMENT"],
-  "tax-invoices": ["ADMIN", "ACCOUNTANT"],
-  emails:         ["ADMIN", "ACCOUNTANT"],
-  projects:            ["ADMIN", "ACCOUNTANT"],
-  "funding-agencies":  ["ADMIN", "ACCOUNTANT"],
-  "notice-templates":  ["ADMIN", "ACCOUNTANT"],
-  institutions:        ["ADMIN", "ACCOUNTANT"],
+  "tax-invoices": ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  emails:         ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  projects:            ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "funding-agencies":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "notice-templates":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  institutions:        ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   users:          ["ADMIN"],
-  issues:         ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  issues:         ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
+  // 이슈 수정·삭제·상태변경: 조회전용은 등록만 가능하고 관리는 불가
+  "issues-manage": ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   notices:        ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
 };
+
+// 로그인/접근거부 시 이동할 역할별 기본 페이지 (VIEWER는 통합 대시보드 비노출)
+export function defaultLandingPath(role: Role | undefined): string {
+  if (role === "VIEWER") return "/fees";
+  return "/";
+}
 
 export function canAccessPage(role: Role | undefined, pathname: string): boolean {
   if (!role) return false;

@@ -12,13 +12,16 @@ import {
   updateProjectMember, autoGenerateTermFees, addProjectMember, deleteProjectMember, deleteProject,
 } from "@/lib/store";
 import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, EMPTY_NOTICE_TEMPLATE, COMPANY_INFO } from "@/lib/mock";
-import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, type CalcMember } from "@/lib/fee-calculator";
-import { fmtWonFull, fmtDate } from "@/lib/utils";
+import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isNonProfitInstitution, resolveRdaAgencyId, type CalcMember } from "@/lib/fee-calculator";
+import { fmtWonFull, fmtDate, splitVatInclusive } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
+import MoneyInput from "@/components/common/MoneyInput";
+import DateInput from "@/components/common/DateInput";
 import NoticeLetterPreview, { type NoticeStatusRow } from "@/components/common/NoticeLetterPreview";
 import InstitutionQuickAdd from "@/components/common/InstitutionQuickAdd";
 import { useCanWrite } from "@/lib/permissions";
+import { getCurrentUser } from "@/lib/auth";
 
 // ─── Shared styles ───────────────────────────────────────────
 const inp = "text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400";
@@ -99,6 +102,7 @@ interface TermGroup {
 function ProjectInfoTab({ projectId }: { projectId: string }) {
   const canEditProjects = useCanWrite('projects');
   const canEditIssues = useCanWrite('issues');
+  const canManageIssues = useCanWrite('issues-manage');
   const { projects, projectMembers, institutions, projectIssues, auditLog, fundingAgencies, feePolicies, termFeeCalcs } = useStore();
 
   const project = projects.find((p) => p.id === projectId) ?? null;
@@ -113,6 +117,8 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   const [savedMsg, setSavedMsg] = useState(false);
   const [editingMembers, setEditingMembers] = useState(false);
   const [memberDrafts, setMemberDrafts] = useState<Record<string, Partial<ProjectMember>>>({});
+  const [budgetDrafts, setBudgetDrafts] = useState<Record<string, { cashBudget: number; inKindBudget: number }>>({});
+  const [budgetMismatchError, setBudgetMismatchError] = useState("");
   const [showAddMember, setShowAddMember] = useState(false);
   const [editingBudgetMember, setEditingBudgetMember] = useState<ProjectMember | null>(null);
   const [showIssueForm, setShowIssueForm] = useState(false);
@@ -138,11 +144,28 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
 
   // KEIT 수수료 산정 (현재 연차 기준)
   const currentTerm = project.currentTerm ?? 1;
+
+  function getCurrentTermBudget(m: ProjectMember): { cashBudget: number; inKindBudget: number } {
+    const ab = m.annualBudgets?.find((a) => a.termNumber === currentTerm);
+    return {
+      cashBudget: ab?.cashBudget ?? m.cashBudget ?? m.budget ?? 0,
+      inKindBudget: ab?.inKindBudget ?? m.inKindBudget ?? 0,
+    };
+  }
+  function getMemberBudgetVal(m: ProjectMember, field: "cashBudget" | "inKindBudget"): number {
+    return budgetDrafts[m.id]?.[field] ?? getCurrentTermBudget(m)[field];
+  }
+  function setMemberBudgetField(m: ProjectMember, field: "cashBudget" | "inKindBudget", value: number) {
+    setBudgetMismatchError("");
+    setBudgetDrafts((prev) => ({
+      ...prev,
+      [m.id]: { ...(prev[m.id] ?? getCurrentTermBudget(m)), [field]: value },
+    }));
+  }
+
   const policy = resolvePolicy(project.agencyId, feePolicies, project.programType ?? "GENERAL");
   const calcMembers: CalcMember[] = policy ? members.flatMap((m) => {
-    const ab = m.annualBudgets?.find((a) => a.termNumber === currentTerm);
-    const cashBudget = ab?.cashBudget ?? (m as unknown as { cashBudget?: number }).cashBudget ?? m.budget ?? 0;
-    const inKindBudget = ab?.inKindBudget ?? 0;
+    const { cashBudget, inKindBudget } = getCurrentTermBudget(m);
     const amount = policy.feeBasis === "CASH_PLUS_INKIND" ? cashBudget + inKindBudget : cashBudget;
     if (amount <= 0) return [];
     return [{
@@ -150,6 +173,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       institutionName: m.institutionName,
       role: m.role as "LEAD" | "PARTICIPANT",
       grade: normalizeGrade(m.institutionGrade ?? "일반"),
+      institutionType: m.institutionType,
       settlementType: (m.settlementType ?? "위탁정산") as "위탁정산" | "자체정산",
       cashBudget,
       inKindBudget,
@@ -198,10 +222,17 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
 
   function saveEdit() {
     const inst = institutions.find((i) => i.id === draft.leadInstitutionId);
+    const leadInstitutionName = inst?.name ?? project!.leadInstitutionName;
     const annualBudget = (draft.govGrant ?? 0) + (draft.privateCash ?? 0) + (draft.privateInKind ?? 0);
+    // 전담기관이 농촌진흥청 계열(RDA1/RDA2)이면 주관기관명으로 실제 트랙을 자동 교정한다 —
+    // 두 레코드 모두 표시 이름이 "농촌진흥청"이라 사람이 직접 고르면 실수하기 쉽다.
+    const resolvedAgencyId = resolveRdaAgencyId(draft.agencyId, leadInstitutionName);
+    const resolvedAgency = fundingAgencies.find((a) => a.id === resolvedAgencyId)?.name ?? draft.agency;
     updateProject(projectId, {
       ...draft,
-      leadInstitutionName: inst?.name ?? project!.leadInstitutionName,
+      agencyId: resolvedAgencyId,
+      agency: resolvedAgency,
+      leadInstitutionName,
       totalBudget: annualBudget > 0 ? annualBudget : draft.totalBudget,
     });
     setSavedMsg(true);
@@ -210,14 +241,40 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
 
   const annualBudget = (draft.govGrant ?? 0) + (draft.privateCash ?? 0) + (draft.privateInKind ?? 0);
 
-  function startMemberEdit() { setMemberDrafts({}); setEditingMembers(true); }
-  function cancelMemberEdit() { setEditingMembers(false); setMemberDrafts({}); }
+  const totalCashBudget = members.reduce((s, m) => s + getMemberBudgetVal(m, "cashBudget"), 0);
+  const totalInKindBudget = members.reduce((s, m) => s + getMemberBudgetVal(m, "inKindBudget"), 0);
+  const budgetMatchesAnnual = totalCashBudget + totalInKindBudget === annualBudget;
+
+  function startMemberEdit() { setMemberDrafts({}); setBudgetDrafts({}); setBudgetMismatchError(""); setEditingMembers(true); }
+  function cancelMemberEdit() { setEditingMembers(false); setMemberDrafts({}); setBudgetDrafts({}); setBudgetMismatchError(""); }
   function saveMemberEdits() {
-    Object.entries(memberDrafts).forEach(([id, changes]) => {
+    if (!budgetMatchesAnnual) {
+      setBudgetMismatchError(
+        `현금합계(${fmtWonFull(totalCashBudget)}) + 현물합계(${fmtWonFull(totalInKindBudget)})가 당해 사업비 자동계산 금액(${fmtWonFull(annualBudget)})과 일치하지 않아 저장할 수 없습니다.`
+      );
+      return;
+    }
+    const ids = new Set([...Object.keys(memberDrafts), ...Object.keys(budgetDrafts)]);
+    ids.forEach((id) => {
+      const m = members.find((mm) => mm.id === id);
+      if (!m) return;
+      const changes: Partial<ProjectMember> = { ...(memberDrafts[id] ?? {}) };
+      const bd = budgetDrafts[id];
+      if (bd) {
+        const existing = m.annualBudgets ?? [];
+        const termYear = existing.find((a) => a.termNumber === currentTerm)?.termYear
+          ?? termNumberToYear(project!.startDate, currentTerm);
+        changes.annualBudgets = [
+          ...existing.filter((a) => a.termNumber !== currentTerm),
+          { termYear, termNumber: currentTerm, cashBudget: bd.cashBudget, inKindBudget: bd.inKindBudget },
+        ].sort((a, b) => a.termNumber - b.termNumber);
+      }
       if (Object.keys(changes).length > 0) updateProjectMember(id, changes);
     });
     setEditingMembers(false);
     setMemberDrafts({});
+    setBudgetDrafts({});
+    setBudgetMismatchError("");
   }
   function setMemberField(memberId: string, field: keyof ProjectMember, value: unknown) {
     setMemberDrafts((prev) => ({ ...prev, [memberId]: { ...prev[memberId], [field]: value } }));
@@ -321,48 +378,55 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             <div className="grid grid-cols-2 gap-x-6 gap-y-3">
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">당해 정부출연금 (원)</label>
-                <input className={`${inp} w-full`} type="number" value={draft.govGrant ?? 0}
-                  onChange={(e) => setDraft((p) => ({ ...p, govGrant: Number(e.target.value) }))} />
+                <MoneyInput className={`${inp} w-full`} value={draft.govGrant ?? 0}
+                  onChange={(v) => setDraft((p) => ({ ...p, govGrant: v }))} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">
                   사용실적 제출기한
                   <span className="ml-1 text-slate-400 font-normal">· 전담기관 사용실적보고서 기준</span>
                 </label>
-                <input className={`${inp} w-full`} type="date" value={draft.usageReportDeadline ?? ""}
-                  onChange={(e) => setDraft((p) => ({ ...p, usageReportDeadline: e.target.value }))} />
+                <DateInput className="w-full" value={draft.usageReportDeadline ?? ""}
+                  onChange={(v) => setDraft((p) => ({ ...p, usageReportDeadline: v }))} />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">당해 민간원금 (원)</label>
-                <input className={`${inp} w-full`} type="number" value={draft.privateCash ?? 0}
-                  onChange={(e) => setDraft((p) => ({ ...p, privateCash: Number(e.target.value) }))} />
+                <label className="block text-xs font-medium text-slate-500 mb-1">당해 민간현금 (원)</label>
+                <MoneyInput className={`${inp} w-full`} value={draft.privateCash ?? 0}
+                  onChange={(v) => setDraft((p) => ({ ...p, privateCash: v }))} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">공동기관 수</label>
                 <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-white text-slate-500">
                   {members.length}개
                 </div>
+                <p className="text-[10px] text-slate-400 mt-1">참여기관 목록에서 기관을 추가·삭제하면 자동 반영됩니다</p>
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">당해 민간현물 (원)</label>
-                <input className={`${inp} w-full`} type="number" value={draft.privateInKind ?? 0}
-                  onChange={(e) => setDraft((p) => ({ ...p, privateInKind: Number(e.target.value) }))} />
+                <MoneyInput className={`${inp} w-full`} value={draft.privateInKind ?? 0}
+                  onChange={(v) => setDraft((p) => ({ ...p, privateInKind: v }))} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">전담기관 배정일자</label>
-                <input className={`${inp} w-full`} type="date" value={draft.agencyAssignedAt ?? ""}
-                  onChange={(e) => setDraft((p) => ({ ...p, agencyAssignedAt: e.target.value }))} />
+                <DateInput className="w-full" value={draft.agencyAssignedAt ?? ""}
+                  onChange={(v) => setDraft((p) => ({ ...p, agencyAssignedAt: v }))} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">당해 현금사업비 (자동계산)</label>
+                <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-white font-bold text-slate-700">
+                  {fmtWonFull((draft.govGrant ?? 0) + (draft.privateCash ?? 0))}
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">내부 배정일</label>
+                <DateInput className="w-full" value={draft.internalAssignedAt ?? ""}
+                  onChange={(v) => setDraft((p) => ({ ...p, internalAssignedAt: v }))} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">당해 사업비 (자동계산)</label>
                 <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-white font-bold text-slate-700">
                   {fmtWonFull(annualBudget)}
                 </div>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">내부 배정일</label>
-                <input className={`${inp} w-full`} type="date" value={draft.internalAssignedAt ?? ""}
-                  onChange={(e) => setDraft((p) => ({ ...p, internalAssignedAt: e.target.value }))} />
               </div>
             </div>
           </div>
@@ -371,23 +435,23 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
           <div className="grid grid-cols-4 gap-4">
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">최초시작일</label>
-              <input className={`${inp} w-full`} type="date" value={draft.firstStartDate ?? ""}
-                onChange={(e) => setDraft((p) => ({ ...p, firstStartDate: e.target.value }))} />
+              <DateInput className="w-full" value={draft.firstStartDate ?? ""}
+                onChange={(v) => setDraft((p) => ({ ...p, firstStartDate: v }))} />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">최종종료일</label>
-              <input className={`${inp} w-full`} type="date" value={draft.finalEndDate ?? ""}
-                onChange={(e) => setDraft((p) => ({ ...p, finalEndDate: e.target.value }))} />
+              <DateInput className="w-full" value={draft.finalEndDate ?? ""}
+                onChange={(v) => setDraft((p) => ({ ...p, finalEndDate: v }))} />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">단계시작일</label>
-              <input className={`${inp} w-full`} type="date" value={draft.stageStartDate ?? ""}
-                onChange={(e) => setDraft((p) => ({ ...p, stageStartDate: e.target.value }))} />
+              <DateInput className="w-full" value={draft.stageStartDate ?? ""}
+                onChange={(v) => setDraft((p) => ({ ...p, stageStartDate: v }))} />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">단계종료일</label>
-              <input className={`${inp} w-full`} type="date" value={draft.stageEndDate ?? ""}
-                onChange={(e) => setDraft((p) => ({ ...p, stageEndDate: e.target.value }))} />
+              <DateInput className="w-full" value={draft.stageEndDate ?? ""}
+                onChange={(v) => setDraft((p) => ({ ...p, stageEndDate: v }))} />
             </div>
           </div>
 
@@ -395,22 +459,20 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
           <div className="grid grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">당해시작일</label>
-              <input className={`${inp} w-full`} type="date" value={draft.startDate}
-                onChange={(e) => setDraft((p) => ({ ...p, startDate: e.target.value }))} />
+              <DateInput className="w-full" value={draft.startDate}
+                onChange={(v) => setDraft((p) => ({ ...p, startDate: v }))} />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">당해종료일</label>
-              <input className={`${inp} w-full`} type="date" value={draft.endDate}
-                onChange={(e) => setDraft((p) => ({ ...p, endDate: e.target.value }))} />
+              <DateInput className="w-full" value={draft.endDate}
+                onChange={(v) => setDraft((p) => ({ ...p, endDate: v }))} />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">과제 구분</label>
               <select className={`${sel} w-full`} value={draft.projectCategory ?? "연차상시"}
                 onChange={(e) => setDraft((p) => ({ ...p, projectCategory: e.target.value }))}>
                 <option value="연차상시">연차상시</option>
-                <option value="연차">연차</option>
-                <option value="상시">상시</option>
-                <option value="기타">기타</option>
+                <option value="정산">정산</option>
               </select>
             </div>
             <div>
@@ -466,13 +528,18 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
           <div>
             <h3 className="text-sm font-semibold text-slate-800">참여기관 목록</h3>
-            <p className="text-xs text-slate-400 mt-0.5">기관별 사업비 및 등급 수정 가능 · 예산 변경 시 수수료 재산정 반영</p>
+            <p className="text-xs text-slate-400 mt-0.5">기관별 현금·현물 사업비 및 등급 수정 가능 · 예산 변경 시 수수료 재산정 반영</p>
           </div>
           <div className="flex items-center gap-3">
             <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
               currentWorkType === "SETTLEMENT" ? "bg-purple-100 text-purple-700" : "bg-slate-100 text-slate-500"
             }`}>
               {currentTerm}연차 · {currentWorkType === "SETTLEMENT" ? "정산" : "연차상시"}
+            </span>
+            <span className={`text-xs ${budgetMatchesAnnual ? "text-slate-500" : "text-red-600 font-medium"}`}>
+              현금+현물 합계 <strong className={budgetMatchesAnnual ? "text-slate-800" : "text-red-600"}>{fmtWonFull(totalCashBudget + totalInKindBudget)}</strong>
+              <span className="text-slate-400 mx-1">/</span>
+              당해 사업비 {fmtWonFull(annualBudget)}
             </span>
             <span className="text-xs text-slate-500">
               산정 수수료 합계 <strong className="text-slate-800 ml-1">{fmtWonFull(totalCalcFee)}</strong>
@@ -502,6 +569,11 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             ) : null}
           </div>
         </div>
+        {budgetMismatchError && (
+          <div className="px-5 py-2.5 bg-red-50 border-b border-red-100 text-xs font-medium text-red-600">
+            {budgetMismatchError}
+          </div>
+        )}
         {showAddMember && (
           <AddMemberForm
             projectId={projectId}
@@ -522,7 +594,9 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500">기관명</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500">역할</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500">등급</th>
-                <th className="text-right px-4 py-3 text-xs font-medium text-slate-500">배정예산 (원)</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500">정산구분</th>
+                <th className="text-right px-4 py-3 text-xs font-medium text-slate-500">현금예산 (원)</th>
+                <th className="text-right px-4 py-3 text-xs font-medium text-slate-500">현물예산 (원)</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500">구분</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-slate-500">산정 수수료 ({currentTerm}연차)</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 w-24">연차별 사업비</th>
@@ -533,7 +607,8 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               {members.map((m) => {
                 const rawGrade = (getMemberVal(m, "institutionGrade") ?? "일반") as string;
                 const grade = normalizeGrade(rawGrade);
-                const budget = getMemberVal(m, "budget") as number;
+                const cashBudget = getMemberBudgetVal(m, "cashBudget");
+                const inKindBudget = getMemberBudgetVal(m, "inKindBudget");
                 return (
                   <tr key={m.id} className="border-b border-slate-50 hover:bg-slate-50">
                     <td className="px-4 py-3">
@@ -568,17 +643,49 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                           {GRADE_LABEL[grade] ?? grade}
                         </span>
                       )}
+                      {grade !== "일반" && !isNonProfitInstitution(m.institutionType) && (
+                        <p className="text-[10px] text-amber-600 mt-1 leading-tight" title="정산면제는 비영리기관(대학·정부출연연구소·공공기관)만 해당하여, 영리기업은 등급이 있어도 정산면제가 적용되지 않습니다.">
+                          ⚠ 영리기관·면제불가
+                        </p>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      {editingMembers ? (
+                        <select
+                          value={getMemberVal(m, "settlementType") ?? "위탁정산"}
+                          onChange={(e) => setMemberField(m.id, "settlementType", e.target.value as ProjectMember["settlementType"])}
+                          className="text-xs border border-slate-200 rounded-lg px-2 py-1 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400">
+                          <option value="위탁정산">위탁정산</option>
+                          <option value="자체정산">자체정산</option>
+                        </select>
+                      ) : (
+                        <span className={`text-xs font-medium px-2 py-0.5 rounded ${
+                          (m.settlementType ?? "위탁정산") === "자체정산" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"
+                        }`}>
+                          {m.settlementType ?? "위탁정산"}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-right">
                       {editingMembers ? (
-                        <input
-                          type="number"
-                          value={budget}
-                          onChange={(e) => setMemberField(m.id, "budget", Number(e.target.value))}
+                        <MoneyInput
+                          value={cashBudget}
+                          onChange={(v) => setMemberBudgetField(m, "cashBudget", v)}
                           className={`${inp} w-36 text-right`}
                         />
                       ) : (
-                        <span className="text-sm text-slate-700">{fmtWonFull(budget)}</span>
+                        <span className="text-sm text-slate-700">{fmtWonFull(cashBudget)}</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {editingMembers ? (
+                        <MoneyInput
+                          value={inKindBudget}
+                          onChange={(v) => setMemberBudgetField(m, "inKindBudget", v)}
+                          className={`${inp} w-36 text-right`}
+                        />
+                      ) : (
+                        <span className="text-sm text-slate-700">{fmtWonFull(inKindBudget)}</span>
                       )}
                     </td>
                     <td className="px-4 py-3 text-center">
@@ -618,7 +725,14 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             </tbody>
             <tfoot>
               <tr className="bg-slate-50 border-t border-slate-200">
-                <td colSpan={5} className="px-4 py-2.5 text-right text-xs text-slate-400">합계</td>
+                <td colSpan={4} className="px-4 py-2.5 text-right text-xs text-slate-400">합계</td>
+                <td className={`px-4 py-2.5 text-right font-bold ${budgetMatchesAnnual ? "text-slate-800" : "text-red-600"}`}>
+                  현금 {fmtWonFull(totalCashBudget)}
+                </td>
+                <td className={`px-4 py-2.5 text-right font-bold ${budgetMatchesAnnual ? "text-slate-800" : "text-red-600"}`}>
+                  현물 {fmtWonFull(totalInKindBudget)}
+                </td>
+                <td />
                 <td className="px-4 py-2.5 text-right font-bold text-slate-800">{fmtWonFull(totalCalcFee)}</td>
                 <td />
                 {canEditProjects && <td />}
@@ -773,7 +887,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                     <p className="text-sm text-slate-700 leading-relaxed">{issue.content}</p>
                     <p className="text-xs text-slate-400 mt-1">{issue.author} · {issue.createdAt}</p>
                   </div>
-                  {canEditIssues ? (
+                  {canManageIssues ? (
                     <select
                       value={issue.status ?? "OPEN"}
                       onChange={(e) => updateProjectIssue(issue.id, { status: e.target.value as "OPEN" | "IN_PROGRESS" | "RESOLVED" })}
@@ -787,7 +901,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                       {ISSUE_STATUS_LABEL[issue.status ?? "OPEN"]}
                     </span>
                   )}
-                  {canEditIssues && (
+                  {canManageIssues && (
                     isDeleting ? (
                       <div className="flex items-center gap-1 shrink-0">
                         <button onClick={() => { deleteProjectIssue(issue.id); setDeletingIssueId(null); }}
@@ -929,18 +1043,18 @@ function AnnualBudgetEditor({
                 <td className="px-3 py-2 font-medium text-slate-700 whitespace-nowrap">{r.termNumber}연차</td>
                 <td className="px-3 py-2 text-slate-500">{r.termYear}</td>
                 <td className="px-3 py-2">
-                  <input
-                    type="number" min={0} disabled={!canEdit}
+                  <MoneyInput
+                    disabled={!canEdit}
                     value={r.cashBudget}
-                    onChange={(e) => setRow(r.termNumber, { cashBudget: Number(e.target.value) })}
+                    onChange={(v) => setRow(r.termNumber, { cashBudget: v })}
                     className="w-full text-right bg-white border border-slate-300 rounded px-2 py-1.5 text-slate-900 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 disabled:bg-slate-50 disabled:text-slate-400"
                   />
                 </td>
                 <td className="px-3 py-2">
-                  <input
-                    type="number" min={0} disabled={!canEdit}
+                  <MoneyInput
+                    disabled={!canEdit}
                     value={r.inKindBudget}
-                    onChange={(e) => setRow(r.termNumber, { inKindBudget: Number(e.target.value) })}
+                    onChange={(v) => setRow(r.termNumber, { inKindBudget: v })}
                     className="w-full text-right bg-white border border-slate-300 rounded px-2 py-1.5 text-slate-900 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 disabled:bg-slate-50 disabled:text-slate-400"
                   />
                 </td>
@@ -1079,18 +1193,16 @@ function AddMemberForm({
                   <td className="px-3 py-2 font-medium text-slate-700 whitespace-nowrap">{r.termNumber}연차</td>
                   <td className="px-3 py-2 text-slate-500">{r.termYear}</td>
                   <td className="px-3 py-2">
-                    <input
-                      type="number" min={0}
+                    <MoneyInput
                       value={r.cashBudget}
-                      onChange={(e) => setRow(r.termNumber, { cashBudget: Number(e.target.value) })}
+                      onChange={(v) => setRow(r.termNumber, { cashBudget: v })}
                       className="w-full text-right bg-white border border-slate-300 rounded px-2 py-1.5 text-slate-900 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
                     />
                   </td>
                   <td className="px-3 py-2">
-                    <input
-                      type="number" min={0}
+                    <MoneyInput
                       value={r.inKindBudget}
-                      onChange={(e) => setRow(r.termNumber, { inKindBudget: Number(e.target.value) })}
+                      onChange={(v) => setRow(r.termNumber, { inKindBudget: v })}
                       className="w-full text-right bg-white border border-slate-300 rounded px-2 py-1.5 text-slate-900 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
                     />
                   </td>
@@ -1132,9 +1244,8 @@ function TermSection({ group, projectNumber, agencyId, leadInstitutionId, leadIn
   const [issuingInvoice, setIssuingInvoice] = useState(false);
   const [invForm, setInvForm] = useState({
     issuedAt: new Date().toISOString().slice(0, 10),
-    supplyAmount: group.totalApplied,
-    taxAmount: Math.round(group.totalApplied * 0.1),
-    totalAmount: Math.round(group.totalApplied * 1.1),
+    ...splitVatInclusive(group.totalApplied),
+    totalAmount: group.totalApplied,
   });
   const [editingRv, setEditingRv] = useState(false);
   const [rvForm, setRvForm] = useState({
@@ -1144,16 +1255,16 @@ function TermSection({ group, projectNumber, agencyId, leadInstitutionId, leadIn
   function openInvoiceForm() {
     setInvForm({
       issuedAt: new Date().toISOString().slice(0, 10),
-      supplyAmount: group.totalApplied,
-      taxAmount: Math.round(group.totalApplied * 0.1),
-      totalAmount: Math.round(group.totalApplied * 1.1),
+      ...splitVatInclusive(group.totalApplied),
+      totalAmount: group.totalApplied,
     });
     setIssuingInvoice(true);
   }
 
+  // 합계(=산정된 수수료)는 고정, 공급가액을 조정하면 부가세가 차액만큼 재계산된다
   function handleSupplyChange(v: number) {
-    const tax = Math.round(v * 0.1);
-    setInvForm((p) => ({ ...p, supplyAmount: v, taxAmount: tax, totalAmount: v + tax }));
+    const tax = group.totalApplied - v;
+    setInvForm((p) => ({ ...p, supplyAmount: v, taxAmount: tax, totalAmount: group.totalApplied }));
   }
 
   function saveInvoice() {
@@ -1244,6 +1355,7 @@ function TermSection({ group, projectNumber, agencyId, leadInstitutionId, leadIn
       addEmailDispatch({
         batchId,
         sentAt,
+        senderName: getCurrentUser()?.name ?? "시스템",
         recipientInstitution: r.institutionName,
         recipientEmail: r.email,
         subject: `[${projectNumber}] ${termLabel} 수수료 청구서`,
@@ -1360,23 +1472,26 @@ function TermSection({ group, projectNumber, agencyId, leadInstitutionId, leadIn
             </table>
           </div>
 
-          {/* 수수료 집계: 공급가액 / 부가세 / 합계 */}
-          {group.totalApplied > 0 && (
-            <div className="border-t border-slate-200 px-5 py-3 bg-slate-50/60 flex items-center justify-end gap-10">
-              <div className="text-right">
-                <p className="text-[10px] text-slate-400 mb-0.5">공 급 가 액</p>
-                <p className="text-sm font-semibold text-slate-700">{fmtWonFull(group.totalApplied)}</p>
+          {/* 수수료 집계: 공급가액 / 부가세 / 합계 — 산정된 수수료는 부가세 포함 금액이므로 분리해서 표시 */}
+          {group.totalApplied > 0 && (() => {
+            const { supplyAmount: aggSupply, taxAmount: aggTax } = splitVatInclusive(group.totalApplied);
+            return (
+              <div className="border-t border-slate-200 px-5 py-3 bg-slate-50/60 flex items-center justify-end gap-10">
+                <div className="text-right">
+                  <p className="text-[10px] text-slate-400 mb-0.5">공 급 가 액</p>
+                  <p className="text-sm font-semibold text-slate-700">{fmtWonFull(aggSupply)}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] text-slate-400 mb-0.5">부 가 세</p>
+                  <p className="text-sm font-semibold text-slate-700">{fmtWonFull(aggTax)}</p>
+                </div>
+                <div className="border-l border-slate-300 pl-10 text-right">
+                  <p className="text-[10px] font-semibold text-slate-500 mb-0.5 tracking-widest uppercase">합  계</p>
+                  <p className="text-lg font-bold text-slate-900">{fmtWonFull(group.totalApplied)}</p>
+                </div>
               </div>
-              <div className="text-right">
-                <p className="text-[10px] text-slate-400 mb-0.5">부 가 세 (10%)</p>
-                <p className="text-sm font-semibold text-slate-700">{fmtWonFull(Math.round(group.totalApplied * 0.1))}</p>
-              </div>
-              <div className="border-l border-slate-300 pl-10 text-right">
-                <p className="text-[10px] font-semibold text-slate-500 mb-0.5 tracking-widest uppercase">합  계</p>
-                <p className="text-lg font-bold text-slate-900">{fmtWonFull(Math.round(group.totalApplied * 1.1))}</p>
-              </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* ── 세금계산서 + 공문 발송 (같은 줄) ── */}
           <div className="border-t border-slate-100 px-5 py-4 space-y-4">
@@ -1429,13 +1544,13 @@ function TermSection({ group, projectNumber, agencyId, leadInstitutionId, leadIn
                 <div className="grid grid-cols-4 gap-3 items-end">
                   <div>
                     <label className="block text-xs font-medium text-slate-600 mb-1">세금계산서일자</label>
-                    <input className={`${inp} w-full`} type="date" value={invForm.issuedAt}
-                      onChange={(e) => setInvForm((p) => ({ ...p, issuedAt: e.target.value }))} />
+                    <DateInput className="w-full" value={invForm.issuedAt}
+                      onChange={(v) => setInvForm((p) => ({ ...p, issuedAt: v }))} />
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-slate-600 mb-1">공급가액 (원)</label>
-                    <input className={`${inp} w-full`} type="number" value={invForm.supplyAmount}
-                      onChange={(e) => handleSupplyChange(Number(e.target.value))} />
+                    <MoneyInput className={`${inp} w-full`} value={invForm.supplyAmount}
+                      onChange={(v) => handleSupplyChange(v)} />
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-slate-600 mb-1">부가세 (자동)</label>
@@ -1499,9 +1614,9 @@ function TermSection({ group, projectNumber, agencyId, leadInstitutionId, leadIn
                 <div className="flex items-end gap-4">
                   <div className="w-52">
                     <label className="block text-xs font-medium text-slate-600 mb-1">입금액 (원)</label>
-                    <input className={`${inp} w-full`} type="number" min={0} value={rvForm.paidAmount}
+                    <MoneyInput className={`${inp} w-full`} value={rvForm.paidAmount}
                       autoFocus
-                      onChange={(e) => setRvForm({ paidAmount: Number(e.target.value) })} />
+                      onChange={(v) => setRvForm({ paidAmount: v })} />
                   </div>
                   <div className="pb-0.5">
                     <p className="text-xs text-slate-400 mb-1">미수금 (자동)</p>
@@ -1684,6 +1799,7 @@ function SettlementNoticeModal({
     addEmailDispatch({
       batchId: `BATCH-${Date.now()}`,
       sentAt: new Date().toISOString().replace("T", " ").slice(0, 16),
+      senderName: getCurrentUser()?.name ?? "시스템",
       recipientInstitution: project.leadInstitutionName,
       recipientEmail: toEmail,
       subject: `[${project.projectNumber}] ${template.title || "정산절차 안내 및 수수료 청구"}`,

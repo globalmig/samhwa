@@ -4,6 +4,7 @@ import React, { useState, useMemo } from "react";
 import Link from "next/link";
 import { FiChevronDown, FiChevronUp, FiExternalLink } from "react-icons/fi";
 import { useStore, AuditEntry, ENTITY_NAMES } from "@/lib/store";
+import type { Project } from "@/lib/mock";
 import StatusBadge from "@/components/common/StatusBadge";
 
 const ACTION_MAP: Record<AuditEntry["action"], { label: string; color: "blue" | "amber" | "red" }> = {
@@ -149,6 +150,42 @@ function getEntityUrl(
   }
 }
 
+// 감사 이력 항목이 어느 과제와 관련됐는지 역추적 — 전담기관 약칭/과제번호/주관기관/연구책임자 표시·필터에 사용
+function getRelatedProject(
+  entry: AuditEntry,
+  store: ReturnType<typeof useStore>
+): Project | undefined {
+  const byNumber = (num?: string) =>
+    num ? store.projects.find((p) => p.projectNumber === num) : undefined;
+
+  switch (entry.entityType) {
+    case "project":
+      return store.projects.find((p) => p.id === entry.entityId);
+    case "projectMember": {
+      const m = store.projectMembers.find((x) => x.id === entry.entityId);
+      return m ? store.projects.find((p) => p.id === m.projectId) : undefined;
+    }
+    case "termFee":
+      return byNumber(store.termFees.find((x) => x.id === entry.entityId)?.projectNumber);
+    case "termFeeCalc":
+      return byNumber(store.termFeeCalcs.find((x) => x.id === entry.entityId)?.projectNumber);
+    case "taxInvoice":
+      return byNumber(
+        store.taxInvoices.find((x) => x.id === entry.entityId || x.invoiceNumber === entry.entityId)?.projectNumber
+      );
+    case "receivable":
+      return byNumber(store.receivables.find((x) => x.id === entry.entityId)?.projectNumber);
+    case "unclaimed":
+      return byNumber(store.unclaimedFees.find((x) => x.id === entry.entityId)?.projectNumber);
+    case "settlement":
+      return byNumber(store.settlements.find((x) => x.id === entry.entityId)?.projectNumber);
+    case "projectIssue":
+      return byNumber(store.projectIssues.find((x) => x.id === entry.entityId)?.projectNumber);
+    default:
+      return undefined;
+  }
+}
+
 function changeSummary(changedFields: AuditEntry["changedFields"]): string {
   if (!changedFields) return "";
   const keys = Object.keys(changedFields);
@@ -162,6 +199,9 @@ export default function AuditLogPage() {
   const [entityFilter, setEntityFilter] = useState("ALL");
   const [actionFilter, setActionFilter] = useState("ALL");
   const [search, setSearch] = useState("");
+  const [projectNumberFilter, setProjectNumberFilter] = useState("");
+  const [leadInstitutionFilter, setLeadInstitutionFilter] = useState("");
+  const [researchLeadFilter, setResearchLeadFilter] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const filtered = useMemo(
@@ -171,15 +211,30 @@ export default function AuditLogPage() {
         if (actionFilter !== "ALL" && e.action !== actionFilter) return false;
         if (search.trim()) {
           const q = search.trim().toLowerCase();
-          return (
+          const matches =
             e.entityLabel.toLowerCase().includes(q) ||
             (ENTITY_NAMES[e.entityType] ?? "").includes(q) ||
-            e.performedBy.toLowerCase().includes(q)
-          );
+            e.performedBy.toLowerCase().includes(q);
+          if (!matches) return false;
+        }
+        if (projectNumberFilter.trim() || leadInstitutionFilter.trim() || researchLeadFilter.trim()) {
+          const project = getRelatedProject(e, store);
+          if (
+            projectNumberFilter.trim() &&
+            !(project?.projectNumber ?? "").toLowerCase().includes(projectNumberFilter.trim().toLowerCase())
+          ) return false;
+          if (
+            leadInstitutionFilter.trim() &&
+            !(project?.leadInstitutionName ?? "").toLowerCase().includes(leadInstitutionFilter.trim().toLowerCase())
+          ) return false;
+          if (
+            researchLeadFilter.trim() &&
+            !(project?.researchLead ?? "").toLowerCase().includes(researchLeadFilter.trim().toLowerCase())
+          ) return false;
         }
         return true;
       }),
-    [auditLog, entityFilter, actionFilter, search]
+    [auditLog, entityFilter, actionFilter, search, projectNumberFilter, leadInstitutionFilter, researchLeadFilter, store]
   );
 
   return (
@@ -231,6 +286,24 @@ export default function AuditLogPage() {
           placeholder="대상명 / 수행자 검색…"
           className="text-xs border border-slate-200 rounded-lg px-3 py-1.5 text-slate-600 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 w-48"
         />
+        <input
+          value={projectNumberFilter}
+          onChange={(e) => setProjectNumberFilter(e.target.value)}
+          placeholder="과제번호 검색…"
+          className="text-xs border border-slate-200 rounded-lg px-3 py-1.5 text-slate-600 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 w-36"
+        />
+        <input
+          value={leadInstitutionFilter}
+          onChange={(e) => setLeadInstitutionFilter(e.target.value)}
+          placeholder="주관기관 검색…"
+          className="text-xs border border-slate-200 rounded-lg px-3 py-1.5 text-slate-600 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 w-36"
+        />
+        <input
+          value={researchLeadFilter}
+          onChange={(e) => setResearchLeadFilter(e.target.value)}
+          placeholder="연구책임자 검색…"
+          className="text-xs border border-slate-200 rounded-lg px-3 py-1.5 text-slate-600 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 w-32"
+        />
         <span className="ml-auto text-xs text-slate-400">{filtered.length}건 · 최신순</span>
       </div>
 
@@ -246,6 +319,10 @@ export default function AuditLogPage() {
               <tr className="border-b border-slate-100 bg-slate-50">
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap w-40">일시</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap w-24">유형</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap w-20">전담기관 약칭</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap w-32">과제번호</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">주관기관</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap w-20">연구책임자</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap w-28">액션</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500">대상 / 변경내용</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap w-20">수행자</th>
@@ -258,6 +335,8 @@ export default function AuditLogPage() {
                 const summary = changeSummary(entry.changedFields);
                 const isExpanded = expanded === entry.id;
                 const navUrl = getEntityUrl(entry.entityType, entry.entityId, store);
+                const relatedProject = getRelatedProject(entry, store);
+                const relatedAgency = store.fundingAgencies.find((a) => a.id === relatedProject?.agencyId);
 
                 return (
                   <React.Fragment key={entry.id}>
@@ -267,6 +346,18 @@ export default function AuditLogPage() {
                       </td>
                       <td className="px-4 py-3 text-center text-xs text-slate-600 whitespace-nowrap">
                         {ENTITY_NAMES[entry.entityType] ?? entry.entityType}
+                      </td>
+                      <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">
+                        {relatedAgency?.shortName ?? "-"}
+                      </td>
+                      <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap font-mono">
+                        {relatedProject?.projectNumber ?? "-"}
+                      </td>
+                      <td className="px-4 py-3 text-center text-xs text-slate-600 whitespace-nowrap">
+                        {relatedProject?.leadInstitutionName ?? "-"}
+                      </td>
+                      <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">
+                        {relatedProject?.researchLead ?? "-"}
                       </td>
                       <td className="px-4 py-3 text-center">
                         <StatusBadge label={ACTION_MAP[entry.action].label} color={ACTION_MAP[entry.action].color} />
@@ -305,7 +396,7 @@ export default function AuditLogPage() {
                     </tr>
                     {isExpanded && entry.changedFields && (
                       <tr className="bg-blue-50/40 border-b border-slate-100">
-                        <td colSpan={6} className="px-6 py-3">
+                        <td colSpan={10} className="px-6 py-3">
                           <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-2">변경 상세</p>
                           <div className="space-y-2">
                             {Object.entries(entry.changedFields).map(([field, change]) => {

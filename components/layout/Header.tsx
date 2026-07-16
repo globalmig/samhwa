@@ -208,6 +208,29 @@ export default function Header() {
                   </div>
                 )}
 
+                <div>
+                  <p className="px-4 pt-3 pb-1 text-[10px] font-semibold text-slate-400 tracking-wide">공지사항</p>
+                  {visibleNotices.length === 0 ? (
+                    <p className="px-4 py-6 text-center text-xs text-slate-400">등록된 공지가 없습니다</p>
+                  ) : (
+                    visibleNotices.map((n) => (
+                      <div key={n.id} className={`flex items-start gap-1.5 px-4 py-2.5 border-b border-slate-50 last:border-0 ${isRead(n.id) ? "opacity-50" : ""}`}>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-slate-700 flex items-center gap-1.5">
+                            {!isRead(n.id) && <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />}
+                            {n.title}
+                          </p>
+                          <p className="text-[11px] text-slate-500 mt-0.5 whitespace-pre-wrap">{n.content}</p>
+                          <p className="text-[10px] text-slate-400 mt-1">
+                            {n.authorName} · {ROLE_LABELS[n.authorRole] ?? n.authorRole} · {fmtDatetime(n.createdAt)}
+                          </p>
+                        </div>
+                        <NotifActions read={isRead(n.id)} onRead={() => user && markNotificationRead(user.id, n.id)} onDismiss={() => handleDeleteNotice(n.id, n.authorName)} />
+                      </div>
+                    ))
+                  )}
+                </div>
+
                 {overdueAlerts.length > 0 && (
                   <div>
                     <p className="px-4 pt-3 pb-1 text-[10px] font-semibold text-slate-400 tracking-wide">
@@ -255,29 +278,6 @@ export default function Header() {
                     ))}
                   </div>
                 )}
-
-                <div>
-                  <p className="px-4 pt-3 pb-1 text-[10px] font-semibold text-slate-400 tracking-wide">공지사항</p>
-                  {visibleNotices.length === 0 ? (
-                    <p className="px-4 py-6 text-center text-xs text-slate-400">등록된 공지가 없습니다</p>
-                  ) : (
-                    visibleNotices.map((n) => (
-                      <div key={n.id} className={`flex items-start gap-1.5 px-4 py-2.5 border-b border-slate-50 last:border-0 ${isRead(n.id) ? "opacity-50" : ""}`}>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium text-slate-700 flex items-center gap-1.5">
-                            {!isRead(n.id) && <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />}
-                            {n.title}
-                          </p>
-                          <p className="text-[11px] text-slate-500 mt-0.5 whitespace-pre-wrap">{n.content}</p>
-                          <p className="text-[10px] text-slate-400 mt-1">
-                            {n.authorName} · {ROLE_LABELS[n.authorRole] ?? n.authorRole} · {fmtDatetime(n.createdAt)}
-                          </p>
-                        </div>
-                        <NotifActions read={isRead(n.id)} onRead={() => user && markNotificationRead(user.id, n.id)} onDismiss={() => handleDeleteNotice(n.id, n.authorName)} />
-                      </div>
-                    ))
-                  )}
-                </div>
               </div>
             </>
           )}

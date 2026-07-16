@@ -3,9 +3,11 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { FiPlus, FiChevronDown, FiChevronUp, FiChevronRight, FiMail } from "react-icons/fi";
+import * as XLSX from "xlsx";
+import { FiPlus, FiChevronDown, FiChevronUp, FiChevronRight, FiMail, FiDownload, FiX } from "react-icons/fi";
 import {
   useStore,
+  addReceivable,
   updateReceivable,
   updateProject,
   updateProjectMember,
@@ -15,18 +17,24 @@ import {
   addUnclaimedFee,
   updateUnclaimedFee,
   addProject,
+  updateStandardAttachment,
 } from "@/lib/store";
 import {
   type TermFee,
   type FeePolicy,
   type TaxInvoice,
   type Project,
+  type ProjectIssue,
+  COMPANY_INFO,
 } from "@/lib/mock";
-import { fmtWon, fmtDate } from "@/lib/utils";
+import { fmtWon, fmtDate, splitVatInclusive } from "@/lib/utils";
 import Modal from "@/components/common/Modal";
 import DateInput from "@/components/common/DateInput";
 import InstitutionQuickAdd from "@/components/common/InstitutionQuickAdd";
+import MoneyInput from "@/components/common/MoneyInput";
 import { useCanWrite } from "@/lib/permissions";
+import { getCurrentUser } from "@/lib/auth";
+import { resolveRdaAgencyId } from "@/lib/fee-calculator";
 
 // ── 타입 ──────────────────────────────────────────────────────
 type FeeRow = {
@@ -37,8 +45,11 @@ type FeeRow = {
   projectName: string;
   leadInstitutionName: string;
   researchLead: string;
+  projectCategory: string;
   startDate: string;
   endDate: string;
+  stageStartDate: string;
+  stageEndDate: string;
   // 발행
   billingType: string;
   invoiceIssuedAt: string;
@@ -54,12 +65,14 @@ type FeeRow = {
   unclaimedAmount: number;
   // 과제 정보
   projectCode: string;
+  agencyAssignedAt: string;
   docRequestDate: string;
   docReplyDate: string;
   recipientName: string;
   recipientEmail: string;
   projectDivision: string;
   assignedManager: string;
+  registeredAt: string;
   // 매출 발행
   projectId: string;
   leadInstitutionId: string;
@@ -75,7 +88,7 @@ type FeeRow = {
   // 수정용 참조 id
   unclaimedFeeId: string;
   leadMemberId: string;
-  hasOpenIssue: boolean;
+  issues: ProjectIssue[];
 };
 
 type CollectionTarget = {
@@ -99,12 +112,16 @@ type SalesTarget = {
   taxInvoiceId: string;
   taxInvoiceStatus: TaxInvoice["status"] | "";
   appliedFeeTotal: number;
+  receivableId: string;
+  paidAmount: number;
 };
 
 type DispatchTarget = {
+  kind:                "REGULAR" | "REVERSE" | "OTHER";
   projectNumber:       string;
   projectName:         string;
   leadInstitutionName: string;
+  agencyShortName:     string;
   termYear:            number;
   termNumber:          number;
   recipientEmail:      string;
@@ -113,6 +130,10 @@ type DispatchTarget = {
   supplyAmount:        number;
   taxAmount:           number;
   totalAmount:         number;
+  startDate:           string; // 당해사업연도
+  endDate:             string;
+  stageStartDate:      string; // 단계사업연도
+  stageEndDate:        string;
 };
 
 type InfoEditTarget = {
@@ -124,6 +145,7 @@ type InfoEditTarget = {
   recipientName:  string;
   recipientEmail: string;
   assignedManager: string;
+  registeredAt:   string;
 };
 
 type ModalState =
@@ -204,9 +226,11 @@ function SalesIssueModal({ target, onClose }: { target: SalesTarget; onClose: ()
     if (isNoBill) { onClose(); return; }
     if (!issuedAt) { onClose(); return; }
 
-    const supplyAmount = target.appliedFeeTotal;
-    const taxAmount    = Math.round(supplyAmount * 0.1);
-    const totalAmount  = supplyAmount + taxAmount;
+    const { supplyAmount, taxAmount } = splitVatInclusive(target.appliedFeeTotal);
+    const totalAmount = target.appliedFeeTotal;
+
+    const now = new Date();
+    const invoiceNumber = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(Math.floor(Math.random() * 90000) + 10000)}`;
 
     if (target.taxInvoiceId) {
       // 기존 세금계산서 수정
@@ -219,8 +243,6 @@ function SalesIssueModal({ target, onClose }: { target: SalesTarget; onClose: ()
       });
     } else {
       // 새 세금계산서 생성
-      const now = new Date();
-      const invoiceNumber = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(Math.floor(Math.random() * 90000) + 10000)}`;
       addTaxInvoice({
         invoiceNumber,
         projectNumber:       target.projectNumber,
@@ -236,6 +258,35 @@ function SalesIssueModal({ target, onClose }: { target: SalesTarget; onClose: ()
         status:              "ISSUED",
       });
     }
+
+    // 3. 세금계산서를 발행하면 수금관리에서 처리할 수 있도록 채권(미수금) 레코드도 함께 생성/갱신한다.
+    //    (과거엔 여기서 채권을 만들지 않아, 발행 이력은 있는데 수금등록 버튼이 안 뜨는 과제가 있었음)
+    if (target.receivableId) {
+      updateReceivable(target.receivableId, {
+        billedAt:         issuedAt,
+        billedAmount:     totalAmount,
+        receivableAmount: Math.max(0, totalAmount - target.paidAmount),
+      });
+    } else {
+      const due = new Date(`${issuedAt}T00:00:00`);
+      due.setMonth(due.getMonth() + 3);
+      addReceivable({
+        invoiceNumber,
+        projectNumber:       target.projectNumber,
+        projectName:         target.projectName,
+        termYear:            target.termYear,
+        termNumber:          target.termNumber,
+        leadInstitutionId:   "",
+        leadInstitutionName: target.leadInstitutionName,
+        billedAt:            issuedAt,
+        billedAmount:        totalAmount,
+        paidAmount:          0,
+        receivableAmount:    totalAmount,
+        dueDate:             due.toISOString().slice(0, 10),
+        status:              "PENDING",
+      });
+    }
+
     onClose();
   }
 
@@ -293,17 +344,19 @@ function SalesIssueModal({ target, onClose }: { target: SalesTarget; onClose: ()
               <span className="ml-2 text-violet-500 font-normal">역발행 요청 시 기관 발행 예정일 입력</span>
             )}
           </label>
-          <input
-            type="date"
+          <DateInput
             value={issuedAt}
-            onChange={(e) => setIssuedAt(e.target.value)}
-            className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+            onChange={setIssuedAt}
+            className="w-full"
           />
-          {target.appliedFeeTotal > 0 && (
-            <div className="text-[11px] text-slate-400 space-y-0.5">
-              <span>공급가액 {fmtWon(target.appliedFeeTotal)} · 부가세 {fmtWon(Math.round(target.appliedFeeTotal * 0.1))} · 합계 {fmtWon(target.appliedFeeTotal + Math.round(target.appliedFeeTotal * 0.1))}</span>
-            </div>
-          )}
+          {target.appliedFeeTotal > 0 && (() => {
+            const { supplyAmount, taxAmount } = splitVatInclusive(target.appliedFeeTotal);
+            return (
+              <div className="text-[11px] text-slate-400 space-y-0.5">
+                <span>공급가액 {fmtWon(supplyAmount)} · 부가세 {fmtWon(taxAmount)} · 합계 {fmtWon(target.appliedFeeTotal)}</span>
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -409,11 +462,10 @@ function SalesCancelModal({ target, onClose }: { target: SalesTarget; onClose: (
       {mode === "modify" && (
         <div className="space-y-2">
           <label className="text-xs font-medium text-slate-600">변경할 발행일</label>
-          <input
-            type="date"
+          <DateInput
             value={newDate}
-            onChange={(e) => setNewDate(e.target.value)}
-            className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+            onChange={setNewDate}
+            className="w-full"
             autoFocus
           />
         </div>
@@ -445,10 +497,36 @@ function SalesCancelModal({ target, onClose }: { target: SalesTarget; onClose: (
 }
 
 // ── DispatchDropdown (공문 발송 드롭다운 버튼) ────────────────
+function fmtDot(s: string): string {
+  if (!s) return "";
+  const d = new Date(`${s}T00:00:00`);
+  if (isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()}.`;
+}
+
+function parseEmails(raw: string): string[] {
+  return raw.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+type DispatchChoice =
+  | { kind: "REGULAR" | "REVERSE"; feeCategory: "ANNUAL" | "SETTLEMENT" }
+  | { kind: "OTHER" };
+
 function DispatchDropdown({
   onSelect,
 }: {
-  onSelect: (cat: "ANNUAL" | "SETTLEMENT") => void;
+  onSelect: (choice: DispatchChoice) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -461,6 +539,11 @@ function DispatchDropdown({
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
+  function pick(choice: DispatchChoice) {
+    setOpen(false);
+    onSelect(choice);
+  }
+
   return (
     <div ref={ref} className="relative inline-block">
       <button
@@ -472,18 +555,30 @@ function DispatchDropdown({
         <FiChevronRight size={10} className={`transition-transform ${open ? "rotate-90" : ""}`} />
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden min-w-[160px]">
+        <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden min-w-[190px]">
           <button
             className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors"
-            onClick={() => { setOpen(false); onSelect("ANNUAL"); }}
+            onClick={() => pick({ kind: "REGULAR", feeCategory: "ANNUAL" })}
           >
             연차상시점검 수수료 공문
           </button>
           <button
             className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors border-t border-slate-100"
-            onClick={() => { setOpen(false); onSelect("SETTLEMENT"); }}
+            onClick={() => pick({ kind: "REGULAR", feeCategory: "SETTLEMENT" })}
           >
             위탁정산 수수료 공문
+          </button>
+          <button
+            className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors border-t border-slate-100"
+            onClick={() => pick({ kind: "REVERSE", feeCategory: "ANNUAL" })}
+          >
+            역발행 수수료 공문
+          </button>
+          <button
+            className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors border-t border-slate-100"
+            onClick={() => pick({ kind: "OTHER" })}
+          >
+            기타 공문
           </button>
         </div>
       )}
@@ -491,22 +586,87 @@ function DispatchDropdown({
   );
 }
 
-// ── DispatchModal (공문 발송 모달) ────────────────────────────
-function DispatchModal({ target, onClose }: { target: DispatchTarget; onClose: () => void }) {
-  const categoryLabel = target.feeCategory === "ANNUAL" ? "연차상시점검수수료" : "위탁정산수수료";
-  const termLabel     = `${target.termNumber}연차`;
+// ── StandardAttachmentsPanel (사업자등록증 등 기본 첨부서류 일괄 관리) ──
+// 여기서 파일을 바꾸면 이후 새로 여는 모든 공문 발송창에 기본값으로 반영된다.
+function StandardAttachmentsPanel() {
+  const { standardAttachments } = useStore();
 
-  const defaultSubject = `[${target.projectNumber}] ${termLabel} ${categoryLabel} 청구서`;
-  const defaultBody =
-`안녕하세요.
+  async function handleReplace(id: string, files: FileList | null) {
+    const file = files?.[0];
+    if (!file) return;
+    const fileDataUrl = await fileToDataUrl(file);
+    updateStandardAttachment(id, { fileDataUrl, updatedAt: new Date().toISOString().slice(0, 10) });
+  }
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3 space-y-2">
+      <p className="text-[11px] text-slate-500">여기서 교체한 파일은 이후 새로 작성하는 모든 공문에 기본으로 첨부됩니다.</p>
+      {standardAttachments.map((a) => (
+        <div key={a.id} className="flex items-center justify-between gap-3 bg-white rounded-lg border border-slate-200 px-3 py-2">
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-slate-700 truncate">{a.name}</p>
+            <p className="text-[10px] text-slate-400">
+              {a.fileDataUrl ? `파일 등록됨 · ${a.updatedAt} 수정` : "등록된 파일 없음"}
+            </p>
+          </div>
+          <label className="shrink-0 text-[11px] font-medium text-teal-600 hover:text-teal-700 cursor-pointer whitespace-nowrap">
+            파일 선택
+            <input type="file" className="hidden" onChange={(e) => { handleReplace(a.id, e.target.files); e.target.value = ""; }} />
+          </label>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── DispatchModal (공문 발송 모달) ────────────────────────────
+type AttachmentRow = { name: string; checked: boolean; dataUrl?: string };
+
+function DispatchModal({ target, onClose }: { target: DispatchTarget; onClose: () => void }) {
+  const { standardAttachments } = useStore();
+  const bizRegAttachment = standardAttachments.find((a) => a.id === "sa-biz-reg");
+  const isOther = target.kind === "OTHER";
+  const termLabel = `${target.termNumber}연차`;
+
+  const stageRange = target.stageStartDate && target.stageEndDate
+    ? `${fmtDot(target.stageStartDate)} ~ ${fmtDot(target.stageEndDate)}`
+    : "-";
+  const termRange = target.startDate && target.endDate
+    ? `${fmtDot(target.startDate)}～${fmtDot(target.endDate)}`
+    : "-";
+
+  function buildSubject(cat: "ANNUAL" | "SETTLEMENT"): string {
+    const label = cat === "ANNUAL" ? "연차상시점검 수수료" : "위탁정산 수수료";
+    const suffix = target.kind === "REVERSE" ? "역발행 요청" : "청구서";
+    return `[${target.projectNumber}] ${target.agencyShortName} 전담과제 ${label} ${suffix}_${target.leadInstitutionName}`;
+  }
+
+  function buildBody(cat: "ANNUAL" | "SETTLEMENT"): string {
+    const compact = cat === "ANNUAL" ? "연차상시점검수수료" : "위탁정산수수료";
+    if (target.kind === "REVERSE") {
+      return `안녕하세요.
+${COMPANY_INFO.name}입니다.
+
+수수료 역발행 관련하여 필요 서류 송부드립니다.
+첨부하여드린 청구서 참고하셔서 역발행하여 주시기 바랍니다.
+
+또한 역발행 하실 때 과제 정보 확인을 위해
+품목에 연구책임자님 성함 또는 과제명을 입력하여 주시기 바랍니다.
+
+
+감사합니다.`;
+    }
+    return `안녕하세요.
 ${target.leadInstitutionName} 담당자님,
 
-${target.projectName} 과제의 ${termLabel} ${categoryLabel} 청구서를 첨부하여 안내 드립니다.
+${target.projectName} 과제의 ${termLabel} ${compact} 청구서를 첨부하여 안내 드립니다.
 
 【 청구 내역 】
 - 과제번호 : ${target.projectNumber}
 - 과    제 : ${target.projectName}
-- 대    상 : ${termLabel} ${categoryLabel}
+- 대    상 : ${termLabel} ${compact}
+- 단계사업연도 : ${stageRange}
+- 당해사업연도 : ${termRange}
 - 공급가액 : ${target.supplyAmount > 0 ? target.supplyAmount.toLocaleString() + "원" : "별도 협의"}
 - 부  가  세 : ${target.taxAmount   > 0 ? target.taxAmount.toLocaleString()   + "원" : ""}
 - 합    계 : ${target.totalAmount  > 0 ? target.totalAmount.toLocaleString()  + "원" : ""}
@@ -514,41 +674,88 @@ ${target.projectName} 과제의 ${termLabel} ${categoryLabel} 청구서를 첨�
 첨부파일을 확인하시고, 기한 내 납부 부탁드립니다.
 문의사항은 아래 연락처로 연락 주시기 바랍니다.
 
+■담당자 : ${COMPANY_INFO.managerName}(${COMPANY_INFO.managerEmail}, ${COMPANY_INFO.managerPhone})
+
+■입금계좌 : ${COMPANY_INFO.depositAccountNote}
+
+
 감사합니다.
-삼화기술경영 드림`;
+${COMPANY_INFO.name} 드림`;
+  }
 
-  const defaultAttachments = [
-    { name: `청구서_${target.projectNumber}_${termLabel}.pdf`, checked: true },
-    { name: "사업자등록증.pdf",                                  checked: true },
-    ...(target.feeCategory === "SETTLEMENT"
-      ? [{ name: "위탁정산내역서.pdf", checked: true }]
-      : []),
-  ];
+  function buildAttachments(cat: "ANNUAL" | "SETTLEMENT"): AttachmentRow[] {
+    if (isOther) return [];
+    return [
+      { name: `청구서_${target.projectNumber}_${termLabel}.pdf`, checked: true },
+      { name: bizRegAttachment?.name ?? "사업자등록증.pdf", checked: true, dataUrl: bizRegAttachment?.fileDataUrl },
+      ...(cat === "SETTLEMENT" ? [{ name: "위탁정산내역서.pdf", checked: true }] : []),
+    ];
+  }
 
-  const [toEmail,      setToEmail]      = useState(target.recipientEmail);
-  const [subject,      setSubject]      = useState(defaultSubject);
-  const [body,         setBody]         = useState(defaultBody);
-  const [attachments,  setAttachments]  = useState(defaultAttachments);
+  const [feeCategory,  setFeeCategory]  = useState(target.feeCategory);
+  const [toEmailRaw,   setToEmailRaw]   = useState(target.recipientEmail);
+  const [subject,      setSubject]      = useState(() => isOther ? "" : buildSubject(target.feeCategory));
+  const [body,         setBody]         = useState(() => isOther ? "" : buildBody(target.feeCategory));
+  const [attachments,  setAttachments]  = useState<AttachmentRow[]>(() => buildAttachments(target.feeCategory));
   const [sending,      setSending]      = useState(false);
   const [sent,         setSent]         = useState(false);
+  const [showStandardPanel, setShowStandardPanel] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const replaceIndexRef = useRef<number | null>(null);
+
+  // 역발행 공문은 과제가 연차상시/위탁정산 중 어느 쪽인지 자동으로 구분할 수 있는 필드가
+  // 없어(발행 시 매번 사람이 고르는 구조) 모달에서 직접 선택하게 하고, 고르면 제목/본문/
+  // 첨부를 그 구분에 맞춰 다시 만든다.
+  function handleCategoryChange(next: "ANNUAL" | "SETTLEMENT") {
+    setFeeCategory(next);
+    setSubject(buildSubject(next));
+    setBody(buildBody(next));
+    setAttachments(buildAttachments(next));
+  }
+
+  const emails = parseEmails(toEmailRaw);
+  const invalidEmails = emails.filter((e) => !EMAIL_RE.test(e));
+  const canSend = emails.length > 0 && invalidEmails.length === 0 && !sending;
 
   function toggleAttach(i: number) {
     setAttachments((prev) => prev.map((a, idx) => idx === i ? { ...a, checked: !a.checked } : a));
   }
 
+  function removeAttach(i: number) {
+    setAttachments((prev) => prev.filter((_, idx) => idx !== i));
+  }
+
+  async function handleFilesPicked(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    const idx = replaceIndexRef.current;
+    replaceIndexRef.current = null;
+    const picked = await Promise.all(
+      Array.from(files).map(async (f) => ({ name: f.name, checked: true, dataUrl: await fileToDataUrl(f) }))
+    );
+    setAttachments((prev) => {
+      if (idx !== null) {
+        // 개별 수정 — 이 발송 건에서만 해당 행의 파일을 교체 (기본 첨부서류는 그대로 둠)
+        return prev.map((a, i) => i === idx ? picked[0] : a);
+      }
+      return [...prev, ...picked];
+    });
+  }
+
   function handleSend() {
-    if (!toEmail.trim()) return;
+    if (!canSend) return;
     setSending(true);
     setTimeout(() => {
       const batchId = `BATCH-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.floor(Math.random() * 9000) + 1000}`;
       addEmailDispatch({
         batchId,
         sentAt:               new Date().toISOString().replace("T", " ").slice(0, 16),
+        senderName:           getCurrentUser()?.name ?? "시스템",
         recipientInstitution: target.leadInstitutionName,
-        recipientEmail:       toEmail.trim(),
+        recipientEmail:       emails.join(", "),
         subject,
-        emailType:            "TAX_INVOICE",
-        feeCategory:          target.feeCategory,
+        emailType:            isOther ? "OTHER" : "TAX_INVOICE",
+        feeCategory:          isOther ? undefined : feeCategory,
+        isReverseRequest:     target.kind === "REVERSE" ? true : undefined,
         attachments:          attachments.filter((a) => a.checked).map((a) => a.name),
         status:               "SUCCESS",
         body,
@@ -566,7 +773,7 @@ ${target.projectName} 과제의 ${termLabel} ${categoryLabel} 청구서를 첨�
         </div>
         <div className="text-center">
           <p className="text-sm font-semibold text-slate-800">발송 완료</p>
-          <p className="text-xs text-slate-500 mt-1">{toEmail}</p>
+          <p className="text-xs text-slate-500 mt-1">{emails.join(", ")}</p>
         </div>
         <button onClick={onClose} className="mt-2 px-6 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
           닫기
@@ -575,30 +782,72 @@ ${target.projectName} 과제의 ${termLabel} ${categoryLabel} 청구서를 첨�
     );
   }
 
+  const categoryLabelCompact = feeCategory === "ANNUAL" ? "연차상시점검수수료" : "위탁정산수수료";
+  const badgeLabel = isOther ? "기타 공문" : `${categoryLabelCompact} ${target.kind === "REVERSE" ? "역발행 " : ""}공문`;
+
   return (
     <div className="p-6 space-y-4">
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple={replaceIndexRef.current === null}
+        className="hidden"
+        onChange={(e) => { handleFilesPicked(e.target.files); e.target.value = ""; }}
+      />
+
       {/* 공문 유형 배지 */}
       <div className="flex items-center gap-2">
         <span className="text-[11px] font-bold px-2 py-1 rounded bg-teal-100 text-teal-700">
-          {categoryLabel} 공문
+          {badgeLabel}
         </span>
-        <span className="text-xs text-slate-500">
-          {target.projectNumber} · {termLabel}
-        </span>
+        {!isOther && (
+          <span className="text-xs text-slate-500">
+            {target.projectNumber} · {termLabel}
+          </span>
+        )}
       </div>
+
+      {/* 역발행 — 연차상시/위탁정산 자동 구분이 안 되어 직접 선택 */}
+      {target.kind === "REVERSE" && (
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium text-slate-600">수수료 구분</label>
+          <div className="flex gap-2">
+            {(["ANNUAL", "SETTLEMENT"] as const).map((cat) => (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => handleCategoryChange(cat)}
+                className={`flex-1 px-3 py-2 text-xs font-medium rounded-lg border transition-colors ${
+                  feeCategory === cat ? "bg-teal-50 border-teal-300 text-teal-700" : "border-slate-200 text-slate-500 hover:border-slate-300"
+                }`}
+              >
+                {cat === "ANNUAL" ? "연차상시점검 수수료" : "위탁정산 수수료"}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 수신 이메일 */}
       <div className="space-y-1.5">
-        <label className="text-xs font-medium text-slate-600">수신자 이메일</label>
+        <label className="text-xs font-medium text-slate-600">
+          수신자 이메일 <span className="text-slate-400 font-normal">(여러 명은 쉼표로 구분)</span>
+        </label>
         <input
-          type="email"
-          value={toEmail}
-          onChange={(e) => setToEmail(e.target.value)}
+          type="text"
+          value={toEmailRaw}
+          onChange={(e) => setToEmailRaw(e.target.value)}
           className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-          placeholder="example@domain.com"
+          placeholder="example@domain.com, second@domain.com"
         />
         {target.recipientName && (
           <p className="text-[11px] text-slate-400">수신자: {target.recipientName}</p>
+        )}
+        {invalidEmails.length > 0 && (
+          <p className="text-[11px] text-red-500">올바르지 않은 이메일 주소: {invalidEmails.join(", ")}</p>
+        )}
+        {emails.length > 1 && invalidEmails.length === 0 && (
+          <p className="text-[11px] text-slate-400">{emails.length}명에게 발송됩니다</p>
         )}
       </div>
 
@@ -609,28 +858,67 @@ ${target.projectName} 과제의 ${termLabel} ${categoryLabel} 청구서를 첨�
           type="text"
           value={subject}
           onChange={(e) => setSubject(e.target.value)}
+          placeholder={isOther ? "메일 제목을 입력하세요" : undefined}
           className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
         />
       </div>
 
       {/* 첨부파일 */}
       <div className="space-y-1.5">
-        <label className="text-xs font-medium text-slate-600">첨부파일</label>
-        <div className="rounded-lg border border-slate-200 divide-y divide-slate-100 overflow-hidden">
-          {attachments.map((a, i) => (
-            <label key={a.name} className="flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-slate-50 transition-colors">
-              <input
-                type="checkbox"
-                checked={a.checked}
-                onChange={() => toggleAttach(i)}
-                className="rounded"
-              />
-              <span className={`text-xs ${a.checked ? "text-slate-700" : "text-slate-300 line-through"}`}>
-                {a.name}
-              </span>
-            </label>
-          ))}
+        <div className="flex items-center justify-between">
+          <label className="text-xs font-medium text-slate-600">첨부파일</label>
+          <div className="flex items-center gap-3">
+            {!isOther && (
+              <button type="button" onClick={() => setShowStandardPanel((v) => !v)} className="text-[11px] text-slate-400 hover:text-teal-600 transition-colors">
+                기본파일 일괄 수정
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => { replaceIndexRef.current = null; fileInputRef.current?.click(); }}
+              className="text-[11px] font-medium text-teal-600 hover:text-teal-700 transition-colors"
+            >
+              + 파일 추가
+            </button>
+          </div>
         </div>
+        {showStandardPanel && <StandardAttachmentsPanel />}
+        {attachments.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-slate-200 px-3 py-4 text-center text-xs text-slate-400">
+            첨부된 파일이 없습니다
+          </div>
+        ) : (
+          <div className="rounded-lg border border-slate-200 divide-y divide-slate-100 overflow-hidden">
+            {attachments.map((a, i) => (
+              <div key={`${a.name}-${i}`} className="flex items-center gap-3 px-3 py-2 hover:bg-slate-50 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={a.checked}
+                  onChange={() => toggleAttach(i)}
+                  className="rounded"
+                />
+                <span className={`flex-1 text-xs truncate ${a.checked ? "text-slate-700" : "text-slate-300 line-through"}`}>
+                  {a.name}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => { replaceIndexRef.current = i; fileInputRef.current?.click(); }}
+                  className="text-[10px] text-slate-400 hover:text-teal-600 transition-colors whitespace-nowrap"
+                >
+                  교체
+                </button>
+                <button
+                  type="button"
+                  onClick={() => removeAttach(i)}
+                  className="text-slate-300 hover:text-red-500 transition-colors"
+                  title="삭제"
+                >
+                  <FiX size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* 본문 */}
@@ -639,7 +927,8 @@ ${target.projectName} 과제의 ${termLabel} ${categoryLabel} 청구서를 첨�
         <textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          rows={10}
+          rows={isOther ? 8 : 13}
+          placeholder={isOther ? "메일 본문을 입력하세요" : undefined}
           className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 text-slate-700 resize-y focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 font-mono leading-relaxed"
         />
       </div>
@@ -651,7 +940,7 @@ ${target.projectName} 과제의 ${termLabel} ${categoryLabel} 청구서를 첨�
         </button>
         <button
           onClick={handleSend}
-          disabled={!toEmail.trim() || sending}
+          disabled={!canSend}
           className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <FiMail size={14} />
@@ -664,7 +953,7 @@ ${target.projectName} 과제의 ${termLabel} ${categoryLabel} 청구서를 첨�
 
 // ── CollectionModal ───────────────────────────────────────────
 function CollectionModal({ target, onClose }: { target: CollectionTarget; onClose: () => void }) {
-  const [inputAmount, setInputAmount] = useState("");
+  const [inputAmount, setInputAmount] = useState(0);
   const remaining = target.billedAmount - target.paidAmount;
 
   function calcStatus(paid: number): "PENDING" | "PARTIAL" | "PAID" | "OVERDUE" {
@@ -674,9 +963,8 @@ function CollectionModal({ target, onClose }: { target: CollectionTarget; onClos
   }
 
   function handleSave() {
-    const addAmount = Number(inputAmount);
-    if (isNaN(addAmount) || addAmount <= 0) return;
-    const newPaid       = target.paidAmount + addAmount;
+    if (inputAmount <= 0) return;
+    const newPaid       = target.paidAmount + inputAmount;
     const newReceivable = Math.max(0, target.billedAmount - newPaid);
     updateReceivable(target.receivableId, {
       paidAmount:       newPaid,
@@ -705,7 +993,7 @@ function CollectionModal({ target, onClose }: { target: CollectionTarget; onClos
     onClose();
   }
 
-  const previewPaid       = target.paidAmount + (Number(inputAmount) || 0);
+  const previewPaid       = target.paidAmount + inputAmount;
   const previewReceivable = Math.max(0, target.billedAmount - previewPaid);
 
   return (
@@ -737,18 +1025,15 @@ function CollectionModal({ target, onClose }: { target: CollectionTarget; onClos
           입금액 <span className="text-slate-400 font-normal">(잔여 미수액: {fmtWon(remaining)})</span>
         </label>
         <div className="flex items-center gap-2">
-          <input
-            type="number"
-            min={0}
-            max={remaining}
+          <MoneyInput
             value={inputAmount}
-            onChange={(e) => setInputAmount(e.target.value)}
+            onChange={setInputAmount}
             placeholder="0"
             className="flex-1 text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
             autoFocus
           />
           <button
-            onClick={() => setInputAmount(String(remaining))}
+            onClick={() => setInputAmount(remaining)}
             disabled={remaining <= 0}
             className="px-3 py-2 text-xs font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
           >
@@ -758,7 +1043,7 @@ function CollectionModal({ target, onClose }: { target: CollectionTarget; onClos
       </div>
 
       {/* 입력 후 미리보기 */}
-      {inputAmount !== "" && Number(inputAmount) > 0 && (
+      {inputAmount > 0 && (
         <div className="rounded-lg border border-blue-100 bg-blue-50/50 px-4 py-3 text-xs space-y-1">
           <p className="text-blue-500 font-medium text-[10px] tracking-widest mb-1.5">등록 후 예상</p>
           <div className="flex justify-between text-slate-600">
@@ -792,7 +1077,7 @@ function CollectionModal({ target, onClose }: { target: CollectionTarget; onClos
           </button>
           <button
             onClick={handleSave}
-            disabled={!inputAmount || Number(inputAmount) <= 0 || isNaN(Number(inputAmount))}
+            disabled={inputAmount <= 0}
             className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             수금 등록
@@ -810,12 +1095,14 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
   const [recipientName, setRecipientName]     = useState(target.recipientName);
   const [recipientEmail, setRecipientEmail]   = useState(target.recipientEmail);
   const [assignedManager, setAssignedManager] = useState(target.assignedManager);
+  const [registeredAt, setRegisteredAt]       = useState(target.registeredAt);
 
   function handleSave() {
     updateProject(target.projectId, {
       docRequestDate: docRequestDate || undefined,
       docReplyDate:   docReplyDate || undefined,
       assignedManager: assignedManager || undefined,
+      registeredAt:   registeredAt || undefined,
     });
     if (target.leadMemberId) {
       updateProjectMember(target.leadMemberId, {
@@ -868,15 +1155,26 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
         </p>
       )}
 
-      <div>
-        <label className="block text-xs font-medium text-slate-600 mb-1">삼화담당자</label>
-        <input
-          value={assignedManager}
-          onChange={(e) => setAssignedManager(e.target.value)}
-          placeholder="담당자명"
-          className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-        />
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">삼화담당자</label>
+          <input
+            value={assignedManager}
+            onChange={(e) => setAssignedManager(e.target.value)}
+            placeholder="담당자명"
+            className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">등록일 (배정일)</label>
+          <DateInput value={registeredAt} onChange={setRegisteredAt} className="w-full" />
+        </div>
       </div>
+      {!registeredAt && (
+        <p className="text-[11px] text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+          등록일이 없으면 이 과제는 통합 대시보드의 연도별 집계에서 제외됩니다.
+        </p>
+      )}
 
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
         <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
@@ -944,12 +1242,15 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
       setError("이미 등록된 과제번호입니다.");
       return;
     }
-    const agency = fundingAgencies.find((a) => a.id === form.agencyId);
     const lead = institutions.find((i) => i.id === form.leadInstitutionId);
+    // 전담기관이 농촌진흥청 계열(RDA1/RDA2)이면 주관기관명으로 실제 트랙을 자동 교정한다 —
+    // 두 레코드 모두 표시 이름이 "농촌진흥청"이라 사람이 직접 고르면 실수하기 쉽다.
+    const resolvedAgencyId = resolveRdaAgencyId(form.agencyId, lead?.name ?? "");
+    const agency = fundingAgencies.find((a) => a.id === resolvedAgencyId);
     const created = addProject({
       projectNumber: form.projectNumber.trim(),
       projectName: form.projectName.trim(),
-      agencyId: form.agencyId,
+      agencyId: resolvedAgencyId,
       agency: agency?.name ?? "",
       leadInstitutionId: form.leadInstitutionId,
       leadInstitutionName: lead?.name ?? "",
@@ -963,7 +1264,7 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
       privateCash: form.privateCash || undefined,
       privateInKind: form.privateInKind || undefined,
       projectType: form.projectType,
-      programType: form.agencyId === "fa-003" ? form.programType : undefined,
+      programType: resolvedAgencyId === "fa-003" ? form.programType : undefined,
       researchLead: form.researchLead || undefined,
       assignedManager: form.assignedManager || undefined,
       projectDivision: form.projectDivision || undefined,
@@ -1026,15 +1327,15 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
         <div className="grid grid-cols-3 gap-4">
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">당해 정부출연금</label>
-            <input className={inputCls} type="number" min={0} value={form.govGrant} onChange={(e) => s("govGrant", Number(e.target.value))} />
+            <MoneyInput className={inputCls} value={form.govGrant} onChange={(v) => s("govGrant", v)} />
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">당해 민간원금</label>
-            <input className={inputCls} type="number" min={0} value={form.privateCash} onChange={(e) => s("privateCash", Number(e.target.value))} />
+            <MoneyInput className={inputCls} value={form.privateCash} onChange={(v) => s("privateCash", v)} />
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">당해 민간현물</label>
-            <input className={inputCls} type="number" min={0} value={form.privateInKind} onChange={(e) => s("privateInKind", Number(e.target.value))} />
+            <MoneyInput className={inputCls} value={form.privateInKind} onChange={(v) => s("privateInKind", v)} />
           </div>
         </div>
         <p className="text-xs text-slate-500">당해 사업비 합계: <strong className="text-slate-800">{fmtWon(totalBudget)}</strong></p>
@@ -1133,10 +1434,10 @@ function useFeeRows(): FeeRow[] {
         (pm) => pm.projectNumber === f0.projectNumber && pm.role === "LEAD"
       );
 
-      // 미해결 이슈 여부
-      const hasOpenIssue = projectIssues.some(
-        (i) => i.projectNumber === f0.projectNumber && i.status !== "RESOLVED"
-      );
+      // 이슈/메모 (최신순)
+      const issues = projectIssues
+        .filter((i) => i.projectNumber === f0.projectNumber)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
       // 발행구분 — billingType 없으면 세금계산서 유무로 판별
       const billingType = project?.billingType ?? (invoice ? "정발행" : "");
@@ -1151,8 +1452,11 @@ function useFeeRows(): FeeRow[] {
         projectName:         f0.projectName,
         leadInstitutionName: project?.leadInstitutionName ?? "",
         researchLead:        project?.researchLead ?? "",
+        projectCategory:     project?.projectCategory ?? "연차상시",
         startDate:           project?.startDate ?? "",
         endDate:             project?.endDate ?? "",
+        stageStartDate:      project?.stageStartDate ?? "",
+        stageEndDate:        project?.stageEndDate ?? "",
         billingType,
         invoiceIssuedAt:     invoice?.issuedAt ?? "",
         supplyAmount:        invoice?.supplyAmount ?? 0,
@@ -1165,12 +1469,14 @@ function useFeeRows(): FeeRow[] {
         receivableAmount:    rv?.receivableAmount ?? 0,
         unclaimedAmount:     ucRecord?.amount ?? 0,
         projectCode:         project?.projectCode ?? "",
+        agencyAssignedAt:    project?.agencyAssignedAt ?? "",
         docRequestDate:      project?.docRequestDate ?? "",
         docReplyDate:        project?.docReplyDate ?? "",
         recipientName:       leadMember?.contactName ?? "",
         recipientEmail:      leadMember?.contactEmail ?? "",
         projectDivision:     project?.projectDivision ?? "",
         assignedManager:     project?.assignedManager ?? "",
+        registeredAt:        project?.registeredAt ?? "",
         taxInvoiceId:        invoice?.id ?? "",
         taxInvoiceStatus:    invoice?.status ?? "",
         appliedFeeTotal,
@@ -1181,7 +1487,7 @@ function useFeeRows(): FeeRow[] {
         projectStatus:       project?.status ?? "",
         unclaimedFeeId:      ucRecord?.id ?? "",
         leadMemberId:        leadMember?.id ?? "",
-        hasOpenIssue,
+        issues,
       };
     });
 
@@ -1227,14 +1533,18 @@ function UnclaimedAmountCell({ row, canEdit }: { row: FeeRow; canEdit: boolean }
         status: "PENDING",
       });
     }
+    // 손실금액만큼 미수 금액에서 자동 차감 반영
+    if (row.receivableId) {
+      updateReceivable(row.receivableId, {
+        receivableAmount: Math.max(0, row.billedAmount - row.paidAmount - value),
+      });
+    }
   }
 
   return (
-    <input
-      type="number"
-      min={0}
+    <MoneyInput
       value={value}
-      onChange={(e) => setValue(Number(e.target.value))}
+      onChange={setValue}
       onBlur={commit}
       title="회수불가(손실) 금액 직접 입력"
       className="w-24 text-xs text-right border border-transparent hover:border-slate-200 focus:border-blue-400 rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500/30 bg-transparent focus:bg-white"
@@ -1249,6 +1559,7 @@ const COLUMNS = [
   { key: "projectName",        label: "과제명",      width: "w-52",  align: "text-left"   },
   { key: "leadInstitutionName",label: "주관기관",    width: "w-32",  align: "text-left"   },
   { key: "researchLead",       label: "연구책임자",  width: "w-20",  align: "text-center" },
+  { key: "projectCategory",    label: "과제구분",    width: "w-20",  align: "text-center" },
   { key: "startDate",          label: "당해시작일",  width: "w-24",  align: "text-center" },
   { key: "endDate",            label: "당해종료일",  width: "w-24",  align: "text-center" },
   { key: "billingType",        label: "발행구분",    width: "w-20",  align: "text-center" },
@@ -1260,8 +1571,8 @@ const COLUMNS = [
   { key: "paidAmount",         label: "수금액",      width: "w-28",  align: "text-right"  },
   { key: "receivableAmount",   label: "미수액",      width: "w-28",  align: "text-right"  },
   { key: "unclaimedAmount",    label: "손실금액",    width: "w-28",  align: "text-right"  },
-  { key: "hasOpenIssue",       label: "이슈",        width: "w-12",  align: "text-center" },
   { key: "projectCode",        label: "과제코드",    width: "w-32",  align: "text-left"   },
+  { key: "agencyAssignedAt",   label: "전담기관배정일",width: "w-24", align: "text-center" },
   { key: "docRequestDate",     label: "서류요청",    width: "w-24",  align: "text-center" },
   { key: "docReplyDate",       label: "서류회신",    width: "w-24",  align: "text-center" },
   { key: "recipientName",      label: "수신자",      width: "w-20",  align: "text-center" },
@@ -1270,56 +1581,49 @@ const COLUMNS = [
   { key: "assignedManager",    label: "삼화담당자",  width: "w-20",  align: "text-center" },
 ] as const;
 
-// ── FeeRowDetail ──────────────────────────────────────────────
+// ── FeeRowDetail (이슈/메모) ─────────────────────────────────────
+const ISSUE_PRIORITY_STYLE: Record<string, string> = {
+  HIGH: "bg-red-100 text-red-700",
+  MEDIUM: "bg-amber-100 text-amber-700",
+  LOW: "bg-slate-100 text-slate-500",
+};
+const ISSUE_PRIORITY_LABEL: Record<string, string> = { HIGH: "높음", MEDIUM: "보통", LOW: "낮음" };
+const ISSUE_STATUS_STYLE: Record<string, string> = {
+  OPEN: "bg-slate-100 text-slate-600",
+  IN_PROGRESS: "bg-blue-100 text-blue-700",
+  RESOLVED: "bg-green-100 text-green-700",
+};
+const ISSUE_STATUS_LABEL: Record<string, string> = { OPEN: "미처리", IN_PROGRESS: "진행중", RESOLVED: "완료" };
+
 function FeeRowDetail({ row }: { row: FeeRow }) {
   return (
     <tr>
       <td colSpan={COLUMNS.length + 4} className="bg-slate-50/70 px-6 py-4 border-b border-slate-100">
         <div className="space-y-2">
-          <p className="text-[10px] font-bold text-slate-400 tracking-widest mb-2">참여기관별 수수료</p>
-          <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-100 text-slate-500">
-                  <th className="text-left px-3 py-2">기관명</th>
-                  <th className="text-center px-3 py-2">역할</th>
-                  <th className="text-center px-3 py-2">유형</th>
-                  <th className="text-right px-3 py-2">사업비</th>
-                  <th className="text-center px-3 py-2">요율</th>
-                  <th className="text-right px-3 py-2">산정수수료</th>
-                  <th className="text-right px-3 py-2">적용수수료</th>
-                  <th className="text-center px-3 py-2">상태</th>
-                </tr>
-              </thead>
-              <tbody>
-                {row.fees.map((tf) => (
-                  <tr key={tf.id} className="border-b border-slate-50 last:border-0">
-                    <td className="px-3 py-2 font-medium text-slate-800">{tf.institutionName}</td>
-                    <td className="px-3 py-2 text-center text-slate-500">{tf.institutionType}</td>
-                    <td className="px-3 py-2 text-center text-slate-400 text-[10px]">{tf.institutionType}</td>
-                    <td className="px-3 py-2 text-right text-slate-600">{fmtWon(tf.budget)}</td>
-                    <td className="px-3 py-2 text-center text-blue-700 font-medium">{tf.feeRate}%</td>
-                    <td className="px-3 py-2 text-right text-slate-700">{fmtWon(tf.calculatedFee)}</td>
-                    <td className="px-3 py-2 text-right font-medium">
-                      <span className={tf.appliedFee === 0 ? "text-amber-500" : "text-slate-800"}>
-                        {tf.appliedFee === 0 ? "미적용" : fmtWon(tf.appliedFee)}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-center">
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-                        tf.status === "BILLED"    ? "bg-green-100 text-green-700" :
-                        tf.status === "CONFIRMED" ? "bg-blue-100 text-blue-700"  :
-                        tf.status === "DRAFT"     ? "bg-slate-100 text-slate-500" :
-                                                    "bg-amber-100 text-amber-700"
-                      }`}>
-                        {tf.status === "BILLED" ? "청구완료" : tf.status === "CONFIRMED" ? "확정" : tf.status === "DRAFT" ? "초안" : "예정"}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-[10px] font-bold text-slate-400 tracking-widest">이슈 / 메모</p>
+            <Link href="/issues" className="text-[11px] text-blue-500 hover:underline">이슈 관리로 이동 →</Link>
           </div>
+          {row.issues.length === 0 ? (
+            <div className="rounded-lg border border-slate-200 bg-white px-4 py-6 text-center text-xs text-slate-400">
+              등록된 이슈/메모가 없습니다
+            </div>
+          ) : (
+            <div className="rounded-lg border border-slate-200 bg-white divide-y divide-slate-100 overflow-hidden">
+              {row.issues.map((issue) => (
+                <div key={issue.id} className="px-4 py-2.5 flex items-start gap-3">
+                  <span className={`shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded whitespace-nowrap ${ISSUE_PRIORITY_STYLE[issue.priority]}`}>
+                    {ISSUE_PRIORITY_LABEL[issue.priority]}
+                  </span>
+                  <span className={`shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded whitespace-nowrap ${ISSUE_STATUS_STYLE[issue.status ?? "OPEN"]}`}>
+                    {ISSUE_STATUS_LABEL[issue.status ?? "OPEN"]}
+                  </span>
+                  <p className="flex-1 text-xs text-slate-700 leading-relaxed">{issue.content}</p>
+                  <span className="shrink-0 text-[10px] text-slate-400 font-mono whitespace-nowrap">{issue.author} · {issue.createdAt}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </td>
     </tr>
@@ -1338,13 +1642,15 @@ function monthRange(offset: number): [string, string] {
   return [from, to];
 }
 
-function quarterRange(offset: number): [string, string] {
-  const now     = new Date();
-  const quarter = Math.floor(now.getMonth() / 3) + offset;
-  const year    = now.getFullYear() + Math.floor(quarter / 4);
-  const q       = ((quarter % 4) + 4) % 4;
-  const from    = `${year}-${String(q * 3 + 1).padStart(2, "0")}-01`;
-  const lastDay = new Date(year, q * 3 + 3, 0);
+// 사업(부가세 신고) 분기 — 1분기 4~6월, 2분기 7~9월, 3분기 10~12월, 4분기(익년) 1~3월.
+// 오늘이 속한 결산연도(4월 시작) 기준으로 해당 분기의 날짜 범위를 계산한다.
+function govFiscalQuarterRange(q: 1 | 2 | 3 | 4): [string, string] {
+  const now = new Date();
+  const cycleStartYear = now.getMonth() + 1 >= 4 ? now.getFullYear() : now.getFullYear() - 1;
+  const year = q === 4 ? cycleStartYear + 1 : cycleStartYear;
+  const startMonth = q === 4 ? 1 : (q - 1) * 3 + 4;
+  const from    = `${year}-${String(startMonth).padStart(2, "0")}-01`;
+  const lastDay = new Date(year, startMonth + 2, 0);
   const to      = `${lastDay.getFullYear()}-${String(lastDay.getMonth() + 1).padStart(2, "0")}-${String(lastDay.getDate()).padStart(2, "0")}`;
   return [from, to];
 }
@@ -1352,6 +1658,7 @@ function quarterRange(offset: number): [string, string] {
 // ── FeesPage ──────────────────────────────────────────────────
 export default function FeesPage() {
   const canEdit     = useCanWrite("fees");
+  const canEditSales = useCanWrite("fees-sales");
   const allRows     = useFeeRows();
   const { fundingAgencies } = useStore();
   const searchParams = useSearchParams();
@@ -1370,6 +1677,8 @@ export default function FeesPage() {
   const [invoiceDateTo, setInvoiceDateTo]     = useState("");
   const [termEndDateFrom, setTermEndDateFrom] = useState("");
   const [termEndDateTo, setTermEndDateTo]     = useState("");
+  const [agencyAssignedFrom, setAgencyAssignedFrom] = useState("");
+  const [agencyAssignedTo, setAgencyAssignedTo]     = useState("");
   const [expandedKey, setExpandedKey]     = useState<string | null>(null);
   const [modal, setModal]                 = useState<ModalState | null>(null);
   const [selectedKeys, setSelectedKeys]   = useState<Set<string>>(new Set());
@@ -1389,8 +1698,14 @@ export default function FeesPage() {
     setTermEndDateTo("");
   }
 
+  function clearAgencyAssignedRange() {
+    setAgencyAssignedFrom("");
+    setAgencyAssignedTo("");
+  }
+
   const hasDateFilter = invoiceDateFrom !== "" || invoiceDateTo !== "";
   const hasTermEndDateFilter = termEndDateFrom !== "" || termEndDateTo !== "";
+  const hasAgencyAssignedFilter = agencyAssignedFrom !== "" || agencyAssignedTo !== "";
 
   const filtered = useMemo(
     () =>
@@ -1413,13 +1728,18 @@ export default function FeesPage() {
         const matchEndFrom = termEndDateFrom === "" || (endDt !== "" && endDt >= termEndDateFrom);
         const matchEndTo   = termEndDateTo   === "" || (endDt !== "" && endDt <= termEndDateTo);
 
+        const assignedDt = r.agencyAssignedAt;
+        const matchAssignedFrom = agencyAssignedFrom === "" || (assignedDt !== "" && assignedDt >= agencyAssignedFrom);
+        const matchAssignedTo   = agencyAssignedTo   === "" || (assignedDt !== "" && assignedDt <= agencyAssignedTo);
+
         return matchProjectNumber && matchProjectName && matchLeadInstitution && matchResearchLead
           && matchStatus && matchAgency && matchBillingType && matchCollectionStatus
-          && matchOnlyReceivable && matchFrom && matchTo && matchEndFrom && matchEndTo;
+          && matchOnlyReceivable && matchFrom && matchTo && matchEndFrom && matchEndTo
+          && matchAssignedFrom && matchAssignedTo;
       }),
     [allRows, filterProjectNumber, filterProjectName, filterLeadInstitution, filterResearchLead,
      filterProjectStatus, filterAgency, filterBillingType, filterCollectionStatus, filterOnlyReceivable,
-     invoiceDateFrom, invoiceDateTo, termEndDateFrom, termEndDateTo]
+     invoiceDateFrom, invoiceDateTo, termEndDateFrom, termEndDateTo, agencyAssignedFrom, agencyAssignedTo]
   );
 
   // 요약 통계
@@ -1491,6 +1811,15 @@ export default function FeesPage() {
           <Link href={`/researchers/${encodeURIComponent(row.researchLead)}`} className="text-xs text-slate-700 hover:text-blue-600 hover:underline transition-colors">{row.researchLead}</Link>
         ) : <span className="text-slate-300">—</span>;
 
+      case "projectCategory":
+        return (
+          <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
+            row.projectCategory === "정산" ? "bg-orange-100 text-orange-700" : "bg-indigo-100 text-indigo-700"
+          }`}>
+            {row.projectCategory}
+          </span>
+        );
+
       case "startDate":
         return <span className="text-xs text-slate-600">{row.startDate ? fmtDate(row.startDate) : "—"}</span>;
 
@@ -1540,15 +1869,11 @@ export default function FeesPage() {
       case "unclaimedAmount":
         return <UnclaimedAmountCell row={row} canEdit={canEdit} />;
 
-      case "hasOpenIssue":
-        return row.hasOpenIssue ? (
-          <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-red-50 text-red-600 text-[11px] font-bold">O</span>
-        ) : (
-          <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-slate-100 text-slate-400 text-[11px] font-bold">X</span>
-        );
-
       case "projectCode":
         return <span className="font-mono text-[11px] text-slate-500">{row.projectCode || "—"}</span>;
+
+      case "agencyAssignedAt":
+        return <span className="text-xs text-slate-600">{row.agencyAssignedAt ? fmtDate(row.agencyAssignedAt) : "—"}</span>;
 
       case "docRequestDate":
         return <span className="text-xs text-slate-600">{row.docRequestDate ? fmtDate(row.docRequestDate) : "—"}</span>;
@@ -1591,13 +1916,55 @@ export default function FeesPage() {
     }
   }
 
+  function exportToExcel() {
+    const data = filtered.map((r) => ({
+      "약칭": r.agencyShortName,
+      "과제번호": r.projectNumber,
+      "과제명": r.projectName,
+      "주관기관": r.leadInstitutionName,
+      "연구책임자": r.researchLead,
+      "과제구분": r.projectCategory,
+      "당해시작일": r.startDate,
+      "당해종료일": r.endDate,
+      "발행구분": r.billingType,
+      "계산서일자": r.invoiceIssuedAt,
+      "공급가액": r.supplyAmount,
+      "부가세": r.taxAmount,
+      "합계": r.totalInvoiceAmount,
+      "수금상태": COLLECTION_STATUS_LABEL[r.collectionStatus] ?? "",
+      "수금액": r.paidAmount,
+      "미수액": r.receivableAmount,
+      "손실금액": r.unclaimedAmount,
+      "과제코드": r.projectCode,
+      "전담기관배정일": r.agencyAssignedAt,
+      "서류요청일": r.docRequestDate,
+      "서류회신일": r.docReplyDate,
+      "수신자": r.recipientName,
+      "수신자이메일": r.recipientEmail,
+      "구분": r.projectDivision,
+      "삼화담당자": r.assignedManager,
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    ws["!cols"] = Object.keys(data[0] ?? {}).map(() => ({ wch: 16 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "수수료청구관리");
+    XLSX.writeFile(wb, `수수료청구관리_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }
+
   return (
     <div className="space-y-4">
       {/* 상단 요약 */}
       <div className="flex items-center justify-between">
         <p className="text-xs text-slate-500">과제별 수수료·세금계산서 관리 · 전체 {allRows.length}건</p>
-        {canEdit && (
-          <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={exportToExcel}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
+          >
+            <FiDownload size={12} />
+            엑셀 다운로드
+          </button>
+          {canEdit && (
             <button
               onClick={() => setModal({ mode: "project-add" })}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
@@ -1605,8 +1972,8 @@ export default function FeesPage() {
               <FiPlus size={12} />
               새 과제 추가
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-4 gap-3">
@@ -1697,7 +2064,7 @@ export default function FeesPage() {
         </div>
 
         {/* 기간 필터 */}
-        <div className="px-4 py-3 grid grid-cols-2 gap-x-6 gap-y-3">
+        <div className="px-4 py-3 grid grid-cols-3 gap-x-6 gap-y-3">
           {/* 세금계산서 일자 */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
@@ -1721,8 +2088,10 @@ export default function FeesPage() {
                 { label: "이번달",   fn: () => applyDateRange(...monthRange(0))   },
                 { label: "지난달",   fn: () => applyDateRange(...monthRange(-1))  },
                 { label: "2개월 전", fn: () => applyDateRange(...monthRange(-2))  },
-                { label: "이번분기", fn: () => applyDateRange(...quarterRange(0)) },
-                { label: "지난분기", fn: () => applyDateRange(...quarterRange(-1))},
+                { label: "1분기",   fn: () => applyDateRange(...govFiscalQuarterRange(1)) },
+                { label: "2분기",   fn: () => applyDateRange(...govFiscalQuarterRange(2)) },
+                { label: "3분기",   fn: () => applyDateRange(...govFiscalQuarterRange(3)) },
+                { label: "4분기",   fn: () => applyDateRange(...govFiscalQuarterRange(4)) },
               ].map(({ label, fn }) => (
                 <button
                   key={label}
@@ -1754,9 +2123,29 @@ export default function FeesPage() {
               <DateInput value={termEndDateTo} onChange={setTermEndDateTo} className="w-28" />
             </div>
           </div>
+
+          {/* 전담기관 배정일 */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-slate-500">전담기관 배정일</span>
+              {hasAgencyAssignedFilter && (
+                <button
+                  onClick={clearAgencyAssignedRange}
+                  className="text-[11px] text-slate-400 hover:text-slate-600 px-1.5 py-0.5 rounded hover:bg-slate-100 transition-colors"
+                >
+                  초기화
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <DateInput value={agencyAssignedFrom} onChange={setAgencyAssignedFrom} className="w-28" />
+              <span className="text-slate-400 text-xs">~</span>
+              <DateInput value={agencyAssignedTo} onChange={setAgencyAssignedTo} className="w-28" />
+            </div>
+          </div>
         </div>
 
-        {(hasDateFilter || hasTermEndDateFilter) && (
+        {(hasDateFilter || hasTermEndDateFilter || hasAgencyAssignedFilter) && (
           <div className="px-4 py-2 flex justify-end">
             <span className="text-xs text-blue-600 font-medium">{filtered.length}건 해당</span>
           </div>
@@ -1860,21 +2249,27 @@ export default function FeesPage() {
                       <td className="px-3 py-2.5 text-center align-middle w-24">
                         {row.taxInvoiceId && row.taxInvoiceStatus !== "CANCELED" ? (
                           <DispatchDropdown
-                            onSelect={(cat) =>
+                            onSelect={(choice) =>
                               setModal({
                                 mode: "dispatch",
                                 target: {
+                                  kind:                choice.kind,
                                   projectNumber:       row.projectNumber,
                                   projectName:         row.projectName,
                                   leadInstitutionName: row.leadInstitutionName,
+                                  agencyShortName:     row.agencyShortName,
                                   termYear:            row.termYear,
                                   termNumber:          row.termNumber,
                                   recipientEmail:      row.recipientEmail,
                                   recipientName:       row.recipientName,
-                                  feeCategory:         cat,
+                                  feeCategory:         choice.kind === "OTHER" ? "ANNUAL" : choice.feeCategory,
                                   supplyAmount:        row.supplyAmount,
                                   taxAmount:           row.taxAmount,
                                   totalAmount:         row.totalInvoiceAmount,
+                                  startDate:           row.startDate,
+                                  endDate:             row.endDate,
+                                  stageStartDate:      row.stageStartDate,
+                                  stageEndDate:        row.stageEndDate,
                                 },
                               })
                             }
@@ -1885,35 +2280,12 @@ export default function FeesPage() {
                       </td>
                       {/* 매출관리 버튼 */}
                       <td className="px-3 py-2.5 text-center align-middle w-32">
-                        <div className="flex items-center justify-center gap-1">
-                          <button
-                            onClick={() =>
-                              setModal({
-                                mode: "sales-issue",
-                                target: {
-                                  projectId:           row.projectId,
-                                  projectNumber:       row.projectNumber,
-                                  projectName:         row.projectName,
-                                  leadInstitutionName: row.leadInstitutionName,
-                                  termYear:            row.termYear,
-                                  termNumber:          row.termNumber,
-                                  currentBillingType:  row.billingType,
-                                  currentIssuedAt:     row.invoiceIssuedAt,
-                                  taxInvoiceId:        row.taxInvoiceId,
-                                  taxInvoiceStatus:    row.taxInvoiceStatus,
-                                  appliedFeeTotal:     row.appliedFeeTotal,
-                                },
-                              })
-                            }
-                            className="text-[11px] font-medium px-2 py-1 rounded transition-colors whitespace-nowrap bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200"
-                          >
-                            매출발행
-                          </button>
-                          {row.taxInvoiceId && row.taxInvoiceStatus !== "CANCELED" && (
+                        {canEditSales ? (
+                          <div className="flex items-center justify-center gap-1">
                             <button
                               onClick={() =>
                                 setModal({
-                                  mode: "sales-cancel",
+                                  mode: "sales-issue",
                                   target: {
                                     projectId:           row.projectId,
                                     projectNumber:       row.projectNumber,
@@ -1926,19 +2298,50 @@ export default function FeesPage() {
                                     taxInvoiceId:        row.taxInvoiceId,
                                     taxInvoiceStatus:    row.taxInvoiceStatus,
                                     appliedFeeTotal:     row.appliedFeeTotal,
+                                    receivableId:        row.receivableId,
+                                    paidAmount:          row.paidAmount,
                                   },
                                 })
                               }
-                              className="text-[11px] font-medium px-2 py-1 rounded transition-colors whitespace-nowrap bg-rose-50 text-rose-600 hover:bg-rose-100 border border-rose-200"
+                              className="text-[11px] font-medium px-2 py-1 rounded transition-colors whitespace-nowrap bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200"
                             >
-                              매출취소
+                              매출발행
                             </button>
-                          )}
-                        </div>
+                            {row.taxInvoiceId && row.taxInvoiceStatus !== "CANCELED" && (
+                              <button
+                                onClick={() =>
+                                  setModal({
+                                    mode: "sales-cancel",
+                                    target: {
+                                      projectId:           row.projectId,
+                                      projectNumber:       row.projectNumber,
+                                      projectName:         row.projectName,
+                                      leadInstitutionName: row.leadInstitutionName,
+                                      termYear:            row.termYear,
+                                      termNumber:          row.termNumber,
+                                      currentBillingType:  row.billingType,
+                                      currentIssuedAt:     row.invoiceIssuedAt,
+                                      taxInvoiceId:        row.taxInvoiceId,
+                                      taxInvoiceStatus:    row.taxInvoiceStatus,
+                                      appliedFeeTotal:     row.appliedFeeTotal,
+                                      receivableId:        row.receivableId,
+                                      paidAmount:          row.paidAmount,
+                                    },
+                                  })
+                                }
+                                className="text-[11px] font-medium px-2 py-1 rounded transition-colors whitespace-nowrap bg-rose-50 text-rose-600 hover:bg-rose-100 border border-rose-200"
+                              >
+                                매출취소
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-slate-300 text-xs">—</span>
+                        )}
                       </td>
                       {/* 수금관리 버튼 */}
                       <td className="px-3 py-2.5 text-center align-middle w-20">
-                        {hasReceivable ? (
+                        {canEditSales && hasReceivable ? (
                           <button
                             onClick={() =>
                               setModal({
@@ -1983,6 +2386,7 @@ export default function FeesPage() {
                                   recipientName:   row.recipientName,
                                   recipientEmail:  row.recipientEmail,
                                   assignedManager: row.assignedManager,
+                                  registeredAt:    row.registeredAt,
                                 },
                               })
                             }

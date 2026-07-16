@@ -8,8 +8,19 @@ import { fmtWon, fmtDate } from "@/lib/utils";
 import Link from "next/link";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
+import DateInput from "@/components/common/DateInput";
+import MoneyInput from "@/components/common/MoneyInput";
 import { useCanWrite } from "@/lib/permissions";
 import { isOverdueByRule } from "@/lib/notifications";
+
+// 청구일로부터 n개월 뒤 날짜(yyyy-mm-dd). 잘못된 날짜면 빈 문자열.
+function addMonths(dateStr: string, months: number): string {
+  if (!dateStr) return "";
+  const d = new Date(`${dateStr}T00:00:00`);
+  if (isNaN(d.getTime())) return "";
+  d.setMonth(d.getMonth() + months);
+  return d.toISOString().slice(0, 10);
+}
 
 const STATUS_MAP: Record<Receivable["status"], { label: string; color: "red" | "amber" | "green" | "blue" }> = {
   OVERDUE: { label: "미수", color: "red" },
@@ -20,21 +31,24 @@ const STATUS_MAP: Record<Receivable["status"], { label: string; color: "red" | "
 
 type ModalState = { mode: "add" } | { mode: "edit"; target: Receivable };
 
-const EMPTY: Omit<Receivable, "id"> = {
-  invoiceNumber: "",
-  projectNumber: "",
-  projectName: "",
-  termYear: new Date().getFullYear(),
-  termNumber: 1,
-  leadInstitutionId: "",
-  leadInstitutionName: "",
-  billedAt: new Date().toISOString().slice(0, 10),
-  billedAmount: 0,
-  paidAmount: 0,
-  receivableAmount: 0,
-  dueDate: "",
-  status: "PENDING",
-};
+function makeEmpty(): Omit<Receivable, "id"> {
+  const billedAt = new Date().toISOString().slice(0, 10);
+  return {
+    invoiceNumber: "",
+    projectNumber: "",
+    projectName: "",
+    termYear: new Date().getFullYear(),
+    termNumber: 1,
+    leadInstitutionId: "",
+    leadInstitutionName: "",
+    billedAt,
+    billedAmount: 0,
+    paidAmount: 0,
+    receivableAmount: 0,
+    dueDate: addMonths(billedAt, 3),
+    status: "OVERDUE", // 기본 상태 = 미수 (STATUS_MAP.OVERDUE.label 참고)
+  };
+}
 
 const inputCls = "w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400";
 const selectCls = `${inputCls} bg-white`;
@@ -52,6 +66,19 @@ function ReceivableForm({ initial, onSubmit, onClose }: { initial: Omit<Receivab
   const { institutions } = useStore();
   const [form, setForm] = useState(initial);
   const s = (k: keyof typeof form, v: unknown) => setForm((p) => ({ ...p, [k]: v }));
+
+  // 청구일이 바뀌면 만기일(청구일+3개월)도 함께 갱신한다 — 단, 사용자가 만기일을
+  // 자동계산값과 다르게 직접 수정해둔 경우엔 건드리지 않는다.
+  function handleBilledAtChange(nextBilledAt: string) {
+    setForm((p) => {
+      const wasAutoSynced = p.dueDate === addMonths(p.billedAt, 3);
+      return {
+        ...p,
+        billedAt: nextBilledAt,
+        dueDate: wasAutoSynced ? addMonths(nextBilledAt, 3) : p.dueDate,
+      };
+    });
+  }
 
   function handleLeadChange(instId: string) {
     const inst = institutions.find((i) => i.id === instId);
@@ -87,13 +114,13 @@ function ReceivableForm({ initial, onSubmit, onClose }: { initial: Omit<Receivab
         <Field label="연차"><input className={inputCls} type="number" min={1} value={form.termNumber} onChange={(e) => s("termNumber", Number(e.target.value))} /></Field>
       </div>
       <div className="grid grid-cols-3 gap-4">
-        <Field label="청구액(원)"><input className={inputCls} type="number" min={0} value={form.billedAmount} onChange={(e) => s("billedAmount", Number(e.target.value))} /></Field>
-        <Field label="수금액(원)"><input className={inputCls} type="number" min={0} value={form.paidAmount} onChange={(e) => s("paidAmount", Number(e.target.value))} /></Field>
-        <Field label="미수금(원)"><input className={inputCls} type="number" min={0} value={form.receivableAmount} onChange={(e) => s("receivableAmount", Number(e.target.value))} /></Field>
+        <Field label="청구액(원)"><MoneyInput className={inputCls} value={form.billedAmount} onChange={(v) => s("billedAmount", v)} /></Field>
+        <Field label="수금액(원)"><MoneyInput className={inputCls} value={form.paidAmount} onChange={(v) => s("paidAmount", v)} /></Field>
+        <Field label="미수금(원)"><MoneyInput className={inputCls} value={form.receivableAmount} onChange={(v) => s("receivableAmount", v)} /></Field>
       </div>
       <div className="grid grid-cols-2 gap-4">
-        <Field label="청구일"><input className={inputCls} type="date" value={form.billedAt} onChange={(e) => s("billedAt", e.target.value)} /></Field>
-        <Field label="만기일"><input className={inputCls} type="date" value={form.dueDate} onChange={(e) => s("dueDate", e.target.value)} /></Field>
+        <Field label="청구일"><DateInput className="w-full" value={form.billedAt} onChange={handleBilledAtChange} /></Field>
+        <Field label="만기일"><DateInput className="w-full" value={form.dueDate} onChange={(v) => s("dueDate", v)} /></Field>
       </div>
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
         <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
@@ -288,7 +315,7 @@ export default function ReceivablesPage() {
 
       {modal && (
         <Modal title={modal.mode === "add" ? "새 채권 추가" : "채권 수정"} onClose={() => setModal(null)} size="lg">
-          <ReceivableForm initial={modal.mode === "edit" ? modal.target : EMPTY} onSubmit={handleSubmit} onClose={() => setModal(null)} />
+          <ReceivableForm initial={modal.mode === "edit" ? modal.target : makeEmpty()} onSubmit={handleSubmit} onClose={() => setModal(null)} />
         </Modal>
       )}
     </div>

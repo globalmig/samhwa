@@ -1,11 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import Link from "next/link";
 import { FiPlus, FiX, FiCheck, FiEdit2, FiTrash2 } from "react-icons/fi";
 import { useStore, addProjectIssue, updateProjectIssue, deleteProjectIssue } from "@/lib/store";
 import { useCanWrite } from "@/lib/permissions";
-import type { ProjectIssue } from "@/lib/mock";
+import type { ProjectIssue, IssueRecipientGroup } from "@/lib/mock";
 
 const PRIORITY_STYLE: Record<string, string> = {
   HIGH:   "bg-red-100 text-red-700",
@@ -28,19 +28,30 @@ const STATUS_LABEL: Record<string, string> = {
 const inp = "text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400";
 const sel = `${inp} bg-white`;
 
+const RECIPIENT_OPTIONS: { value: IssueRecipientGroup; label: string }[] = [
+  { value: "MANAGER",    label: "담당자" },
+  { value: "ACCOUNTANT", label: "회계담당자 전체" },
+  { value: "SETTLEMENT", label: "전문기관담당자 전체" },
+];
+
 type EditDraft = {
   content: string;
   priority: "HIGH" | "MEDIUM" | "LOW";
   status: "OPEN" | "IN_PROGRESS" | "RESOLVED";
+  recipientGroups: IssueRecipientGroup[];
 };
 
 export default function IssuesPage() {
-  const canEdit = useCanWrite('issues');
-  const { projectIssues, projects } = useStore();
+  const canCreate = useCanWrite('issues');
+  const canManage = useCanWrite('issues-manage');
+  const { projectIssues, projects, fundingAgencies } = useStore();
 
   const [priorityFilter, setPriorityFilter] = useState<"ALL" | "HIGH" | "MEDIUM" | "LOW">("ALL");
   const [statusFilter, setStatusFilter] = useState<"ALL" | "OPEN" | "IN_PROGRESS" | "RESOLVED">("ALL");
-  const [projectFilter, setProjectFilter] = useState("ALL");
+  const [agencyFilter, setAgencyFilter] = useState("ALL");
+  const [projectNumberFilter, setProjectNumberFilter] = useState("");
+  const [institutionFilter, setInstitutionFilter] = useState("");
+  const [authorFilter, setAuthorFilter] = useState("");
   const [showForm, setShowForm] = useState(false);
 
   // New issue form state
@@ -48,20 +59,36 @@ export default function IssuesPage() {
   const [formContent, setFormContent] = useState("");
   const [formPriority, setFormPriority] = useState<"HIGH" | "MEDIUM" | "LOW">("MEDIUM");
   const [formStatus, setFormStatus] = useState<"OPEN" | "IN_PROGRESS" | "RESOLVED">("OPEN");
+  const [formRecipients, setFormRecipients] = useState<IssueRecipientGroup[]>([]);
 
   // Edit state
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState<EditDraft>({ content: "", priority: "MEDIUM", status: "OPEN" });
+  const [editDraft, setEditDraft] = useState<EditDraft>({ content: "", priority: "MEDIUM", status: "OPEN", recipientGroups: [] });
 
   // Delete confirm
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  function toggleFormRecipient(group: IssueRecipientGroup) {
+    setFormRecipients((prev) => prev.includes(group) ? prev.filter((g) => g !== group) : [...prev, group]);
+  }
+
+  function toggleEditRecipient(group: IssueRecipientGroup) {
+    setEditDraft((d) => ({
+      ...d,
+      recipientGroups: d.recipientGroups.includes(group) ? d.recipientGroups.filter((g) => g !== group) : [...d.recipientGroups, group],
+    }));
+  }
 
   const sorted = [...projectIssues].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
   const filtered = sorted.filter((issue) => {
     if (priorityFilter !== "ALL" && issue.priority !== priorityFilter) return false;
     if (statusFilter !== "ALL" && issue.status !== statusFilter) return false;
-    if (projectFilter !== "ALL" && issue.projectId !== projectFilter) return false;
+    const project = projects.find((p) => p.id === issue.projectId);
+    if (agencyFilter !== "ALL" && project?.agencyId !== agencyFilter) return false;
+    if (projectNumberFilter !== "" && !issue.projectNumber.includes(projectNumberFilter)) return false;
+    if (institutionFilter !== "" && !(project?.leadInstitutionName ?? "").includes(institutionFilter)) return false;
+    if (authorFilter !== "" && !issue.author.includes(authorFilter)) return false;
     return true;
   });
 
@@ -76,17 +103,19 @@ export default function IssuesPage() {
       createdAt: new Date().toISOString().replace("T", " ").slice(0, 16),
       priority: formPriority,
       status: formStatus,
+      recipientGroups: formRecipients,
     });
     setFormContent("");
     setFormPriority("MEDIUM");
     setFormStatus("OPEN");
     setFormProjectId("");
+    setFormRecipients([]);
     setShowForm(false);
   }
 
   function startEdit(issue: ProjectIssue) {
     setEditingId(issue.id);
-    setEditDraft({ content: issue.content, priority: issue.priority, status: issue.status ?? "OPEN" });
+    setEditDraft({ content: issue.content, priority: issue.priority, status: issue.status ?? "OPEN", recipientGroups: issue.recipientGroups ?? [] });
   }
 
   function saveEdit() {
@@ -95,6 +124,7 @@ export default function IssuesPage() {
       content: editDraft.content.trim(),
       priority: editDraft.priority,
       status: editDraft.status,
+      recipientGroups: editDraft.recipientGroups,
     });
     setEditingId(null);
   }
@@ -123,7 +153,7 @@ export default function IssuesPage() {
             완료 <span className="text-green-600 font-medium">{projectIssues.filter((i) => i.status === "RESOLVED").length}건</span>
           </p>
         </div>
-        {canEdit && (
+        {canCreate && (
           <button onClick={() => setShowForm((v) => !v)}
             className="flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
             {showForm ? <><FiX size={12} /> 닫기</> : <><FiPlus size={12} /> 이슈 등록</>}
@@ -135,30 +165,34 @@ export default function IssuesPage() {
       {showForm && (
         <div className="bg-white rounded-xl border border-blue-200 px-5 py-4 space-y-3">
           <h3 className="text-xs font-semibold text-slate-700">새 이슈 등록</h3>
-          <div className="grid grid-cols-3 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">과제 선택</label>
+            <select value={formProjectId} onChange={(e) => setFormProjectId(e.target.value)}
+              className={`${sel} w-full`}>
+              <option value="">과제를 선택하세요</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>{p.projectName}</option>
+              ))}
+            </select>
+          </div>
+          <textarea value={formContent} onChange={(e) => setFormContent(e.target.value)}
+            placeholder="이슈 또는 메모 내용을 입력하세요"
+            className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+            rows={3} maxLength={500} />
+          <div className="flex items-center gap-3">
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">과제 선택</label>
-              <select value={formProjectId} onChange={(e) => setFormProjectId(e.target.value)}
-                className={`${sel} w-full`}>
-                <option value="">과제를 선택하세요</option>
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>{p.projectName}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">중요도</label>
+              <label className="text-xs text-slate-500 mr-2">중요도</label>
               <select value={formPriority} onChange={(e) => setFormPriority(e.target.value as typeof formPriority)}
-                className={`${sel} w-full`}>
+                className={`${sel} w-24`}>
                 <option value="HIGH">높음</option>
                 <option value="MEDIUM">보통</option>
                 <option value="LOW">낮음</option>
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">진행여부</label>
+              <label className="text-xs text-slate-500 mr-2">진행여부</label>
               <select value={formStatus} onChange={(e) => setFormStatus(e.target.value as typeof formStatus)}
-                className={`${sel} w-full`}>
+                className={`${sel} w-24`}>
                 <option value="OPEN">미처리</option>
                 <option value="IN_PROGRESS">진행중</option>
                 <option value="RESOLVED">완료</option>
@@ -166,11 +200,17 @@ export default function IssuesPage() {
             </div>
           </div>
           <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">내용</label>
-            <textarea value={formContent} onChange={(e) => setFormContent(e.target.value)}
-              placeholder="이슈 또는 메모 내용을 입력하세요"
-              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-              rows={3} maxLength={500} />
+            <p className="text-xs text-slate-500 mb-1.5">알림 받을 대상 <span className="text-slate-400 font-normal">· 선택 안 하면 과제 담당자에게만 전달</span></p>
+            <div className="flex items-center gap-3">
+              {RECIPIENT_OPTIONS.map(({ value, label }) => (
+                <label key={value} className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="checkbox" checked={formRecipients.includes(value)}
+                    onChange={() => toggleFormRecipient(value)}
+                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30" />
+                  <span className="text-xs text-slate-600">{label}</span>
+                </label>
+              ))}
+            </div>
           </div>
           <div className="flex justify-end gap-2">
             <button onClick={() => setShowForm(false)}
@@ -184,46 +224,75 @@ export default function IssuesPage() {
       )}
 
       {/* Filter bar */}
-      <div className="bg-white rounded-xl border border-slate-200 px-5 py-3 flex flex-wrap items-center gap-0">
-        {/* 우선순위 */}
-        <div className="flex items-center gap-1.5 pr-5 border-r border-slate-100">
-          <span className="text-[11px] font-medium text-slate-400 mr-0.5 shrink-0">우선순위</span>
-          {(["ALL", "HIGH", "MEDIUM", "LOW"] as const).map((p) => (
-            <button key={p} onClick={() => setPriorityFilter(p)}
-              className={`px-2.5 py-1 text-xs rounded-full whitespace-nowrap transition-colors ${
-                priorityFilter === p
-                  ? "bg-blue-600 text-white font-medium"
-                  : "bg-slate-100 text-slate-500 hover:bg-slate-200"
-              }`}>
-              {p === "ALL" ? "전체" : PRIORITY_LABEL[p]}
-            </button>
+      <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100">
+        {/* 검색 필터 */}
+        <div className="px-5 py-3 grid grid-cols-4 gap-3">
+          <div>
+            <p className="text-[10px] font-medium text-slate-400 mb-1">전담기관</p>
+            <select value={agencyFilter} onChange={(e) => setAgencyFilter(e.target.value)}
+              className={`${sel} w-full`}>
+              <option value="ALL">전담기관 전체</option>
+              {fundingAgencies.map((a) => (
+                <option key={a.id} value={a.id}>{a.shortName} · {a.name}</option>
+              ))}
+            </select>
+          </div>
+          {[
+            { label: "과제번호", value: projectNumberFilter, onChange: setProjectNumberFilter },
+            { label: "기관명",   value: institutionFilter,   onChange: setInstitutionFilter   },
+            { label: "작성자",   value: authorFilter,        onChange: setAuthorFilter         },
+          ].map(({ label, value, onChange }) => (
+            <div key={label}>
+              <p className="text-[10px] font-medium text-slate-400 mb-1">{label}</p>
+              <input
+                type="text"
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                placeholder={`${label} 검색...`}
+                className="w-full text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+              />
+            </div>
           ))}
         </div>
-        {/* 진행여부 */}
-        <div className="flex items-center gap-1.5 px-5 border-r border-slate-100">
-          <span className="text-[11px] font-medium text-slate-400 mr-0.5 shrink-0">진행여부</span>
-          {(["ALL", "OPEN", "IN_PROGRESS", "RESOLVED"] as const).map((s) => (
-            <button key={s} onClick={() => setStatusFilter(s)}
-              className={`px-2.5 py-1 text-xs rounded-full whitespace-nowrap transition-colors ${
-                statusFilter === s
-                  ? "bg-blue-600 text-white font-medium"
-                  : "bg-slate-100 text-slate-500 hover:bg-slate-200"
-              }`}>
-              {s === "ALL" ? "전체" : STATUS_LABEL[s]}
-            </button>
-          ))}
-        </div>
-        {/* 과제 드롭다운 */}
-        <div className="flex items-center gap-2 ml-auto">
-          <label className="text-[11px] font-medium text-slate-400 shrink-0">과제</label>
-          <select value={projectFilter} onChange={(e) => setProjectFilter(e.target.value)}
-            className="text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 max-w-52">
-            <option value="ALL">전체 과제</option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>{p.projectName}</option>
+
+        {/* 우선순위 · 진행여부 */}
+        <div className="px-5 py-3 flex flex-wrap items-center gap-0">
+          <div className="flex items-center gap-1.5 pr-5 border-r border-slate-100">
+            <span className="text-[11px] font-medium text-slate-400 mr-0.5 shrink-0">우선순위</span>
+            {(["ALL", "HIGH", "MEDIUM", "LOW"] as const).map((p) => (
+              <button key={p} onClick={() => setPriorityFilter(p)}
+                className={`px-2.5 py-1 text-xs rounded-full whitespace-nowrap transition-colors ${
+                  priorityFilter === p
+                    ? "bg-blue-600 text-white font-medium"
+                    : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                }`}>
+                {p === "ALL" ? "전체" : PRIORITY_LABEL[p]}
+              </button>
             ))}
-          </select>
-          <span className="text-xs text-slate-400 shrink-0">{filtered.length}건</span>
+          </div>
+          <div className="flex items-center gap-1.5 px-5 border-r border-slate-100">
+            <span className="text-[11px] font-medium text-slate-400 mr-0.5 shrink-0">진행여부</span>
+            {(["ALL", "OPEN", "IN_PROGRESS", "RESOLVED"] as const).map((s) => (
+              <button key={s} onClick={() => setStatusFilter(s)}
+                className={`px-2.5 py-1 text-xs rounded-full whitespace-nowrap transition-colors ${
+                  statusFilter === s
+                    ? "bg-blue-600 text-white font-medium"
+                    : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                }`}>
+                {s === "ALL" ? "전체" : STATUS_LABEL[s]}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 ml-auto">
+            {(agencyFilter !== "ALL" || projectNumberFilter !== "" || institutionFilter !== "" || authorFilter !== "") && (
+              <button
+                onClick={() => { setAgencyFilter("ALL"); setProjectNumberFilter(""); setInstitutionFilter(""); setAuthorFilter(""); }}
+                className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1 rounded hover:bg-slate-100 transition-colors">
+                초기화
+              </button>
+            )}
+            <span className="text-xs text-slate-400 shrink-0">{filtered.length}건</span>
+          </div>
         </div>
       </div>
 
@@ -231,7 +300,8 @@ export default function IssuesPage() {
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         {filtered.length === 0 ? (
           <div className="py-16 text-center text-sm text-slate-400">
-            {priorityFilter !== "ALL" || statusFilter !== "ALL" || projectFilter !== "ALL"
+            {priorityFilter !== "ALL" || statusFilter !== "ALL" || agencyFilter !== "ALL"
+              || projectNumberFilter !== "" || institutionFilter !== "" || authorFilter !== ""
               ? "필터 조건에 맞는 이슈가 없습니다"
               : "등록된 이슈가 없습니다"}
           </div>
@@ -246,7 +316,7 @@ export default function IssuesPage() {
                 <th className="text-center px-4 py-3 w-20">작성자</th>
                 <th className="text-center px-4 py-3 w-36">작성일시</th>
                 <th className="text-center px-4 py-3 w-24">바로가기</th>
-                {canEdit && <th className="w-20" />}
+                {canManage && <th className="w-20" />}
               </tr>
             </thead>
             <tbody>
@@ -257,53 +327,70 @@ export default function IssuesPage() {
 
                 if (isEditing) {
                   return (
-                    <tr key={issue.id} className="border-b border-blue-100 bg-blue-50/30">
-                      <td className="px-4 py-3 text-center">
-                        <select value={editDraft.priority}
-                          onChange={(e) => setEditDraft((d) => ({ ...d, priority: e.target.value as typeof editDraft.priority }))}
-                          className="text-[10px] font-semibold border border-slate-200 rounded px-1.5 py-0.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400">
-                          <option value="HIGH">높음</option>
-                          <option value="MEDIUM">보통</option>
-                          <option value="LOW">낮음</option>
-                        </select>
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <select value={editDraft.status}
-                          onChange={(e) => setEditDraft((d) => ({ ...d, status: e.target.value as typeof editDraft.status }))}
-                          className="text-[10px] font-semibold border border-slate-200 rounded px-1.5 py-0.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400">
-                          <option value="OPEN">미처리</option>
-                          <option value="IN_PROGRESS">진행중</option>
-                          <option value="RESOLVED">완료</option>
-                        </select>
-                      </td>
-                      <td className="px-4 py-3" colSpan={4}>
-                        <textarea
-                          value={editDraft.content}
-                          onChange={(e) => setEditDraft((d) => ({ ...d, content: e.target.value }))}
-                          className="w-full text-sm border border-blue-300 rounded-lg px-3 py-1.5 text-slate-700 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-                          rows={2} maxLength={500} autoFocus />
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        {project && (
-                          <Link href={`/projects/${project.id}`}
-                            className="text-xs text-blue-500 hover:underline hover:text-blue-700 transition-colors">
-                            과제 상세 →
-                          </Link>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center justify-center gap-1">
-                          <button onClick={saveEdit} disabled={!editDraft.content.trim()}
-                            className="flex items-center gap-0.5 px-2.5 py-1 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40 transition-colors">
-                            <FiCheck size={11} /> 저장
-                          </button>
-                          <button onClick={() => setEditingId(null)}
-                            className="px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
-                            취소
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
+                    <Fragment key={issue.id}>
+                      <tr className="border-b border-blue-100 bg-blue-50/30">
+                        <td className="px-4 py-3 text-center">
+                          <select value={editDraft.priority}
+                            onChange={(e) => setEditDraft((d) => ({ ...d, priority: e.target.value as typeof editDraft.priority }))}
+                            className="text-[10px] font-semibold border border-slate-200 rounded px-1.5 py-0.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400">
+                            <option value="HIGH">높음</option>
+                            <option value="MEDIUM">보통</option>
+                            <option value="LOW">낮음</option>
+                          </select>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <select value={editDraft.status}
+                            onChange={(e) => setEditDraft((d) => ({ ...d, status: e.target.value as typeof editDraft.status }))}
+                            className="text-[10px] font-semibold border border-slate-200 rounded px-1.5 py-0.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400">
+                            <option value="OPEN">미처리</option>
+                            <option value="IN_PROGRESS">진행중</option>
+                            <option value="RESOLVED">완료</option>
+                          </select>
+                        </td>
+                        <td className="px-4 py-3" colSpan={4}>
+                          <textarea
+                            value={editDraft.content}
+                            onChange={(e) => setEditDraft((d) => ({ ...d, content: e.target.value }))}
+                            className="w-full text-sm border border-blue-300 rounded-lg px-3 py-1.5 text-slate-700 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+                            rows={2} maxLength={500} autoFocus />
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {project && (
+                            <Link href={`/projects/${project.id}`}
+                              className="text-xs text-blue-500 hover:underline hover:text-blue-700 transition-colors">
+                              과제 상세 →
+                            </Link>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center justify-center gap-1">
+                            <button onClick={saveEdit} disabled={!editDraft.content.trim()}
+                              className="flex items-center gap-0.5 px-2.5 py-1 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40 transition-colors">
+                              <FiCheck size={11} /> 저장
+                            </button>
+                            <button onClick={() => setEditingId(null)}
+                              className="px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
+                              취소
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                      <tr className="border-b border-blue-100 bg-blue-50/30">
+                        <td className="px-4 pb-3" colSpan={8}>
+                          <div className="flex items-center gap-3">
+                            <span className="text-xs text-slate-500">알림 받을 대상</span>
+                            {RECIPIENT_OPTIONS.map(({ value, label }) => (
+                              <label key={value} className="flex items-center gap-1.5 cursor-pointer">
+                                <input type="checkbox" checked={editDraft.recipientGroups.includes(value)}
+                                  onChange={() => toggleEditRecipient(value)}
+                                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30" />
+                                <span className="text-xs text-slate-600">{label}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    </Fragment>
                   );
                 }
 
@@ -338,7 +425,7 @@ export default function IssuesPage() {
                         </Link>
                       )}
                     </td>
-                    {canEdit && (
+                    {canManage && (
                       <td className="px-4 py-3">
                         {isDeleting ? (
                           <div className="flex items-center justify-center gap-1">

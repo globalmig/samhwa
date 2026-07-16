@@ -14,6 +14,8 @@ import { type PolicyRule, type FeePolicy, type FundingAgency, type FeeRateBracke
 import { buildPolicyDisplayRules } from "@/lib/fee-calculator";
 import Modal from "@/components/common/Modal";
 import StatusBadge from "@/components/common/StatusBadge";
+import DateInput from "@/components/common/DateInput";
+import MoneyInput from "@/components/common/MoneyInput";
 import { useCanWrite } from "@/lib/permissions";
 import { fmtDate, fmtWonFull } from "@/lib/utils";
 
@@ -135,7 +137,7 @@ function BracketEditor({ brackets, onChange }: { brackets: FeeRateBracket[]; onC
   function set(i: number, k: keyof FeeRateBracket, v: number | null) {
     onChange(brackets.map((b, idx) => idx === i ? { ...b, [k]: v } : b));
   }
-  const fmtAmt = (n: number) => n >= 100_000_000 ? `${n / 100_000_000}억` : n >= 10_000 ? `${n / 10_000}만` : String(n);
+  const fmtAmt = (n: number) => n.toLocaleString("ko-KR");
 
   return (
     <div>
@@ -165,16 +167,16 @@ function BracketEditor({ brackets, onChange }: { brackets: FeeRateBracket[]; onC
             {brackets.map((b, i) => (
               <tr key={i} className="border-b border-slate-100 last:border-0">
                 <td className="px-2 py-1.5">
-                  <input type="number" min={0} step={10_000_000} className="w-32 text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                    value={b.minAmount} onFocus={(e) => e.target.select()} onChange={(e) => set(i, "minAmount", Number(e.target.value))} />
+                  <MoneyInput className="w-32 text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                    value={b.minAmount} onFocus={(e) => e.target.select()} onChange={(v) => set(i, "minAmount", v)} />
                 </td>
                 <td className="px-2 py-1.5">
-                  <input type="number" min={0} step={10_000_000} placeholder="(상한없음)" className="w-36 text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                    value={b.maxAmount ?? ""} onFocus={(e) => e.target.select()} onChange={(e) => set(i, "maxAmount", e.target.value === "" ? null : Number(e.target.value))} />
+                  <MoneyInput placeholder="(상한없음)" className="w-36 text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                    value={b.maxAmount ?? 0} onFocus={(e) => e.target.select()} onChange={(v) => set(i, "maxAmount", v === 0 ? null : v)} />
                 </td>
                 <td className="px-2 py-1.5">
-                  <input type="number" min={0} step={1_000} className="w-28 text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                    value={b.baseFee} onFocus={(e) => e.target.select()} onChange={(e) => set(i, "baseFee", Number(e.target.value))} />
+                  <MoneyInput className="w-28 text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                    value={b.baseFee} onFocus={(e) => e.target.select()} onChange={(v) => set(i, "baseFee", v)} />
                 </td>
                 <td className="px-2 py-1.5 text-slate-400">
                   {fmtAmt(b.minAmount)} ~ {b.maxAmount ? fmtAmt(b.maxAmount) : "∞"}
@@ -269,7 +271,7 @@ function AgencyFeeModelSummary({ agency, policy }: { agency: { shortName: string
     ? "주관기관을 산정기준액에서 완전 제외 (공동기관수 -1 보정)"
     : "포함 (일반)";
 
-  const fmtAmt = (n: number) => n >= 1_000_000_000 ? `${n / 100_000_000}억` : n >= 100_000_000 ? `${n / 100_000_000}억` : n >= 10_000_000 ? `${n / 10_000_000}천만` : n >= 1_000_000 ? `${n / 1_000_000}백만` : n >= 10_000 ? `${n / 10_000}만` : String(n);
+  const fmtAmt = (n: number) => n.toLocaleString("ko-KR");
   const fmtFee = fmtWonFull;
 
   return (
@@ -408,11 +410,11 @@ function PolicyForm({ initial, onSubmit, onClose }: { initial: PolicyFormData; o
         </div>
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">적용 시작일</label>
-          <input className={inputCls} type="date" value={form.effectiveFrom} onChange={(e) => sf("effectiveFrom", e.target.value)} />
+          <DateInput className="w-full" value={form.effectiveFrom} onChange={(v) => sf("effectiveFrom", v)} />
         </div>
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">적용 종료일</label>
-          <input className={inputCls} type="date" value={form.effectiveTo ?? ""} onChange={(e) => sf("effectiveTo", e.target.value || null)} />
+          <DateInput className="w-full" value={form.effectiveTo ?? ""} onChange={(v) => sf("effectiveTo", v || null)} />
         </div>
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">상태</label>
@@ -502,8 +504,8 @@ function PolicyForm({ initial, onSubmit, onClose }: { initial: PolicyFormData; o
         <div className="grid grid-cols-3 gap-4 pt-1 border-t border-slate-200">
           <div>
             <label className="block text-xs font-medium text-slate-600 mb-1">최소수수료 (원)</label>
-            <input className={inputCls} type="number" min={0} step={10_000} value={form.minimumFee ?? 0}
-              onChange={(e) => sf("minimumFee", Number(e.target.value))} placeholder="0 = 없음" />
+            <MoneyInput className={inputCls} value={form.minimumFee ?? 0}
+              onChange={(v) => sf("minimumFee", v)} placeholder="0 = 없음" />
             <p className="text-[10px] text-slate-400 mt-1">연차별 산정수수료가 이 금액 미만이면 이 금액을 기준으로 하고 차액은 이월 (RDA1/RDA2: 100,000원)</p>
           </div>
           <div>
@@ -609,7 +611,7 @@ function AgencyForm({ initial, onSubmit, onClose }: { initial: Omit<FundingAgenc
         </div>
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">등록일</label>
-          <input className={inputCls} type="date" value={form.registeredAt} onChange={(e) => s("registeredAt", e.target.value)} />
+          <DateInput className="w-full" value={form.registeredAt} onChange={(v) => s("registeredAt", v)} />
         </div>
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">웹사이트</label>

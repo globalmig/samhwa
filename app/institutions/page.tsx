@@ -5,9 +5,10 @@ import Link from "next/link";
 import { FiEdit2, FiTrash2 } from "react-icons/fi";
 import { useStore, addInstitution, updateInstitution, deleteInstitution } from "@/lib/store";
 import { type Institution } from "@/lib/mock";
-import { fmtDate } from "@/lib/utils";
+import { fmtDate, formatBizNumber, isValidBizNumber } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
+import DateInput from "@/components/common/DateInput";
 import { useCanWrite } from "@/lib/permissions";
 import ExcelUploadModal, { downloadExcelTemplate } from "@/components/common/ExcelUploadModal";
 
@@ -32,6 +33,7 @@ const EMPTY: Omit<Institution, "id"> = {
   projectCount: 0,
   registeredAt: new Date().toISOString().slice(0, 10),
   status: "ACTIVE",
+  note: "",
 };
 
 const inputCls = "w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400";
@@ -76,21 +78,47 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 function InstitutionForm({
   initial,
   isEdit = false,
+  isDuplicateBizNumber,
   onSubmit,
   onClose,
 }: {
   initial: Omit<Institution, "id">;
   isEdit?: boolean;
+  isDuplicateBizNumber: (bizNumber: string) => boolean;
   onSubmit: (d: Omit<Institution, "id">) => void;
   onClose: () => void;
 }) {
   const [form, setForm] = useState(initial);
+  const [error, setError] = useState("");
   const s = (k: keyof typeof form, v: unknown) => setForm((p) => ({ ...p, [k]: v }));
+
+  function handleSubmit() {
+    if (!isValidBizNumber(form.bizNumber)) {
+      setError("사업자등록번호 형식이 올바르지 않습니다. 정확한 번호를 입력해 주세요.");
+      return;
+    }
+    if (isDuplicateBizNumber(form.bizNumber)) {
+      setError("이미 등록된 사업자등록번호입니다.");
+      return;
+    }
+    setError("");
+    onSubmit(form);
+  }
+
   return (
     <div className="p-6 space-y-4">
       <Field label="기관명"><input className={inputCls} value={form.name} onChange={(e) => s("name", e.target.value)} placeholder="(주)기관명" /></Field>
       <div className="grid grid-cols-2 gap-4">
-        <Field label="사업자등록번호"><input className={inputCls} value={form.bizNumber} onChange={(e) => s("bizNumber", e.target.value)} placeholder="000-00-00000" /></Field>
+        <Field label="사업자등록번호">
+          <input
+            className={inputCls}
+            value={form.bizNumber}
+            onChange={(e) => s("bizNumber", formatBizNumber(e.target.value))}
+            placeholder="000-00-00000"
+            inputMode="numeric"
+            maxLength={12}
+          />
+        </Field>
         <Field label="대표자명"><input className={inputCls} value={form.representativeName} onChange={(e) => s("representativeName", e.target.value)} /></Field>
       </div>
       <div className="grid grid-cols-2 gap-4">
@@ -100,7 +128,7 @@ function InstitutionForm({
       <Field label="담당자 이메일"><input className={inputCls} type="email" value={form.contactEmail} onChange={(e) => s("contactEmail", e.target.value)} placeholder="contact@institution.kr" /></Field>
       {!isEdit && (
         <div className="grid grid-cols-2 gap-4">
-          <Field label="등록일"><input className={inputCls} type="date" value={form.registeredAt} onChange={(e) => s("registeredAt", e.target.value)} /></Field>
+          <Field label="등록일"><DateInput className="w-full" value={form.registeredAt} onChange={(v) => s("registeredAt", v)} /></Field>
           <Field label="상태">
             <select className={selectCls} value={form.status} onChange={(e) => s("status", e.target.value as Institution["status"])}>
               <option value="ACTIVE">활성</option>
@@ -117,9 +145,25 @@ function InstitutionForm({
           </select>
         </Field>
       )}
+      <Field label="특이사항">
+        <textarea
+          className={`${inputCls} min-h-20 resize-y`}
+          value={form.note ?? ""}
+          onChange={(e) => s("note", e.target.value)}
+          placeholder="기관 관련 특이사항을 기록하세요 (수행기관 상세 화면에 표시됩니다)"
+        />
+      </Field>
+      {error && (
+        <div className="flex items-center gap-2 text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2.5">
+          <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 shrink-0">
+            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+          </svg>
+          {error}
+        </div>
+      )}
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
         <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
-        <button onClick={() => onSubmit(form)} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">저장</button>
+        <button onClick={handleSubmit} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">저장</button>
       </div>
     </div>
   );
@@ -348,7 +392,17 @@ export default function InstitutionsPage() {
 
       {modal && (
         <Modal title={modal.mode === "add" ? "새 기관 추가" : "기관 정보 수정"} onClose={() => setModal(null)} size="lg">
-          <InstitutionForm initial={modal.mode === "edit" ? modal.target : EMPTY} isEdit={modal.mode === "edit"} onSubmit={handleSubmit} onClose={() => setModal(null)} />
+          <InstitutionForm
+            initial={modal.mode === "edit" ? modal.target : EMPTY}
+            isEdit={modal.mode === "edit"}
+            isDuplicateBizNumber={(bizNumber) => {
+              const digits = bizNumber.replace(/\D/g, "");
+              const excludeId = modal.mode === "edit" ? modal.target.id : null;
+              return institutions.some((i) => i.id !== excludeId && i.bizNumber.replace(/\D/g, "") === digits);
+            }}
+            onSubmit={handleSubmit}
+            onClose={() => setModal(null)}
+          />
         </Modal>
       )}
     </div>

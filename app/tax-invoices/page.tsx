@@ -8,6 +8,8 @@ import { type TaxInvoice } from "@/lib/mock";
 import { fmtWon, fmtDate } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
+import DateInput from "@/components/common/DateInput";
+import MoneyInput from "@/components/common/MoneyInput";
 import { useCanWrite } from "@/lib/permissions";
 
 const STATUS_MAP: Record<TaxInvoice["status"], { label: string; color: "green" | "amber" | "red" }> = {
@@ -81,12 +83,12 @@ function InvoiceForm({ initial, onSubmit, onClose }: { initial: Omit<TaxInvoice,
         </Field>
         <Field label="연도"><input className={inputCls} type="number" value={form.termYear} onChange={(e) => s("termYear", Number(e.target.value))} /></Field>
         <Field label="연차"><input className={inputCls} type="number" min={1} value={form.termNumber} onChange={(e) => s("termNumber", Number(e.target.value))} /></Field>
-        <Field label="발행일"><input className={inputCls} type="date" value={form.issuedAt} onChange={(e) => s("issuedAt", e.target.value)} /></Field>
+        <Field label="발행일"><DateInput className="w-full" value={form.issuedAt} onChange={(v) => s("issuedAt", v)} /></Field>
       </div>
       <div className="grid grid-cols-3 gap-4">
-        <Field label="공급가액(원)"><input className={inputCls} type="number" min={0} value={form.supplyAmount} onChange={(e) => s("supplyAmount", Number(e.target.value))} /></Field>
-        <Field label="부가세(원)"><input className={inputCls} type="number" min={0} value={form.taxAmount} onChange={(e) => s("taxAmount", Number(e.target.value))} /></Field>
-        <Field label="합계(원)"><input className={inputCls} type="number" min={0} value={form.totalAmount} onChange={(e) => s("totalAmount", Number(e.target.value))} /></Field>
+        <Field label="공급가액(원)"><MoneyInput className={inputCls} value={form.supplyAmount} onChange={(v) => s("supplyAmount", v)} /></Field>
+        <Field label="부가세(원)"><MoneyInput className={inputCls} value={form.taxAmount} onChange={(v) => s("taxAmount", v)} /></Field>
+        <Field label="합계(원)"><MoneyInput className={inputCls} value={form.totalAmount} onChange={(v) => s("totalAmount", v)} /></Field>
       </div>
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
         <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>

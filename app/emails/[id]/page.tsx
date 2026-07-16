@@ -8,10 +8,11 @@ import { type EmailDispatch } from "@/lib/mock";
 import StatusBadge from "@/components/common/StatusBadge";
 import NoticeLetterPreview from "@/components/common/NoticeLetterPreview";
 
-const TYPE_MAP: Record<EmailDispatch["emailType"], { label: string; color: "blue" | "indigo" | "purple" }> = {
+const TYPE_MAP: Record<EmailDispatch["emailType"], { label: string; color: "blue" | "indigo" | "purple" | "slate" }> = {
   TAX_INVOICE: { label: "세금계산서 공문", color: "blue" },
   FEE_DETAIL: { label: "수수료 산출내역 안내", color: "indigo" },
   SETTLEMENT_NOTICE: { label: "정산절차 안내 공문", color: "purple" },
+  OTHER: { label: "기타 공문", color: "slate" },
 };
 
 const CATEGORY_LABEL: Record<NonNullable<EmailDispatch["feeCategory"]>, string> = {
@@ -61,7 +62,9 @@ export default function EmailDispatchDetailPage({ params }: { params: Promise<{ 
             </div>
             <h2 className="text-base font-bold text-slate-800">{dispatch.subject}</h2>
             {dispatch.feeCategory && (
-              <p className="text-xs text-slate-400 mt-1">{CATEGORY_LABEL[dispatch.feeCategory]}</p>
+              <p className="text-xs text-slate-400 mt-1">
+                {CATEGORY_LABEL[dispatch.feeCategory]}{dispatch.isReverseRequest ? " · 역발행 요청" : ""}
+              </p>
             )}
           </div>
         </div>
@@ -103,6 +106,7 @@ export default function EmailDispatchDetailPage({ params }: { params: Promise<{ 
         <div className="grid grid-cols-2 gap-x-6 gap-y-2.5 text-sm">
           {[
             { label: "발송일시", value: dispatch.sentAt },
+            { label: "발송인", value: dispatch.senderName },
             { label: "배치 ID", value: dispatch.batchId },
             { label: "수신기관", value: dispatch.recipientInstitution },
             { label: "수신 이메일", value: dispatch.recipientEmail },

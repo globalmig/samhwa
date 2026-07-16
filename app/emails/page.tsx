@@ -3,13 +3,22 @@
 import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useStore } from "@/lib/store";
-import { type EmailDispatch } from "@/lib/mock";
+import { type EmailDispatch, type Project } from "@/lib/mock";
+import { fmtDate } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
 
-const TYPE_MAP: Record<EmailDispatch["emailType"], { label: string; color: "blue" | "indigo" | "purple" }> = {
+// 메일 제목의 "[RS-2024-00000000]" 형태에서 과제번호를 추출해 관련 과제를 찾는다.
+function getEmailProject(e: EmailDispatch, projects: Project[]): Project | undefined {
+  const m = e.subject.match(/\[([^\]]+)\]/);
+  const projectNumber = m?.[1];
+  return projectNumber ? projects.find((p) => p.projectNumber === projectNumber) : undefined;
+}
+
+const TYPE_MAP: Record<EmailDispatch["emailType"], { label: string; color: "blue" | "indigo" | "purple" | "slate" }> = {
   TAX_INVOICE: { label: "세금계산서 공문", color: "blue" },
   FEE_DETAIL: { label: "수수료 산출내역 안내", color: "indigo" },
   SETTLEMENT_NOTICE: { label: "정산절차 안내 공문", color: "purple" },
+  OTHER: { label: "기타 공문", color: "slate" },
 };
 
 const CATEGORY_LABEL: Record<NonNullable<EmailDispatch["feeCategory"]>, string> = {
@@ -25,9 +34,11 @@ const STATUS_MAP: Record<EmailDispatch["status"], { label: string; color: "green
 
 export default function EmailDispatchesPage() {
   const router = useRouter();
-  const { emailDispatches } = useStore();
+  const { emailDispatches, projects, fundingAgencies } = useStore();
   const [filterRecipient, setFilterRecipient] = useState("");
   const [filterSubject, setFilterSubject] = useState("");
+  const [filterProjectNumber, setFilterProjectNumber] = useState("");
+  const [filterResearchLead, setFilterResearchLead] = useState("");
   const [typeFilter, setTypeFilter] = useState("ALL");
   const [statusFilter, setStatusFilter] = useState("ALL");
 
@@ -35,16 +46,25 @@ export default function EmailDispatchesPage() {
     () =>
       [...emailDispatches]
         .sort((a, b) => b.sentAt.localeCompare(a.sentAt))
-        .filter(
-          (e) =>
-            (typeFilter === "ALL" || e.emailType === typeFilter) &&
-            (statusFilter === "ALL" || e.status === statusFilter) &&
-            (filterRecipient === "" ||
-              e.recipientInstitution.includes(filterRecipient) ||
-              e.recipientEmail.includes(filterRecipient)) &&
-            (filterSubject === "" || e.subject.includes(filterSubject))
-        ),
-    [emailDispatches, filterRecipient, filterSubject, typeFilter, statusFilter]
+        .filter((e) => {
+          if (typeFilter !== "ALL" && e.emailType !== typeFilter) return false;
+          if (statusFilter !== "ALL" && e.status !== statusFilter) return false;
+          if (filterRecipient !== "" && !e.recipientInstitution.includes(filterRecipient) && !e.recipientEmail.includes(filterRecipient)) return false;
+          if (filterSubject !== "" && !e.subject.includes(filterSubject)) return false;
+          if (filterProjectNumber.trim() || filterResearchLead.trim()) {
+            const project = getEmailProject(e, projects);
+            if (
+              filterProjectNumber.trim() &&
+              !(project?.projectNumber ?? "").toLowerCase().includes(filterProjectNumber.trim().toLowerCase())
+            ) return false;
+            if (
+              filterResearchLead.trim() &&
+              !(project?.researchLead ?? "").toLowerCase().includes(filterResearchLead.trim().toLowerCase())
+            ) return false;
+          }
+          return true;
+        }),
+    [emailDispatches, filterRecipient, filterSubject, filterProjectNumber, filterResearchLead, typeFilter, statusFilter, projects]
   );
 
   const successCount = emailDispatches.filter((e) => e.status === "SUCCESS").length;
@@ -72,10 +92,12 @@ export default function EmailDispatchesPage() {
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100">
-        <div className="px-4 py-3 grid grid-cols-2 gap-3">
+        <div className="px-4 py-3 grid grid-cols-4 gap-3">
           {[
             { label: "수신기관 / 이메일", value: filterRecipient, onChange: setFilterRecipient },
             { label: "제목", value: filterSubject, onChange: setFilterSubject },
+            { label: "과제번호", value: filterProjectNumber, onChange: setFilterProjectNumber },
+            { label: "연구책임자", value: filterResearchLead, onChange: setFilterResearchLead },
           ].map(({ label, value, onChange }) => (
             <div key={label}>
               <p className="text-[10px] font-medium text-slate-400 mb-1">{label}</p>
@@ -95,6 +117,7 @@ export default function EmailDispatchesPage() {
             <option value="TAX_INVOICE">세금계산서 공문</option>
             <option value="FEE_DETAIL">수수료 산출내역 안내</option>
             <option value="SETTLEMENT_NOTICE">정산절차 안내 공문</option>
+            <option value="OTHER">기타 공문</option>
           </select>
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="text-xs border border-slate-200 rounded-lg px-3 py-1.5 text-slate-600 bg-white">
             <option value="ALL">전체 상태</option>
@@ -113,16 +136,25 @@ export default function EmailDispatchesPage() {
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap w-36">발송일시</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">수신기관</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500">제목</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">전담기관 약칭</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">과제번호</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">연구책임자</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">당해시작일</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">당해종료일</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">유형</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">첨부</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">상태</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">발송인</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan={6} className="px-4 py-10 text-center text-sm text-slate-400">검색 결과가 없습니다</td></tr>
+                <tr><td colSpan={12} className="px-4 py-10 text-center text-sm text-slate-400">검색 결과가 없습니다</td></tr>
               ) : (
-                filtered.map((e) => (
+                filtered.map((e) => {
+                  const project = getEmailProject(e, projects);
+                  const agency = fundingAgencies.find((a) => a.id === project?.agencyId);
+                  return (
                   <tr
                     key={e.id}
                     onClick={() => router.push(`/emails/${e.id}`)}
@@ -136,9 +168,16 @@ export default function EmailDispatchesPage() {
                     <td className="px-4 py-3">
                       <p className="text-sm text-slate-700">{e.subject}</p>
                       {e.feeCategory && (
-                        <p className="text-xs text-slate-400 mt-0.5">{CATEGORY_LABEL[e.feeCategory]}</p>
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          {CATEGORY_LABEL[e.feeCategory]}{e.isReverseRequest ? " · 역발행 요청" : ""}
+                        </p>
                       )}
                     </td>
+                    <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">{agency?.shortName ?? "-"}</td>
+                    <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap font-mono">{project?.projectNumber ?? "-"}</td>
+                    <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">{project?.researchLead ?? "-"}</td>
+                    <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">{project?.startDate ? fmtDate(project.startDate) : "-"}</td>
+                    <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">{project?.endDate ? fmtDate(project.endDate) : "-"}</td>
                     <td className="px-4 py-3 text-center">
                       <StatusBadge label={TYPE_MAP[e.emailType].label} color={TYPE_MAP[e.emailType].color} />
                     </td>
@@ -146,8 +185,10 @@ export default function EmailDispatchesPage() {
                     <td className="px-4 py-3 text-center">
                       <StatusBadge label={STATUS_MAP[e.status].label} color={STATUS_MAP[e.status].color} />
                     </td>
+                    <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">{e.senderName}</td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>

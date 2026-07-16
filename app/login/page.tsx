@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { login, useAuth, initAuth } from "@/lib/auth";
+import { login, useAuth, initAuth, getCurrentUser } from "@/lib/auth";
+import { defaultLandingPath } from "@/lib/permissions";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -18,7 +19,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!isLoading && user) {
-      router.replace("/");
+      router.replace(defaultLandingPath(user.role as "ADMIN" | "ACCOUNTANT" | "SETTLEMENT" | "VIEWER"));
     }
   }, [user, isLoading, router]);
 
@@ -33,7 +34,7 @@ export default function LoginPage() {
     const result = login(email, password);
     setSubmitting(false);
     if (result.ok) {
-      router.replace("/");
+      router.replace(defaultLandingPath(getCurrentUser()?.role as "ADMIN" | "ACCOUNTANT" | "SETTLEMENT" | "VIEWER" | undefined));
     } else {
       setError(result.error ?? "로그인에 실패했습니다.");
     }

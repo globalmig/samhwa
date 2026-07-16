@@ -8,6 +8,7 @@ import { type FundingAgency, type FeePolicy, type AgencyGuideRow as GuideRow, ty
 import { fmtDate, fmtWon } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
+import DateInput from "@/components/common/DateInput";
 import { useCanWrite } from "@/lib/permissions";
 import ExcelUploadModal, { downloadExcelTemplate } from "@/components/common/ExcelUploadModal";
 
@@ -575,7 +576,7 @@ function AgencyForm({
           </select>
         </Field>
         <Field label="등록일">
-          <input className={inputCls} type="date" value={form.registeredAt} onChange={(e) => s("registeredAt", e.target.value)} />
+          <DateInput className="w-full" value={form.registeredAt} onChange={(v) => s("registeredAt", v)} />
         </Field>
       </div>
       <div className="grid grid-cols-2 gap-4">

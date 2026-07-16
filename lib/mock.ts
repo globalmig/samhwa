@@ -243,6 +243,7 @@ export interface Institution {
   projectCount: number;
   registeredAt: string;
   status: "ACTIVE" | "INACTIVE";
+  note?: string; // 기관 특이사항 메모 (이슈/메모 기능과 별개) — 수행기관 상세 화면에 표시
 }
 
 export const institutions: Institution[] = [
@@ -532,6 +533,7 @@ export interface Project {
   docRequestDate?: string;  // 서류 요청일
   docReplyDate?: string;    // 서류 회신일
   assignedManager?: string; // 삼화 담당자
+  registeredAt?: string;    // 과제 등록일 — 연도별 대시보드 집계 기준(배정일). 과거 데이터는 미입력일 수 있음
 }
 
 export const projects: Project[] = [
@@ -562,6 +564,7 @@ export const projects: Project[] = [
     docRequestDate: "2024-07-10",
     docReplyDate: "2024-07-22",
     assignedManager: "박담당",
+    registeredAt: "2023-03-15",
   },
   {
     id: "p-002",
@@ -583,6 +586,7 @@ export const projects: Project[] = [
     docRequestDate: "2024-03-15",
     docReplyDate: "2024-03-28",
     assignedManager: "이회계",
+    registeredAt: "2024-01-10",
   },
   {
     id: "p-003",
@@ -603,6 +607,7 @@ export const projects: Project[] = [
     projectDivision: "공동",
     docRequestDate: "2024-11-05",
     assignedManager: "김관리",
+    registeredAt: "2022-06-10",
   },
   {
     id: "p-004",
@@ -624,6 +629,7 @@ export const projects: Project[] = [
     docRequestDate: "2024-09-20",
     docReplyDate: "2024-09-30",
     assignedManager: "박담당",
+    registeredAt: "2023-04-12",
   },
   {
     id: "p-005",
@@ -645,6 +651,7 @@ export const projects: Project[] = [
     projectDivision: "위탁",
     docRequestDate: "2024-05-10",
     assignedManager: "이회계",
+    registeredAt: "2024-03-08",
   },
   {
     id: "p-006",
@@ -666,6 +673,7 @@ export const projects: Project[] = [
     docRequestDate: "2024-06-15",
     docReplyDate: "2024-06-25",
     assignedManager: "김관리",
+    registeredAt: "2024-04-15",
   },
   {
     id: "p-007",
@@ -687,6 +695,7 @@ export const projects: Project[] = [
     docRequestDate: "2024-08-12",
     docReplyDate: "2024-08-20",
     assignedManager: "박담당",
+    registeredAt: "2022-07-20",
   },
   {
     id: "p-008",
@@ -707,6 +716,7 @@ export const projects: Project[] = [
     currentTerm: 2,
     status: "ACTIVE",
     assignedManager: "이회계",
+    registeredAt: "2023-09-05",
   },
   {
     id: "p-009",
@@ -2172,8 +2182,10 @@ export const taxInvoices: TaxInvoice[] = [
 // 이메일 발송 관리
 // ============================================================
 
-// emailType: TAX_INVOICE=세금계산서 공문(청구서), FEE_DETAIL=수수료 산출내역 안내, SETTLEMENT_NOTICE=정산절차 안내 공문
+// emailType: TAX_INVOICE=세금계산서 공문(청구서/역발행 요청), FEE_DETAIL=수수료 산출내역 안내,
+//            SETTLEMENT_NOTICE=정산절차 안내 공문, OTHER=기타 공문(자유 양식)
 // feeCategory: TAX_INVOICE일 때만 사용 — ANNUAL=연차상시점검수수료, SETTLEMENT=위탁정산수수료
+// isReverseRequest: TAX_INVOICE이면서 역발행 요청 공문으로 발송된 경우 true
 // 발송 당시 실제 화면에 표시됐던 정산절차 안내 공문 내용을 그대로 재현하기 위한 스냅샷.
 // 템플릿은 이후에도 계속 수정될 수 있으므로, 발송 시점의 값을 EmailDispatch에 그대로 복제해 저장한다.
 export interface NoticeSnapshot {
@@ -2187,11 +2199,13 @@ export interface EmailDispatch {
   id: string;
   batchId: string;
   sentAt: string;
+  senderName: string;      // 발송인
   recipientInstitution: string;
   recipientEmail: string;
   subject: string;
-  emailType: "TAX_INVOICE" | "FEE_DETAIL" | "SETTLEMENT_NOTICE";
+  emailType: "TAX_INVOICE" | "FEE_DETAIL" | "SETTLEMENT_NOTICE" | "OTHER";
   feeCategory?: "ANNUAL" | "SETTLEMENT";
+  isReverseRequest?: boolean;
   attachments: string[];
   status: "SUCCESS" | "FAILED" | "PENDING";
   /** 발송된 이메일 본문 (일반 안내 메일). 정산절차 안내 공문은 noticeSnapshot을 대신 사용. */
@@ -2203,6 +2217,7 @@ export interface EmailDispatch {
 export const emailDispatches: EmailDispatch[] = [
   {
     id: "em-001", batchId: "BATCH-2024-1115", sentAt: "2024-11-15 09:10",
+    senderName: "이회계",
     recipientInstitution: "삼화전자(주)", recipientEmail: "lee.ys@samhwa.co.kr",
     subject: "[RS-2024-00214837] 2연차 연차상시점검수수료 청구서",
     emailType: "TAX_INVOICE", feeCategory: "ANNUAL",
@@ -2211,6 +2226,7 @@ export const emailDispatches: EmailDispatch[] = [
   },
   {
     id: "em-002", batchId: "BATCH-2024-1115", sentAt: "2024-11-15 09:11",
+    senderName: "이회계",
     recipientInstitution: "(주)에너텍솔루션", recipientEmail: "kim.mj@enertech.co.kr",
     subject: "[RS-2023-00187652] 2연차 수수료 산출내역 안내",
     emailType: "FEE_DETAIL",
@@ -2219,6 +2235,7 @@ export const emailDispatches: EmailDispatch[] = [
   },
   {
     id: "em-003", batchId: "BATCH-2024-1115", sentAt: "2024-11-15 09:11",
+    senderName: "박정산",
     recipientInstitution: "(주)에너텍솔루션", recipientEmail: "kim.mj@enertech.co.kr",
     subject: "[RS-2024-00198321] 1연차 연차상시점검수수료 청구서",
     emailType: "TAX_INVOICE", feeCategory: "ANNUAL",
@@ -2227,6 +2244,7 @@ export const emailDispatches: EmailDispatch[] = [
   },
   {
     id: "em-004", batchId: "BATCH-2024-1010", sentAt: "2024-10-10 14:20",
+    senderName: "이회계",
     recipientInstitution: "(주)한국항공우주", recipientEmail: "yoon.sj@kaitech.co.kr",
     subject: "[RS-2023-00176431] 3연차 위탁정산수수료 청구서",
     emailType: "TAX_INVOICE", feeCategory: "SETTLEMENT",
@@ -2235,6 +2253,7 @@ export const emailDispatches: EmailDispatch[] = [
   },
   {
     id: "em-005", batchId: "BATCH-2024-0825", sentAt: "2024-08-25 10:05",
+    senderName: "박정산",
     recipientInstitution: "(주)미래반도체", recipientEmail: "choi.jw@futuresemi.co.kr",
     subject: "[RS-2024-00231087] 1연차 수수료 산출내역 안내",
     emailType: "FEE_DETAIL",
@@ -2243,6 +2262,7 @@ export const emailDispatches: EmailDispatch[] = [
   },
   {
     id: "em-006", batchId: "BATCH-2024-0825", sentAt: "2024-08-25 10:06",
+    senderName: "이회계",
     recipientInstitution: "삼화전자(주)", recipientEmail: "lee.ys@samhwa.co.kr",
     subject: "[RS-2024-00214837] 2연차 수수료 산출내역 안내",
     emailType: "FEE_DETAIL",
@@ -2251,6 +2271,7 @@ export const emailDispatches: EmailDispatch[] = [
   },
   {
     id: "em-007", batchId: "BATCH-2024-0501", sentAt: "2024-05-01 09:00",
+    senderName: "이회계",
     recipientInstitution: "나노소재기술(주)", recipientEmail: "kang.hw@nanomat.co.kr",
     subject: "[RS-2024-00201547] 3연차 연차상시점검수수료 청구서",
     emailType: "TAX_INVOICE", feeCategory: "ANNUAL",
@@ -2259,6 +2280,7 @@ export const emailDispatches: EmailDispatch[] = [
   },
   {
     id: "em-008", batchId: "BATCH-2024-0501", sentAt: "2024-05-01 09:00",
+    senderName: "박정산",
     recipientInstitution: "그린바이오텍(주)", recipientEmail: "lim.sa@greenbiotech.co.kr",
     subject: "[RS-2024-00219874] 2연차 위탁정산수수료 청구서",
     emailType: "TAX_INVOICE", feeCategory: "SETTLEMENT",
@@ -2267,6 +2289,7 @@ export const emailDispatches: EmailDispatch[] = [
   },
   {
     id: "em-009", batchId: "BATCH-2024-1201", sentAt: "2024-12-01 08:30",
+    senderName: "이회계",
     recipientInstitution: "삼화전자(주)", recipientEmail: "lee.ys@samhwa.co.kr",
     subject: "[RS-2024-00225198] 1연차 수수료 산출내역 안내",
     emailType: "FEE_DETAIL",
@@ -2275,6 +2298,7 @@ export const emailDispatches: EmailDispatch[] = [
   },
   {
     id: "em-010", batchId: "BATCH-2024-1201", sentAt: "2024-12-01 08:30",
+    senderName: "이회계",
     recipientInstitution: "그린바이오텍(주)", recipientEmail: "lim.sa@greenbiotech.co.kr",
     subject: "[RS-2024-00219874] 2연차 수수료 산출내역 안내",
     emailType: "FEE_DETAIL",
@@ -2283,6 +2307,7 @@ export const emailDispatches: EmailDispatch[] = [
   },
   {
     id: "em-011", batchId: "BATCH-2025-0115", sentAt: "2025-01-15 11:20",
+    senderName: "이회계",
     recipientInstitution: "삼화전자(주)", recipientEmail: "lee.ys@samhwa.co.kr",
     subject: "[RS-2024-00214837] 한국산업기술기획평가원(KEIT) 협약체결과제에 대한 정산 절차 안내 및 수수료 청구",
     emailType: "SETTLEMENT_NOTICE",
@@ -2643,7 +2668,28 @@ export const COMPANY_INFO = {
   preparedBy: "이진아",
   ceoName: "구병주",
   docNumberPrefix: "삼화",
+  // 세금계산서 공문(수수료 청구서) 기본 본문에 쓰이는 담당자·입금계좌 안내
+  managerName: "천기현대리",
+  managerEmail: "cgh62@shcpa.co.kr",
+  managerPhone: "070-4347-7516",
+  depositAccountNote: "세금계산서 비고란 가상 계좌번호 참고 (예금주: 삼화회계법인)",
 };
+
+// ─── 세금계산서 공문 표준 첨부서류 (일괄 관리) ───────────────────
+// 사업자등록증 등, 발송마다 매번 새로 올리지 않고 공통으로 붙는 서류.
+// 여기서 파일을 교체하면 이후 새로 작성되는 모든 공문에 기본값으로 반영된다(일괄 수정).
+// 개별 발송 건에서 별도로 파일을 바꾸는 것은 그 발송에만 적용된다(개별 수정, DispatchModal에서 처리).
+export interface StandardAttachment {
+  id: string;
+  name: string;          // 첨부파일명 (예: 사업자등록증.pdf)
+  fileDataUrl?: string;  // 업로드된 실제 파일 (data URL) — 없으면 이름만 있는 자리표시자
+  updatedAt: string;
+}
+
+export const standardAttachments: StandardAttachment[] = [
+  { id: "sa-biz-reg",   name: "사업자등록증.pdf", updatedAt: "2024-01-02" },
+  { id: "sa-bankbook",  name: "통장사본.pdf",     updatedAt: "2024-01-02" },
+];
 
 // ─── 전담기관 공문(정산절차 안내) 템플릿 ──────────────────────
 export interface NoticeScheduleRow { category: string; institutionTask: string; firmTask: string }

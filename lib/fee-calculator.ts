@@ -1,4 +1,12 @@
-import type { FeePolicy, FeeRateBracket, ExemptInstDetail, TermFeeCalc, PolicyRule, Project } from "./mock";
+import type { FeePolicy, FeeRateBracket, ExemptInstDetail, TermFeeCalc, PolicyRule, Project, InstitutionType } from "./mock";
+
+// ─── 영리/비영리 판정 ───────────────────────────────────────────
+// 정산면제(등급 S·A~C 우수기관 혜택)는 과학기술정보통신부 연구비지원체계 평가를 받는
+// 비영리기관(대학·정부출연연구소·공공기관)에만 적용된다 — 영리기업은 등급이 매겨져 있어도 면제 대상이 아니다.
+const NONPROFIT_INSTITUTION_TYPES: InstitutionType[] = ["대학", "정부출연연구소", "공공기관"];
+export function isNonProfitInstitution(type: string): boolean {
+  return NONPROFIT_INSTITUTION_TYPES.includes(type as InstitutionType);
+}
 
 // ─── 등급 정규화 ─────────────────────────────────────────────────
 // "최우수(S)", "최우수" → "S"   /   "우수(A/B/C)", "우수" → "A~C"   /   나머지 → "일반"
@@ -58,10 +66,38 @@ export function buildPolicyDisplayRules(
   return rows;
 }
 
+// ─── RDA2(농촌진흥청 소속기관 트랙) 자동 판별 ───────────────────
+// 주관기관이 농촌진흥청 본청 또는 아래 5개 소속기관 중 하나면 RDA2(excludeLeadFromCalc) 정책 대상.
+export const RDA2_LEAD_INSTITUTION_NAMES = [
+  "농촌진흥청",
+  "국립농업과학원",
+  "국립식량과학원",
+  "농촌인력자원개발센터",
+  "국립원예특작과학원",
+  "국립축산과학원",
+] as const;
+
+export function isRda2LeadInstitution(leadInstitutionName: string): boolean {
+  return (RDA2_LEAD_INSTITUTION_NAMES as readonly string[]).includes(leadInstitutionName);
+}
+
+// 전담기관이 농촌진흥청 계열(RDA1="fa-005"/RDA2="fa-006")로 선택된 경우, 실제 적용할 트랙을
+// 주관기관명으로 자동 교정한다. 두 레코드 모두 표시 이름이 "농촌진흥청"이라 사람이 직접 고르면
+// 실수하기 쉬워서, 담당자가 뭘 고르든 주관기관명 기준으로 항상 올바른 쪽으로 맞춘다.
+export function resolveRdaAgencyId(selectedAgencyId: string, leadInstitutionName: string): string {
+  if (selectedAgencyId !== "fa-005" && selectedAgencyId !== "fa-006") return selectedAgencyId;
+  return isRda2LeadInstitution(leadInstitutionName) ? "fa-006" : "fa-005";
+}
+
 // ─── 완전 제외 대상 판정 (EXCLUDE 모드 정책의 면제등급) ──────────
 // IITP/RDA1/RDA2: 면제등급(S)은 연차상시도 수행하지 않으므로 산정기준액 자체에서 제외된다.
-export function isExcludedMember(grade: string, policy: FeePolicy): boolean {
-  return policy.exemptionMode === "EXCLUDE" && policy.exemptGrades.includes(normalizeGrade(grade));
+// 비영리기관만 해당 — 영리기업은 등급이 면제등급이어도 완전제외되지 않는다.
+export function isExcludedMember(grade: string, institutionType: string, policy: FeePolicy): boolean {
+  return (
+    policy.exemptionMode === "EXCLUDE" &&
+    policy.exemptGrades.includes(normalizeGrade(grade)) &&
+    isNonProfitInstitution(institutionType)
+  );
 }
 
 // ─── 산정 기준액 (현금 또는 현금+현물) ────────────────────────────
@@ -109,6 +145,7 @@ export interface CalcMember {
   institutionName: string;
   role: "LEAD" | "PARTICIPANT";
   grade: string;              // 해당 연도 등급
+  institutionType: string;    // 영리/비영리 판정에 사용 (정산면제는 비영리기관만 해당)
   settlementType: "위탁정산" | "자체정산";
   cashBudget: number;
   inKindBudget?: number;
@@ -156,6 +193,11 @@ export interface CalcResult {
   generalUnclaimedFee: number;
   carriedOverUnclaimed: number;
   totalBillingFee: number;
+
+  // 이 정책에 적용된 연차상시 청구비율 — 기관별 이월액을 정확히 배분하려면 store.ts에서도
+  // 이 값이 필요한데, policy.annualBillingRate의 기본값(0.85) 처리를 여기서만 하고 있어
+  // 재계산 대신 결과에 실어 보낸다.
+  billingRatio: number;
 }
 
 // ─── 핵심 산정 함수 ───────────────────────────────────────────────
@@ -170,7 +212,7 @@ export function calcTermFee(input: CalcInput): CalcResult {
   // EXCLUDE 모드 면제등급(S)은 연차상시도 하지 않으므로 산정기준액에서 완전히 빠진다.
   // excludeLeadFromCalc(RDA2): 주관기관(농진청/소속기관)도 함께 완전히 제외된다.
   const excludedMembers = members.filter(
-    (m) => isExcludedMember(m.grade, policy) || (policy.excludeLeadFromCalc === true && m.role === "LEAD"),
+    (m) => isExcludedMember(m.grade, m.institutionType, policy) || (policy.excludeLeadFromCalc === true && m.role === "LEAD"),
   );
   const excludedInstitutionIds = excludedMembers.map((m) => m.institutionId);
   const eligibleMembers = members.filter((m) => !excludedMembers.includes(m));
@@ -221,6 +263,7 @@ export function calcTermFee(input: CalcInput): CalcResult {
       generalUnclaimedFee,
       carriedOverUnclaimed,
       totalBillingFee: generalBillingFee + carriedOverUnclaimed,
+      billingRatio,
       perInstitutionFees,
     };
   }
@@ -255,14 +298,22 @@ export function calcTermFee(input: CalcInput): CalcResult {
       generalUnclaimedFee: 0,
       carriedOverUnclaimed: 0,
       totalBillingFee: calculatedFee + carriedOverUnclaimed,
+      billingRatio,
     };
   }
 
-  // 2. 면제기관 분리 (DISCOUNT 모드 정책에서만 — 공동기관 중 exemptGrades에 속하고 자체정산 선택한 기관)
+  // 2. 면제기관 분리 (DISCOUNT 모드 정책에서만 — 공동기관 중 exemptGrades에 속하는 비영리기관)
   // EXCLUDE 모드 정책은 면제등급이 이미 cashMembers 이전 단계에서 완전히 빠졌으므로 여기서는 항상 빈 배열이 된다.
+  // 정산면제는 과기정통부 연구비지원체계 평가를 받는 비영리기관에만 적용되므로, 영리기업은 등급이
+  // 면제등급이어도 일반기관과 동일하게 계산한다.
+  // settlementType(자체정산/위탁정산)은 면제 대상 여부와 무관하다 — 아래 exemptBreakdown에서
+  // 정산 연차 청구비율(85%/100%)을 가를 때만 쓰인다. 과거에는 이 필터에도 "자체정산"만 통과시켜서
+  // 위탁정산을 선택한 면제등급 비영리기관이 면제 계산에서 통째로 빠지는 버그가 있었다.
   const exemptMembers = policy.exemptionMode === "DISCOUNT"
     ? coInstMembers.filter(
-        (m) => exemptGrades.includes(normalizeGrade(m.grade)) && m.settlementType === "자체정산",
+        (m) =>
+          exemptGrades.includes(normalizeGrade(m.grade)) &&
+          isNonProfitInstitution(m.institutionType),
       )
     : [];
   const nonExemptMembers = cashMembers.filter((m) => !exemptMembers.includes(m));
@@ -280,7 +331,7 @@ export function calcTermFee(input: CalcInput): CalcResult {
     const stdFee = totalExemptCash > 0
       ? Math.round(exemptFeeTotal * (amountOf(m) / totalExemptCash))
       : 0;
-    const calcFee = Math.round(stdFee * 0.85);
+    const calcFee = stdFee;
 
     // 정산 연차 요율 분기
     // - 자체정산: 정산 연차에도 85% (면제 유지, 기관이 자체 정산)
@@ -303,7 +354,7 @@ export function calcTermFee(input: CalcInput): CalcResult {
   });
 
   // 4. 과제 산정수수료
-  const calculatedFee = Math.round(generalFee + exemptFeeTotal * 0.85);
+  const calculatedFee = Math.round(generalFee + exemptFeeTotal * billingRatio);
 
   // 5. 청구수수료
   const generalCalcFee = generalFee;
@@ -319,10 +370,12 @@ export function calcTermFee(input: CalcInput): CalcResult {
     generalUnclaimedFee = 0;
   }
 
+  // 이월 미청구액(carriedOverUnclaimed)은 정산 연차에만 함께 청구되므로(기관별 청구액 산출부와 동일 기준),
+  // 연차상시 연차의 합계에는 더하지 않는다 — 예전엔 연차상시에도 더해져 실제 청구 합계와 어긋났었다.
   const exemptTotalBilling = exemptBreakdown.reduce((s, e) => s + e.billingFee, 0);
   const totalBillingFee =
     workType === "ANNUAL"
-      ? Math.round(calculatedFee * billingRatio) + carriedOverUnclaimed
+      ? generalBillingFee + exemptTotalBilling
       : generalBillingFee + exemptTotalBilling + carriedOverUnclaimed;
 
   return {
@@ -345,6 +398,7 @@ export function calcTermFee(input: CalcInput): CalcResult {
     generalUnclaimedFee,
     carriedOverUnclaimed,
     totalBillingFee,
+    billingRatio,
   };
 }
 

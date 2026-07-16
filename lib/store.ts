@@ -18,6 +18,7 @@ import {
   fundingAgencies as initialFundingAgencies,
   agencyNoticeTemplates as initialAgencyNoticeTemplates,
   notices as initialNotices,
+  standardAttachments as initialStandardAttachments,
   type Institution,
   type Project,
   type ProjectMember,
@@ -37,6 +38,7 @@ import {
   type AgencyNoticeTemplate,
   type AgencyNoticeTemplateEntry,
   type Notice,
+  type StandardAttachment,
 } from "./mock";
 
 export type { TermFeeCalc, FeeOverride };
@@ -72,6 +74,7 @@ export const ENTITY_NAMES: Record<string, string> = {
   user: "사용자",
   projectIssue: "이슈/메모",
   notice: "공지사항",
+  standardAttachment: "표준 첨부서류",
 };
 
 // ============================================================
@@ -98,6 +101,7 @@ interface StoreState {
   auditLog: AuditEntry[];
   agencyGuides: Record<string, AgencyGuideTab[]>;
   agencyNoticeTemplates: AgencyNoticeTemplateEntry[];
+  standardAttachments: StandardAttachment[];
 }
 
 const INITIAL_AUDIT_LOG: AuditEntry[] = [
@@ -237,6 +241,7 @@ let _state: StoreState = {
   auditLog: [...INITIAL_AUDIT_LOG],
   agencyGuides: {},
   agencyNoticeTemplates: [...initialAgencyNoticeTemplates],
+  standardAttachments: [...initialStandardAttachments],
 };
 
 const _listeners = new Set<() => void>();
@@ -384,7 +389,7 @@ function ensureLeadMember(project: Project): void {
 }
 
 export function addProject(data: Omit<Project, "id">): Project {
-  const item: Project = { ...data, id: genId("p") };
+  const item: Project = { registeredAt: new Date().toISOString().slice(0, 10), ...data, id: genId("p") };
   _state = { ..._state, projects: [..._state.projects, item] };
   record("project", item.id, item.projectName, "CREATE");
   ensureLeadMember(item);
@@ -817,6 +822,19 @@ export function addEmailDispatch(data: Omit<EmailDispatch, "id">): EmailDispatch
 }
 
 // ============================================================
+// STANDARD ATTACHMENTS (공문 표준 첨부서류 — 사업자등록증 등 일괄 관리)
+// ============================================================
+
+export function updateStandardAttachment(id: string, data: Partial<Omit<StandardAttachment, "id">>): void {
+  const before = _state.standardAttachments.find((a) => a.id === id);
+  if (!before) return;
+  const after = { ...before, ...data };
+  _state = { ..._state, standardAttachments: _state.standardAttachments.map((a) => (a.id === id ? after : a)) };
+  record("standardAttachment", id, after.name, "UPDATE");
+  notify();
+}
+
+// ============================================================
 // USERS
 // ============================================================
 
@@ -961,7 +979,12 @@ export function autoGenerateTermFees(projectId: string): void {
   const newCalcs: TermFeeCalc[] = [];
 
   // 단계별 미청구 누적 (단계가 바뀌면 리셋 — 정산 시 이전 단계 미청구 반영)
+  // stageUnclaimed: 단계 전체 합계(집계 표시용, TermFeeCalc에 그대로 저장).
+  // stageUnclaimedByInst: 기관별 누적분 — 정산 연차에 "그 기관 자신이 미뤄온 몫"만 정확히 청구하기 위해
+  // 별도로 추적한다. 합계만 쌓아두고 정산 연차 시점의 사업비 비율로 재배분하면, 기관별 사업비 비중이
+  // 연차마다 달라지는 경우 실제로 미뤘던 기관과 다른 기관이 그 몫을 떠안는 오류가 생긴다.
   const stageUnclaimed: Record<number, number> = {};
+  const stageUnclaimedByInst: Record<number, Record<string, number>> = {};
 
   for (let termNumber = 1; termNumber <= project.totalTerms; termNumber++) {
     const termStartDate = new Date(startDate);
@@ -987,6 +1010,7 @@ export function autoGenerateTermFees(projectId: string): void {
         institutionName: m.institutionName,
         role: m.role,
         grade: normalizeGrade(m.institutionGrade ?? "일반"),
+        institutionType: m.institutionType,
         settlementType: m.settlementType ?? "위탁정산",
         cashBudget: ab.cashBudget,
         inKindBudget: ab.inKindBudget,
@@ -1010,6 +1034,10 @@ export function autoGenerateTermFees(projectId: string): void {
       (m) => !exemptIds.has(m.institutionId) && !excludedIds.has(m.institutionId)
     );
     const totalNonExemptCash = nonExemptMembers.reduce((s, m) => s + getMemberAmount(m, feeBasis), 0);
+
+    // 이번 연차에 기관별로 새로 미뤄지는 몫(ANNUAL일 때만 채움) — 연차 루프가 끝난 뒤
+    // stageUnclaimedByInst에 합산한다.
+    const instAnnualUnclaimed: Record<string, number> = {};
 
     // 기관별 TermFee 생성 — 이미 확정(CONFIRMED/BILLED)되어 보존 중인 기관×연차는 건드리지 않는다.
     for (const cm of calcMembers) {
@@ -1036,12 +1064,22 @@ export function autoGenerateTermFees(projectId: string): void {
         instCalcFee = ed?.calculatedFee ?? 0;
         instAppliedFee = ed?.billingFee ?? 0;
       } else {
-        // 정산 연차는 이전 연차들의 일반 미청구 누적액(carriedOverUnclaimed)도 이번 청구에 함께 걷어야 하므로
-        // 일반기관 청구 풀에 더한 뒤 사업비 비율로 배분한다 (그렇지 않으면 이전 연차 미청구분이 영영 청구되지 않음).
+        // 이 기관의 일반수수료(generalFee) 몫 — 반올림 전 값으로 유지해야 아래 이월액 계산이
+        // 반올림 오차 없이 정확해진다.
         const ratio = totalNonExemptCash > 0 ? getMemberAmount(cm, feeBasis) / totalNonExemptCash : 0;
-        const nonExemptBillingPool = result.generalBillingFee + (workType === "SETTLEMENT" ? carriedOverUnclaimed : 0);
-        instCalcFee = Math.round(result.generalFee * ratio);
-        instAppliedFee = Math.round(nonExemptBillingPool * ratio);
+        const instShare = result.generalFee * ratio;
+        instCalcFee = Math.round(instShare);
+
+        if (workType === "SETTLEMENT") {
+          // 정산 연차: 이 기관 자신이 그동안 미뤄온 몫(stageUnclaimedByInst)만 더해서 청구한다.
+          // (전체를 합쳐서 이번 연차 비율로 재배분하면, 기관별 사업비 비중이 연차마다 달라질 때
+          //  실제로 미뤘던 기관과 다른 기관이 그 몫을 떠안는 오류가 생긴다.)
+          const ownCarried = stageUnclaimedByInst[stageNumber]?.[cm.institutionId] ?? 0;
+          instAppliedFee = Math.round(instShare + ownCarried);
+        } else {
+          instAppliedFee = Math.round(instShare * result.billingRatio);
+          instAnnualUnclaimed[cm.institutionId] = instShare - instShare * result.billingRatio;
+        }
       }
 
       newFees.push({
@@ -1100,8 +1138,13 @@ export function autoGenerateTermFees(projectId: string): void {
     if (isActive) {
       if (workType === "SETTLEMENT") {
         stageUnclaimed[stageNumber] = 0;
+        stageUnclaimedByInst[stageNumber] = {};
       } else {
         stageUnclaimed[stageNumber] = (stageUnclaimed[stageNumber] ?? 0) + result.generalUnclaimedFee;
+        stageUnclaimedByInst[stageNumber] = stageUnclaimedByInst[stageNumber] ?? {};
+        for (const [instId, amt] of Object.entries(instAnnualUnclaimed)) {
+          stageUnclaimedByInst[stageNumber][instId] = (stageUnclaimedByInst[stageNumber][instId] ?? 0) + amt;
+        }
       }
     }
   }

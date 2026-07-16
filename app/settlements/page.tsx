@@ -7,6 +7,8 @@ import { type Settlement } from "@/lib/mock";
 import { fmtWon, fmtDate } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
+import DateInput from "@/components/common/DateInput";
+import MoneyInput from "@/components/common/MoneyInput";
 import { useCanWrite } from "@/lib/permissions";
 
 const STATUS_MAP: Partial<Record<Settlement["status"], { label: string; color: "green" | "blue" | "slate" }>> = {
@@ -80,11 +82,11 @@ function SettlementForm({ initial, onSubmit, onClose }: { initial: Omit<Settleme
         주관기관 여부
       </label>
       <div className="grid grid-cols-2 gap-4">
-        <Field label="추가금(원)"><input className={inputCls} type="number" min={0} value={form.additionalAmount} onChange={(e) => s("additionalAmount", Number(e.target.value))} /></Field>
-        <Field label="수수료(원)"><input className={inputCls} type="number" min={0} value={form.feeAmount} onChange={(e) => s("feeAmount", Number(e.target.value))} /></Field>
+        <Field label="추가금(원)"><MoneyInput className={inputCls} value={form.additionalAmount} onChange={(v) => s("additionalAmount", v)} /></Field>
+        <Field label="수수료(원)"><MoneyInput className={inputCls} value={form.feeAmount} onChange={(v) => s("feeAmount", v)} /></Field>
       </div>
       <div className="grid grid-cols-2 gap-4">
-        <Field label="지급일"><input className={inputCls} type="date" value={form.paidAt ?? ""} onChange={(e) => s("paidAt", e.target.value || null)} /></Field>
+        <Field label="지급일"><DateInput className="w-full" value={form.paidAt ?? ""} onChange={(v) => s("paidAt", v || null)} /></Field>
       </div>
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
         <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>

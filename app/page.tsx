@@ -1,15 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useStore, getUnissuedInvoiceGroups } from "@/lib/store";
-import { agencyFeeRows, summary } from "@/lib/mock";
-
-function fmt(n: number) {
-  if (n >= 100_000_000) return `${(n / 100_000_000).toFixed(1)}억`;
-  if (n >= 10_000) return `${Math.round(n / 10_000)}만`;
-  return n.toLocaleString("ko-KR");
-}
+import { isOverdueByRule } from "@/lib/notifications";
 
 function fmtFull(n: number) {
   return n.toLocaleString("ko-KR") + "원";
@@ -23,37 +18,122 @@ const AGENCY_COLORS = ["bg-blue-500", "bg-orange-400", "bg-violet-500", "bg-emer
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { receivables, projectIssues, termFees, taxInvoices, projects } = useStore();
+  const { receivables, projectIssues, termFees, taxInvoices, projects, fundingAgencies } = useStore();
+
+  // 연도별 대시보드 — 배정일(과제 등록일) 기준. 등록일 미입력 과제는 연도별 집계에서 제외한다.
+  const availableYears = useMemo(() => {
+    const years = new Set<string>();
+    for (const p of projects) {
+      if (p.registeredAt) years.add(p.registeredAt.slice(0, 4));
+    }
+    return Array.from(years).sort((a, b) => b.localeCompare(a));
+  }, [projects]);
+  const [selectedYear, setSelectedYear] = useState<"ALL" | string>("ALL");
+
+  const projects_ = useMemo(
+    () => (selectedYear === "ALL" ? projects : projects.filter((p) => p.registeredAt?.slice(0, 4) === selectedYear)),
+    [projects, selectedYear]
+  );
+  const unregisteredCount = useMemo(() => projects.filter((p) => !p.registeredAt).length, [projects]);
+  const projectNumbers = useMemo(() => new Set(projects_.map((p) => p.projectNumber)), [projects_]);
+  const receivables_ = useMemo(
+    () => (selectedYear === "ALL" ? receivables : receivables.filter((r) => projectNumbers.has(r.projectNumber))),
+    [receivables, selectedYear, projectNumbers]
+  );
+  const termFees_ = useMemo(
+    () => (selectedYear === "ALL" ? termFees : termFees.filter((f) => projectNumbers.has(f.projectNumber))),
+    [termFees, selectedYear, projectNumbers]
+  );
+  const taxInvoices_ = useMemo(
+    () => (selectedYear === "ALL" ? taxInvoices : taxInvoices.filter((t) => projectNumbers.has(t.projectNumber))),
+    [taxInvoices, selectedYear, projectNumbers]
+  );
+  const projectIssues_ = useMemo(
+    () => (selectedYear === "ALL" ? projectIssues : projectIssues.filter((i) => projectNumbers.has(i.projectNumber))),
+    [projectIssues, selectedYear, projectNumbers]
+  );
 
   // 긴급 처리 집계 임시
-  const overdueReceivables = receivables.filter((r) => r.status === "OVERDUE");
+  const overdueReceivables = receivables_.filter((r) => isOverdueByRule(r));
   const overdueAmount = overdueReceivables.reduce((s, r) => s + r.receivableAmount, 0);
-  const highIssues = projectIssues.filter((i) => i.priority === "HIGH");
-  const unissuedGroups = getUnissuedInvoiceGroups(projects, termFees, taxInvoices);
+  const highIssues = projectIssues_.filter((i) => i.priority === "HIGH");
+  const unissuedGroups = getUnissuedInvoiceGroups(projects_, termFees_, taxInvoices_);
   const unissuedAmount = unissuedGroups.reduce((s, g) => s + g.amount, 0);
 
   // 과제 파이프라인
-  const activeCount = projects.filter((p) => p.status === "ACTIVE").length;
-  const completedCount = projects.filter((p) => p.status === "COMPLETED").length;
-  const suspendedCount = projects.filter((p) => p.status === "SUSPENDED").length;
-  const totalProjects = projects.length;
+  const activeCount = projects_.filter((p) => p.status === "ACTIVE").length;
+  const completedCount = projects_.filter((p) => p.status === "COMPLETED").length;
+  const suspendedCount = projects_.filter((p) => p.status === "SUSPENDED").length;
+  const totalProjects = projects_.length;
 
-  // 수금률 (agencyFeeRows 기준)
-  const totalIssued = agencyFeeRows.reduce((s, r) => s + r.issuedAmount, 0);
-  const totalCollected = agencyFeeRows.reduce((s, r) => s + r.collectedAmount, 0);
-  const totalIssuedCount = agencyFeeRows.reduce((s, r) => s + r.issuedCount, 0);
-  const collectionRate = totalIssued > 0 ? (totalCollected / totalIssued) * 100 : 0;
+  // 핵심 지표 — termFees·receivables 실집계 (정적 더미 대신 store 기준)
+  const totalFee = termFees_.reduce((s, f) => s + f.appliedFee, 0);
+  const totalBilled = receivables_.reduce((s, r) => s + r.billedAmount, 0);
+  const totalReceivable = receivables_.reduce((s, r) => s + r.receivableAmount, 0);
+  const totalCollected = receivables_.reduce((s, r) => s + r.paidAmount, 0);
+  const collectionRate = totalBilled > 0 ? (totalCollected / totalBilled) * 100 : 0;
+
+  // 전담기관별 수금 현황 — receivables를 과제번호로 전담기관에 연결해 집계
+  const agencyRows = useMemo(() => {
+    const projectByNumber = new Map(projects_.map((p) => [p.projectNumber, p]));
+    const map = new Map<string, { id: string; name: string; issuedAmount: number; collectedAmount: number; issuedCount: number }>();
+    for (const r of receivables_) {
+      const project = projectByNumber.get(r.projectNumber);
+      const agency = project ? fundingAgencies.find((a) => a.id === project.agencyId) : undefined;
+      if (!agency) continue;
+      const entry = map.get(agency.id) ?? { id: agency.id, name: agency.name, issuedAmount: 0, collectedAmount: 0, issuedCount: 0 };
+      entry.issuedAmount += r.billedAmount;
+      entry.collectedAmount += r.paidAmount;
+      entry.issuedCount += 1;
+      map.set(agency.id, entry);
+    }
+    return Array.from(map.values()).sort((a, b) => b.issuedAmount - a.issuedAmount);
+  }, [receivables_, projects_, fundingAgencies]);
+
+  const totalIssued = agencyRows.reduce((s, r) => s + r.issuedAmount, 0);
+  const totalIssuedCount = agencyRows.reduce((s, r) => s + r.issuedCount, 0);
+  const totalRowsCollected = agencyRows.reduce((s, r) => s + r.collectedAmount, 0);
 
   return (
     <div className="space-y-5">
       {/* 헤더 */}
       <div className="flex items-center justify-between">
-        <p className="text-xs text-slate-500">전체 과제 {totalProjects}건 기준</p>
+        <div className="flex items-center gap-3">
+          <p className="text-xs text-slate-500">
+            {selectedYear === "ALL" ? "전체" : `${selectedYear}년`} 과제 {totalProjects}건 기준
+          </p>
+          <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
+            <button
+              onClick={() => setSelectedYear("ALL")}
+              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                selectedYear === "ALL" ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700"
+              }`}
+            >
+              누적
+            </button>
+            {availableYears.map((y) => (
+              <button
+                key={y}
+                onClick={() => setSelectedYear(y)}
+                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                  selectedYear === y ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                }`}
+              >
+                {y}년
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="flex items-center gap-2 text-xs text-slate-500">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
           실시간 현황
         </div>
       </div>
+      {selectedYear !== "ALL" && unregisteredCount > 0 && (
+        <p className="text-[11px] text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+          등록일(배정일) 미입력 과제 {unregisteredCount}건은 연도별 집계에서 제외됩니다. 정확한 통계를 위해 과제 상세에서 담당자·등록일을 입력해 주세요.
+        </p>
+      )}
 
       {/* 1구역 — 긴급 처리 항목 */}
       <section>
@@ -65,7 +145,7 @@ export default function DashboardPage() {
               <p className="text-xs text-slate-500">연체 채권</p>
               {overdueReceivables.length > 0 && <span className="text-[10px] font-bold text-white bg-red-500 rounded-full px-1.5 py-0.5 leading-none">{overdueReceivables.length}건</span>}
             </div>
-            <p className={`text-base font-bold ${overdueReceivables.length > 0 ? "text-red-600" : "text-slate-300"}`}>{overdueReceivables.length > 0 ? fmt(overdueAmount) + "원" : "없음"}</p>
+            <p className={`text-lg font-bold ${overdueReceivables.length > 0 ? "text-red-600" : "text-slate-300"}`}>{overdueReceivables.length > 0 ? fmtFull(overdueAmount) : "없음"}</p>
             <p className="text-[10px] text-slate-400 mt-1.5 group-hover:text-red-500 transition-colors">채권 페이지에서 관리 →</p>
           </Link>
 
@@ -75,7 +155,7 @@ export default function DashboardPage() {
               <p className="text-xs text-slate-500">HIGH 이슈</p>
               {highIssues.length > 0 && <span className="text-[10px] font-bold text-white bg-amber-500 rounded-full px-1.5 py-0.5 leading-none">{highIssues.length}건</span>}
             </div>
-            <p className={`text-base font-bold ${highIssues.length > 0 ? "text-amber-600" : "text-slate-300"}`}>{highIssues.length > 0 ? `미처리 ${highIssues.length}건` : "없음"}</p>
+            <p className={`text-lg font-bold ${highIssues.length > 0 ? "text-amber-600" : "text-slate-300"}`}>{highIssues.length > 0 ? `미처리 ${highIssues.length}건` : "없음"}</p>
             <p className="text-[10px] text-slate-400 mt-1.5 group-hover:text-amber-500 transition-colors">이슈 페이지에서 확인 →</p>
           </Link>
 
@@ -85,7 +165,7 @@ export default function DashboardPage() {
               <p className="text-xs text-slate-500">미발행한 금액</p>
               {unissuedGroups.length > 0 && <span className="text-[10px] font-bold text-white bg-amber-500 rounded-full px-1.5 py-0.5 leading-none">{unissuedGroups.length}건</span>}
             </div>
-            <p className={`text-base font-bold ${unissuedGroups.length > 0 ? "text-amber-600" : "text-slate-300"}`}>{unissuedGroups.length > 0 ? fmt(unissuedAmount) + "원" : "없음"}</p>
+            <p className={`text-lg font-bold ${unissuedGroups.length > 0 ? "text-amber-600" : "text-slate-300"}`}>{unissuedGroups.length > 0 ? fmtFull(unissuedAmount) : "없음"}</p>
             <p className="text-[10px] text-slate-400 mt-1.5 group-hover:text-amber-500 transition-colors">미발행 페이지에서 관리 →</p>
           </Link>
         </div>
@@ -98,25 +178,19 @@ export default function DashboardPage() {
           {[
             {
               label: "총 수수료",
-              value: fmt(summary.totalFee),
-              sub: fmtFull(summary.totalFee),
-              change: summary.totalFeeChange,
+              value: fmtFull(totalFee),
               href: "/fees",
               valueColor: "text-slate-800",
             },
             {
               label: "청구액",
-              value: fmt(summary.billedFee),
-              sub: fmtFull(summary.billedFee),
-              change: summary.billedChange,
+              value: fmtFull(totalBilled),
               href: "/tax-invoices",
               valueColor: "text-slate-800",
             },
             {
               label: "미수금",
-              value: fmt(summary.receivable),
-              sub: fmtFull(summary.receivable),
-              change: summary.receivableChange,
+              value: fmtFull(totalReceivable),
               href: "/receivables",
               valueColor: "text-red-600",
             },
@@ -124,16 +198,14 @@ export default function DashboardPage() {
               label: "수금률",
               value: fmtRate(collectionRate),
               sub: `수금 ${fmtFull(totalCollected)}`,
-              change: null,
               href: "/receivables",
               valueColor: collectionRate >= 80 ? "text-emerald-600" : collectionRate >= 50 ? "text-blue-600" : "text-red-500",
             },
           ].map((card) => (
             <Link key={card.label} href={card.href} className="block bg-white rounded-xl border border-slate-200 px-4 py-3 hover:border-blue-300 hover:shadow-sm transition-all">
               <p className="text-xs text-slate-500">{card.label}</p>
-              <p className={`text-xl font-bold mt-0.5 ${card.valueColor}`}>{card.value}</p>
-              <p className="text-[10px] text-slate-400 mt-0.5 truncate">{card.sub}</p>
-              {card.change && <p className="text-[10px] text-emerald-600 mt-1 font-medium">{card.change} 전월비</p>}
+              <p className={`text-2xl font-bold mt-0.5 ${card.valueColor}`}>{card.value}</p>
+              {card.sub && <p className="text-[10px] text-slate-400 mt-0.5 truncate">{card.sub}</p>}
             </Link>
           ))}
         </div>
@@ -192,11 +264,13 @@ export default function DashboardPage() {
               </tr>
             </thead>
             <tbody>
-              {agencyFeeRows.map((row, idx) => {
+              {agencyRows.length === 0 ? (
+                <tr><td colSpan={6} className="px-5 py-8 text-center text-sm text-slate-400">청구 내역이 없습니다</td></tr>
+              ) : agencyRows.map((row, idx) => {
                 const rate = row.issuedAmount > 0 ? (row.collectedAmount / row.issuedAmount) * 100 : 0;
                 return (
                   <tr
-                    key={row.name}
+                    key={row.id}
                     className="group border-b border-slate-50 hover:bg-blue-50/40 transition-colors cursor-pointer"
                     onClick={() => router.push(`/projects?agency=${encodeURIComponent(row.name)}`)}
                   >
@@ -225,9 +299,9 @@ export default function DashboardPage() {
               <tr className="bg-slate-50 border-t border-slate-200">
                 <td className="px-5 py-3 text-xs font-semibold text-slate-600">합계</td>
                 <td className="px-4 py-3 text-right text-xs font-semibold text-slate-700 tabular-nums">{totalIssued.toLocaleString("ko-KR")}</td>
-                <td className="px-4 py-3 text-right text-xs font-semibold text-slate-700 tabular-nums">{totalCollected.toLocaleString("ko-KR")}</td>
+                <td className="px-4 py-3 text-right text-xs font-semibold text-slate-700 tabular-nums">{totalRowsCollected.toLocaleString("ko-KR")}</td>
                 <td className="px-4 py-3 text-center text-xs font-semibold text-slate-700">{totalIssuedCount}건</td>
-                <td className="px-4 py-3 text-right text-xs font-semibold text-blue-600 tabular-nums">{totalIssued > 0 ? fmtRate((totalCollected / totalIssued) * 100) : "–"}</td>
+                <td className="px-4 py-3 text-right text-xs font-semibold text-blue-600 tabular-nums">{totalIssued > 0 ? fmtRate((totalRowsCollected / totalIssued) * 100) : "–"}</td>
                 <td />
               </tr>
             </tfoot>

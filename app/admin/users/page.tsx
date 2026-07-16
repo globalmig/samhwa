@@ -8,13 +8,14 @@ import { type SystemUser } from "@/lib/mock";
 import { fmtDate } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
+import DateInput from "@/components/common/DateInput";
 import { useCanWrite } from "@/lib/permissions";
 
 const ROLE_MAP: Record<SystemUser["role"], { label: string; color: "red" | "blue" | "purple" | "slate"; desc: string }> = {
   ADMIN: { label: "시스템 관리자", color: "red", desc: "전체 권한" },
   ACCOUNTANT: { label: "회계 담당자", color: "blue", desc: "수수료·세금계산서" },
-  SETTLEMENT: { label: "전문기관담당자", color: "purple", desc: "정산·채권" },
-  VIEWER: { label: "조회 전용", color: "slate", desc: "수수료·이슈·변경이력 조회 전용" },
+  SETTLEMENT: { label: "전문기관담당자", color: "purple", desc: "정산·채권 등 전체 업무 권한" },
+  VIEWER: { label: "조회 전용", color: "slate", desc: "수수료·이슈·변경이력 조회 전용 (이슈 등록만 가능)" },
 };
 
 type ModalState = { mode: "add" } | { mode: "edit"; target: SystemUser };
@@ -65,7 +66,7 @@ function UserForm({ initial, onSubmit, onClose }: { initial: Omit<SystemUser, "i
           </select>
         </Field>
       </div>
-      <Field label="등록일"><input className={inputCls} type="date" value={form.registeredAt} onChange={(e) => s("registeredAt", e.target.value)} /></Field>
+      <Field label="등록일"><DateInput className="w-full" value={form.registeredAt} onChange={(v) => s("registeredAt", v)} /></Field>
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
         <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
         <button onClick={() => onSubmit(form)} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">저장</button>

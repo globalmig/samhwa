@@ -2,23 +2,15 @@ import type { Receivable, Project, ProjectIssue, IssueRecipientGroup, SystemUser
 
 type NotifiableUser = { role: SystemUser["role"]; name: string };
 
-// 특정 날짜로부터 오늘까지 몇 개월이 지났는지 계산
-export function monthsSince(dateStr: string): number | null {
-  if (!dateStr) return null;
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return null;
-  const now = new Date();
-  let months = (now.getFullYear() - d.getFullYear()) * 12 + (now.getMonth() - d.getMonth());
-  if (now.getDate() < d.getDate()) months -= 1;
-  return months;
-}
-
-// 미수 상태(PAID 제외)이면서 당해종료일+3개월 또는 청구일+3개월이 지나면 '연체'로 자동 판정
-export function isOverdueByRule(r: { status: Receivable["status"]; billedAt: string; termEndDate?: string }): boolean {
+// 미수 상태(PAID 제외)이면서 만기일이 지나면 '연체'로 자동 판정
+export function isOverdueByRule(r: { status: Receivable["status"]; dueDate: string }): boolean {
   if (r.status === "PAID") return false;
-  const pastTermEnd = r.termEndDate ? (monthsSince(r.termEndDate) ?? -1) >= 3 : false;
-  const pastBilled = (monthsSince(r.billedAt) ?? -1) >= 3;
-  return pastTermEnd || pastBilled;
+  if (!r.dueDate) return false;
+  const due = new Date(`${r.dueDate}T00:00:00`);
+  if (isNaN(due.getTime())) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return due.getTime() < today.getTime();
 }
 
 // ─── 알림 수신 대상 판정 ─────────────────────────────────────────
@@ -45,7 +37,7 @@ export function computeOverdueAlerts(receivables: Receivable[], projects: Projec
   return receivables
     .map((r): OverdueAlert | null => {
       const project = projects.find((p) => p.projectNumber === r.projectNumber);
-      const overdue = isOverdueByRule({ status: r.status, billedAt: r.billedAt, termEndDate: project?.endDate });
+      const overdue = isOverdueByRule({ status: r.status, dueDate: r.dueDate });
       if (!overdue) return null;
       return {
         id: r.id,

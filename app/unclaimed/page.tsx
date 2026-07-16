@@ -4,7 +4,7 @@ import { useState, useMemo } from "react";
 import Link from "next/link";
 import { FiChevronDown, FiChevronUp, FiArrowRight } from "react-icons/fi";
 import { useStore, getUnissuedInvoiceGroups } from "@/lib/store";
-import { fmtWonFull, fmtDate } from "@/lib/utils";
+import { fmtWonFull, fmtDate, splitVatInclusive } from "@/lib/utils";
 
 const PROJECT_STATUS: Record<string, { label: string; cls: string }> = {
   ACTIVE:    { label: "진행중",  cls: "text-blue-600" },
@@ -63,7 +63,7 @@ export default function UnissuedInvoicePage() {
   );
 
   const totalAmount = enriched.reduce((s, g) => s + g.amount, 0);
-  const totalTax = Math.round(totalAmount * 0.1);
+  const totalTax = enriched.reduce((s, g) => s + splitVatInclusive(g.amount).taxAmount, 0);
 
   function toggleExpand(key: string) {
     setExpandedKey((prev) => (prev === key ? null : key));
@@ -80,7 +80,7 @@ export default function UnissuedInvoicePage() {
       <div className="grid grid-cols-3 gap-3">
         {[
           { label: "미발행액 합계", value: fmtWonFull(totalAmount), color: "text-amber-600" },
-          { label: "미발행 부가세(10%) 합계", value: fmtWonFull(totalTax), color: "text-amber-600" },
+          { label: "미발행 부가세 합계", value: fmtWonFull(totalTax), color: "text-amber-600" },
           { label: "미발행 건수", value: `${enriched.length}건`, color: "text-slate-700" },
         ].map((s) => (
           <div key={s.label} className="bg-white rounded-xl border border-slate-200 px-4 py-3">
@@ -206,23 +206,28 @@ export default function UnissuedInvoicePage() {
                                 ))}
                               </tbody>
                             </table>
-                            <div className="mx-4 my-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 flex items-center gap-8 text-xs text-slate-600">
-                              <div>
-                                <span className="text-slate-400">공급가액</span>
-                                <span className="mx-2 text-slate-300">:</span>
-                                <span className="font-semibold text-slate-800">{fmtWonFull(g.amount)}</span>
-                              </div>
-                              <div>
-                                <span className="text-slate-400">부가세(10%)</span>
-                                <span className="mx-2 text-slate-300">:</span>
-                                <span className="font-semibold text-slate-800">{fmtWonFull(Math.round(g.amount * 0.1))}</span>
-                              </div>
-                              <div>
-                                <span className="text-slate-400">합계</span>
-                                <span className="mx-2 text-slate-300">:</span>
-                                <span className="font-semibold text-amber-600">{fmtWonFull(Math.round(g.amount * 1.1))}</span>
-                              </div>
-                            </div>
+                            {(() => {
+                              const { supplyAmount, taxAmount } = splitVatInclusive(g.amount);
+                              return (
+                                <div className="mx-4 my-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 flex items-center gap-8 text-xs text-slate-600">
+                                  <div>
+                                    <span className="text-slate-400">공급가액</span>
+                                    <span className="mx-2 text-slate-300">:</span>
+                                    <span className="font-semibold text-slate-800">{fmtWonFull(supplyAmount)}</span>
+                                  </div>
+                                  <div>
+                                    <span className="text-slate-400">부가세</span>
+                                    <span className="mx-2 text-slate-300">:</span>
+                                    <span className="font-semibold text-slate-800">{fmtWonFull(taxAmount)}</span>
+                                  </div>
+                                  <div>
+                                    <span className="text-slate-400">합계</span>
+                                    <span className="mx-2 text-slate-300">:</span>
+                                    <span className="font-semibold text-amber-600">{fmtWonFull(g.amount)}</span>
+                                  </div>
+                                </div>
+                              );
+                            })()}
                           </div>
                         </td>
                       </tr>

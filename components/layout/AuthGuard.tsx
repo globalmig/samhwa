@@ -3,10 +3,11 @@
 import { useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth, initAuth } from "@/lib/auth";
-import { canAccessPage } from "@/lib/permissions";
+import { canAccessPage, defaultLandingPath } from "@/lib/permissions";
 
 function AccessDenied() {
   const router = useRouter();
+  const { user } = useAuth();
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center">
       <div className="text-center">
@@ -18,10 +19,10 @@ function AccessDenied() {
         <h2 className="text-base font-semibold text-slate-800 mb-1">접근 권한 없음</h2>
         <p className="text-sm text-slate-500 mb-6">이 페이지에 접근할 권한이 없습니다.</p>
         <button
-          onClick={() => router.replace("/")}
+          onClick={() => router.replace(defaultLandingPath(user?.role as "ADMIN" | "ACCOUNTANT" | "SETTLEMENT" | "VIEWER" | undefined))}
           className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
         >
-          대시보드로 이동
+          홈으로 이동
         </button>
       </div>
     </div>
