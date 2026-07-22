@@ -20,6 +20,7 @@ import MoneyInput from "@/components/common/MoneyInput";
 import DateInput from "@/components/common/DateInput";
 import NoticeLetterPreview, { type NoticeStatusRow } from "@/components/common/NoticeLetterPreview";
 import InstitutionQuickAdd from "@/components/common/InstitutionQuickAdd";
+import UserMultiSelect from "@/components/common/UserMultiSelect";
 import AgreementStructureEditor from "@/components/common/AgreementStructureEditor";
 import { useCanWrite } from "@/lib/permissions";
 import { getCurrentUser } from "@/lib/auth";
@@ -319,19 +320,10 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   function toggleIssueRecipient(group: IssueRecipientGroup) {
     setIssueRecipients((prev) => prev.includes(group) ? prev.filter((g) => g !== group) : [...prev, group]);
   }
-  function toggleIssueRecipientUser(userId: string) {
-    setIssueRecipientUserIds((prev) => prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]);
-  }
   function toggleEditIssueRecipient(group: IssueRecipientGroup) {
     setEditIssueDraft((d) => ({
       ...d,
       recipientGroups: d.recipientGroups.includes(group) ? d.recipientGroups.filter((g) => g !== group) : [...d.recipientGroups, group],
-    }));
-  }
-  function toggleEditIssueRecipientUser(userId: string) {
-    setEditIssueDraft((d) => ({
-      ...d,
-      recipientUserIds: d.recipientUserIds.includes(userId) ? d.recipientUserIds.filter((id) => id !== userId) : [...d.recipientUserIds, userId],
     }));
   }
 
@@ -843,16 +835,12 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               </div>
               <div>
                 <p className="text-xs text-slate-500 mb-1.5">알림 받을 대상(개인) <span className="text-slate-400 font-normal">· 위 전체 선택과 별개로 특정 인원을 추가 지정</span></p>
-                <div className="flex flex-wrap items-center gap-3">
-                  {selectableUsers.map((u) => (
-                    <label key={u.id} className="flex items-center gap-1.5 cursor-pointer">
-                      <input type="checkbox" checked={issueRecipientUserIds.includes(u.id)}
-                        onChange={() => toggleIssueRecipientUser(u.id)}
-                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30" />
-                      <span className="text-xs text-slate-600">{u.name}</span>
-                    </label>
-                  ))}
-                </div>
+                <UserMultiSelect
+                  users={selectableUsers}
+                  selectedIds={issueRecipientUserIds}
+                  onChange={setIssueRecipientUserIds}
+                  placeholder="이름으로 검색..."
+                />
                 <div className="flex gap-2 mt-3 justify-end">
                   <button onClick={() => setShowIssueForm(false)}
                     className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
@@ -929,16 +917,16 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                         </label>
                       ))}
                     </div>
-                    <div className="flex items-center gap-3 flex-wrap">
-                      <span className="text-xs text-slate-500 shrink-0">대상(개인)</span>
-                      {selectableUsers.map((u) => (
-                        <label key={u.id} className="flex items-center gap-1.5 cursor-pointer">
-                          <input type="checkbox" checked={editIssueDraft.recipientUserIds.includes(u.id)}
-                            onChange={() => toggleEditIssueRecipientUser(u.id)}
-                            className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30" />
-                          <span className="text-xs text-slate-600">{u.name}</span>
-                        </label>
-                      ))}
+                    <div className="flex items-start gap-3">
+                      <span className="text-xs text-slate-500 shrink-0 pt-1.5">대상(개인)</span>
+                      <div className="flex-1 max-w-sm">
+                        <UserMultiSelect
+                          users={selectableUsers}
+                          selectedIds={editIssueDraft.recipientUserIds}
+                          onChange={(ids) => setEditIssueDraft((d) => ({ ...d, recipientUserIds: ids }))}
+                          placeholder="이름으로 검색..."
+                        />
+                      </div>
                       <div className="flex gap-2 ml-auto">
                         <button onClick={() => setEditingIssueId(null)}
                           className="px-3 py-1 text-xs text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
