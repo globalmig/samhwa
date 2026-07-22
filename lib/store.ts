@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { getCurrentUser } from "./auth";
-import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, type CalcMember } from "./fee-calculator";
+import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, allocateExact, type CalcMember } from "./fee-calculator";
 import {
   institutions as initialInstitutions,
   projects as initialProjects,
@@ -1038,7 +1038,13 @@ export function autoGenerateTermFees(projectId: string): void {
     const nonExemptMembers = calcMembers.filter(
       (m) => !exemptIds.has(m.institutionId) && !excludedIds.has(m.institutionId)
     );
-    const totalNonExemptCash = nonExemptMembers.reduce((s, m) => s + getMemberAmount(m, feeBasis), 0);
+    // 일반기관 몫도 기관별로 각자 반올림하면 합계가 generalFee/generalBillingFee와 어긋날 수 있어
+    // allocateExact(최대잉여법)로 배분해 합계가 항상 정확히 일치하게 한다.
+    const nonExemptWeights = nonExemptMembers.map((m) => getMemberAmount(m, feeBasis));
+    const generalCalcShares = allocateExact(result.generalFee, nonExemptWeights);
+    const generalCalcShareByInst = new Map(nonExemptMembers.map((m, i) => [m.institutionId, generalCalcShares[i]]));
+    const generalBillShares = workType === "ANNUAL" ? allocateExact(result.generalBillingFee, nonExemptWeights) : [];
+    const generalBillShareByInst = new Map(nonExemptMembers.map((m, i) => [m.institutionId, generalBillShares[i] ?? 0]));
 
     // 이번 연차에 기관별로 새로 미뤄지는 몫(ANNUAL일 때만 채움) — 연차 루프가 끝난 뒤
     // stageUnclaimedByInst에 합산한다.
@@ -1089,11 +1095,10 @@ export function autoGenerateTermFees(projectId: string): void {
           instAnnualExemptUnclaimed[cm.institutionId] = ed?.unclaimedFee ?? 0;
         }
       } else {
-        // 이 기관의 일반수수료(generalFee) 몫 — 반올림 전 값으로 유지해야 아래 이월액 계산이
-        // 반올림 오차 없이 정확해진다.
-        const ratio = totalNonExemptCash > 0 ? getMemberAmount(cm, feeBasis) / totalNonExemptCash : 0;
-        const instShare = result.generalFee * ratio;
-        instCalcFee = Math.round(instShare);
+        // 이 기관의 일반수수료(generalFee) 몫 — allocateExact로 미리 배분해둔 정수값이라
+        // 전체 기관 합계가 항상 generalFee와 정확히 일치한다.
+        const instCalcShare = generalCalcShareByInst.get(cm.institutionId) ?? 0;
+        instCalcFee = instCalcShare;
         // 일반기관은 산정 단계에서 할인이 없으므로 표준수수료 = 산정수수료.
         instStandardFee = instCalcFee;
 
@@ -1106,15 +1111,16 @@ export function autoGenerateTermFees(projectId: string): void {
           // 일반기관 취급을 받는 경우 — 자체정산이던 동안 쌓인 미청구분을 여기서 함께 청구한다.
           // (그대로 두면 전환 시점에 그 미청구분이 아무 데도 반영되지 않고 사라진다.)
           const ownExemptCarried = stageExemptUnclaimedByInst[stageNumber]?.[cm.institutionId] ?? 0;
-          instAppliedFee = Math.round(instShare + ownCarried + ownExemptCarried);
+          // ownCarried/ownExemptCarried도 이제 매 연차 정수로 쌓이므로 반올림이 필요 없다.
+          instAppliedFee = instCalcShare + ownCarried + ownExemptCarried;
           exemptCarryoverBilledThisTerm += ownExemptCarried;
           // 정산 연차의 일반기관은 100% 청구되므로 이번 연차 자체가 새로 남기는 미청구는 없다.
           instUnclaimedFee = 0;
         } else {
-          // 산정액(instShare)에서 청구비율(85%)만큼 당해 청구액을 뗄 때는 반올림 없이 절사한다 —
-          // 미청구분은 그 나머지로 구해야 절사로 남는 오차가 미청구액 쪽에 정확히 흡수된다.
-          instAppliedFee = Math.floor(instShare * result.billingRatio);
-          instUnclaimedFee = instCalcFee - instAppliedFee;
+          // 청구액도 allocateExact로 미리 배분해둔 정수값이라 합계가 generalBillingFee와 정확히 일치한다.
+          const instBillShare = generalBillShareByInst.get(cm.institutionId) ?? 0;
+          instAppliedFee = instBillShare;
+          instUnclaimedFee = instCalcShare - instBillShare;
           instAnnualUnclaimed[cm.institutionId] = instUnclaimedFee;
         }
       }

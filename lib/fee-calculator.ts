@@ -114,6 +114,28 @@ export function getMemberAmount(m: { cashBudget: number; inKindBudget?: number }
   return feeBasis === "CASH_PLUS_INKIND" ? m.cashBudget + (m.inKindBudget ?? 0) : m.cashBudget;
 }
 
+// ─── 정수 원단위 배분 (최대잉여법 / largest remainder method) ────
+// total(정수 원)을 weights 비율대로 여러 기관에 나눌 때, 기관별로 각자 반올림하면(Math.round)
+// 그 합이 total과 1~2원 어긋날 수 있다 — 이 함수로 배분하면 결과 배열의 합이 항상 total과
+// 정확히 일치한다. 우선 내림(Math.floor)한 값을 기본으로 주고, 남는 원(remainder)을 소수부가
+// 큰 기관부터 순서대로 1원씩 얹어준다.
+export function allocateExact(total: number, weights: number[]): number[] {
+  if (weights.length === 0) return [];
+  const weightSum = weights.reduce((s, w) => s + w, 0);
+  if (weightSum <= 0) return weights.map(() => 0);
+  const raw = weights.map((w) => (total * w) / weightSum);
+  const floors = raw.map((r) => Math.floor(r));
+  const remainder = total - floors.reduce((s, f) => s + f, 0);
+  const order = raw
+    .map((r, i) => ({ i, frac: r - floors[i] }))
+    .sort((a, b) => b.frac - a.frac);
+  const result = [...floors];
+  for (let k = 0; k < remainder; k++) {
+    result[order[k % order.length].i] += 1;
+  }
+  return result;
+}
+
 // ─── 기본수수료 구간 조회 ────────────────────────────────────────
 export function getBaseFee(cashBudget: number, brackets: FeeRateBracket[]): number {
   const sorted = [...brackets].sort((a, b) => a.minAmount - b.minAmount);
@@ -333,25 +355,35 @@ export function calcTermFee(input: CalcInput): CalcResult {
   const nonExemptAddonFee = getAddonFee(nonExemptBaseFee, nonExemptCoInstCount, coInstAddonMethod);
   const generalFee = nonExemptBaseFee + nonExemptAddonFee;
 
-  // 3. 면제기관 수수료 (비례 배분)
+  // 3. 면제기관 수수료 (비례 배분) — 기관별로 각자 반올림하면 그 합이 exemptFeeTotal과 1~2원
+  // 어긋날 수 있어 allocateExact(최대잉여법)로 배분해 합계가 항상 정확히 일치하게 한다.
+  // 청구액은 정산구분(자체정산 85%/위탁정산 100%)에 따라 요율이 갈릴 수 있으므로, 같은 요율을
+  // 쓰는 기관끼리 묶어(그룹) 그룹 안에서 다시 정확히 배분한다.
   const exemptFeeTotal = standardFee - generalFee;
-  const totalExemptCash = exemptMembers.reduce((s, m) => s + amountOf(m), 0);
-  const exemptBreakdown: ExemptInstDetail[] = exemptMembers.map((m) => {
-    const stdFee = totalExemptCash > 0
-      ? Math.round(exemptFeeTotal * (amountOf(m) / totalExemptCash))
-      : 0;
+  const exemptStdShares = allocateExact(exemptFeeTotal, exemptMembers.map((m) => amountOf(m)));
+
+  const isSettlement = workType === "SETTLEMENT";
+  const exemptRatios = exemptMembers.map((m) =>
+    isSettlement && m.settlementType === "위탁정산" ? 1.0 : billingRatio
+  );
+  const exemptBillShares: number[] = new Array(exemptMembers.length).fill(0);
+  const ratioGroups = new Map<number, number[]>();
+  exemptRatios.forEach((r, i) => {
+    if (!ratioGroups.has(r)) ratioGroups.set(r, []);
+    ratioGroups.get(r)!.push(i);
+  });
+  ratioGroups.forEach((indices, ratio) => {
+    const groupCalc = indices.map((i) => exemptStdShares[i]);
+    // 그룹 청구 총액도 절사(내림)해서 정하고(기존 방식과 동일), 그 총액을 그룹 내에서 다시 정확히 배분한다.
+    const groupBillTotal = Math.floor(groupCalc.reduce((s, c) => s + c, 0) * ratio);
+    const groupBill = allocateExact(groupBillTotal, groupCalc);
+    indices.forEach((i, k) => { exemptBillShares[i] = groupBill[k]; });
+  });
+
+  const exemptBreakdown: ExemptInstDetail[] = exemptMembers.map((m, idx) => {
+    const stdFee = exemptStdShares[idx];
     const calcFee = stdFee;
-
-    // 정산 연차 요율 분기
-    // - 자체정산: 정산 연차에도 85% (면제 유지, 기관이 자체 정산)
-    // - 위탁정산: 정산 연차에 100% (회계법인이 정산, 일반기관과 동일)
-    const isSettlement = workType === "SETTLEMENT";
-    const effectiveBillingRatio =
-      isSettlement && m.settlementType === "위탁정산" ? 1.0 : billingRatio;
-
-    // 산정액(calcFee)에서 청구비율만큼 청구액을 뗄 때는 반올림 없이 절사한다 — 미청구분은
-    // 그 나머지(calcFee - billFee)로 구해야 절사로 남는 1원 오차가 미청구액 쪽에 정확히 흡수된다.
-    const billFee = Math.floor(calcFee * effectiveBillingRatio);
+    const billFee = exemptBillShares[idx];
     return {
       institutionId: m.institutionId,
       institutionName: m.institutionName,
