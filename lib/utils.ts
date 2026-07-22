@@ -27,6 +27,17 @@ export function fmtRate(r: number): string {
   return `${r}%`;
 }
 
+// 기준일로부터 n개월 뒤 날짜(yyyy-mm-dd). 잘못된 날짜면 빈 문자열.
+// 채권(미수금) 만기일 = 청구일 + 3개월 규칙을 여러 화면(수수료 청구 관리·과제 상세·미수금 관리)에서
+// 동일하게 적용하기 위한 공통 함수 — 각자 따로 계산하면 화면마다 만기일 산정 기준이 어긋난다.
+export function addMonths(dateStr: string, months: number): string {
+  if (!dateStr) return "";
+  const d = new Date(`${dateStr}T00:00:00`);
+  if (isNaN(d.getTime())) return "";
+  d.setMonth(d.getMonth() + months);
+  return d.toISOString().slice(0, 10);
+}
+
 // 사업자등록번호 입력값을 000-00-00000 형태로 자동 포맷 (숫자만 추출 후 하이픈 삽입)
 export function formatBizNumber(input: string): string {
   const digits = input.replace(/\D/g, "").slice(0, 10);

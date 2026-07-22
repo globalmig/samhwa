@@ -15,6 +15,12 @@ const TYPE_MAP: Record<EmailDispatch["emailType"], { label: string; color: "blue
   OTHER: { label: "기타 공문", color: "slate" },
 };
 
+// 세금계산서 공문 중 역발행 요청으로 발송된 건은 구분되는 유형으로 표시한다.
+function displayType(e: EmailDispatch): { label: string; color: "blue" | "indigo" | "purple" | "slate" | "teal" } {
+  if (e.emailType === "TAX_INVOICE" && e.isReverseRequest) return { label: "역발행 수수료 공문", color: "teal" };
+  return TYPE_MAP[e.emailType];
+}
+
 const CATEGORY_LABEL: Record<NonNullable<EmailDispatch["feeCategory"]>, string> = {
   ANNUAL: "연차상시점검수수료",
   SETTLEMENT: "위탁정산수수료",
@@ -41,7 +47,7 @@ export default function EmailDispatchDetailPage({ params }: { params: Promise<{ 
     );
   }
 
-  const typeInfo = TYPE_MAP[dispatch.emailType];
+  const typeInfo = displayType(dispatch);
   const statusInfo = STATUS_MAP[dispatch.status];
 
   return (

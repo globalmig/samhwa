@@ -14,12 +14,20 @@ function getEmailProject(e: EmailDispatch, projects: Project[]): Project | undef
   return projectNumber ? projects.find((p) => p.projectNumber === projectNumber) : undefined;
 }
 
-const TYPE_MAP: Record<EmailDispatch["emailType"], { label: string; color: "blue" | "indigo" | "purple" | "slate" }> = {
+const TYPE_MAP: Record<EmailDispatch["emailType"], { label: string; color: "blue" | "indigo" | "purple" | "slate" | "teal" }> = {
   TAX_INVOICE: { label: "세금계산서 공문", color: "blue" },
   FEE_DETAIL: { label: "수수료 산출내역 안내", color: "indigo" },
   SETTLEMENT_NOTICE: { label: "정산절차 안내 공문", color: "purple" },
   OTHER: { label: "기타 공문", color: "slate" },
 };
+const REVERSE_TYPE = { label: "역발행 수수료 공문", color: "teal" as const };
+
+// 실제 emailType(TAX_INVOICE 등)과 별개로, 역발행 요청 여부를 반영한 "표시용 유형"을 계산한다 —
+// 역발행 요청 공문은 세금계산서 공문과 발송 목적이 달라 목록/필터에서 구분해서 보여줘야 한다.
+function displayType(e: EmailDispatch): { key: string; label: string; color: "blue" | "indigo" | "purple" | "slate" | "teal" } {
+  if (e.emailType === "TAX_INVOICE" && e.isReverseRequest) return { key: "REVERSE_INVOICE", ...REVERSE_TYPE };
+  return { key: e.emailType, ...TYPE_MAP[e.emailType] };
+}
 
 const CATEGORY_LABEL: Record<NonNullable<EmailDispatch["feeCategory"]>, string> = {
   ANNUAL: "연차상시점검수수료",
@@ -47,7 +55,7 @@ export default function EmailDispatchesPage() {
       [...emailDispatches]
         .sort((a, b) => b.sentAt.localeCompare(a.sentAt))
         .filter((e) => {
-          if (typeFilter !== "ALL" && e.emailType !== typeFilter) return false;
+          if (typeFilter !== "ALL" && displayType(e).key !== typeFilter) return false;
           if (statusFilter !== "ALL" && e.status !== statusFilter) return false;
           if (filterRecipient !== "" && !e.recipientInstitution.includes(filterRecipient) && !e.recipientEmail.includes(filterRecipient)) return false;
           if (filterSubject !== "" && !e.subject.includes(filterSubject)) return false;
@@ -115,6 +123,7 @@ export default function EmailDispatchesPage() {
           <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="text-xs border border-slate-200 rounded-lg px-3 py-1.5 text-slate-600 bg-white">
             <option value="ALL">전체 유형</option>
             <option value="TAX_INVOICE">세금계산서 공문</option>
+            <option value="REVERSE_INVOICE">역발행 수수료 공문</option>
             <option value="FEE_DETAIL">수수료 산출내역 안내</option>
             <option value="SETTLEMENT_NOTICE">정산절차 안내 공문</option>
             <option value="OTHER">기타 공문</option>
@@ -179,7 +188,7 @@ export default function EmailDispatchesPage() {
                     <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">{project?.startDate ? fmtDate(project.startDate) : "-"}</td>
                     <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">{project?.endDate ? fmtDate(project.endDate) : "-"}</td>
                     <td className="px-4 py-3 text-center">
-                      <StatusBadge label={TYPE_MAP[e.emailType].label} color={TYPE_MAP[e.emailType].color} />
+                      <StatusBadge label={displayType(e).label} color={displayType(e).color} />
                     </td>
                     <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">{e.attachments.length}개</td>
                     <td className="px-4 py-3 text-center">

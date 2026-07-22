@@ -13,7 +13,7 @@ import {
 } from "@/lib/store";
 import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, EMPTY_NOTICE_TEMPLATE, COMPANY_INFO } from "@/lib/mock";
 import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isNonProfitInstitution, resolveRdaAgencyId, type CalcMember } from "@/lib/fee-calculator";
-import { fmtWonFull, fmtDate, splitVatInclusive } from "@/lib/utils";
+import { fmtWonFull, fmtDate, splitVatInclusive, addMonths } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
 import MoneyInput from "@/components/common/MoneyInput";
@@ -104,7 +104,8 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   const canEditProjects = useCanWrite('projects');
   const canEditIssues = useCanWrite('issues');
   const canManageIssues = useCanWrite('issues-manage');
-  const { projects, projectMembers, institutions, projectIssues, auditLog, fundingAgencies, feePolicies, termFeeCalcs } = useStore();
+  const { projects, projectMembers, institutions, projectIssues, auditLog, fundingAgencies, feePolicies, termFeeCalcs, users } = useStore();
+  const selectableUsers = users.filter((u) => u.status === "ACTIVE");
 
   const project = projects.find((p) => p.id === projectId) ?? null;
 
@@ -127,10 +128,14 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   const [issuePriority, setIssuePriority] = useState<"HIGH" | "MEDIUM" | "LOW">("MEDIUM");
   const [issueStatus, setIssueStatus] = useState<"OPEN" | "IN_PROGRESS" | "RESOLVED">("OPEN");
   const [issueRecipients, setIssueRecipients] = useState<IssueRecipientGroup[]>([]);
+  const [issueRecipientUserIds, setIssueRecipientUserIds] = useState<string[]>([]);
+  const [issueInstitutionName, setIssueInstitutionName] = useState("");
+  const [issueNoInstitution, setIssueNoInstitution] = useState(false);
   const [editingIssueId, setEditingIssueId] = useState<string | null>(null);
   const [editIssueDraft, setEditIssueDraft] = useState({
     content: "", priority: "MEDIUM" as "HIGH" | "MEDIUM" | "LOW", status: "OPEN" as "OPEN" | "IN_PROGRESS" | "RESOLVED",
-    recipientGroups: [] as IssueRecipientGroup[],
+    recipientGroups: [] as IssueRecipientGroup[], recipientUserIds: [] as string[],
+    institutionName: "", noInstitution: false,
   });
   const [deletingIssueId, setDeletingIssueId] = useState<string | null>(null);
 
@@ -228,7 +233,8 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
     const annualBudget = (draft.govGrant ?? 0) + (draft.privateCash ?? 0) + (draft.privateInKind ?? 0);
     // 전담기관이 농촌진흥청 계열(RDA1/RDA2)이면 주관기관명으로 실제 트랙을 자동 교정한다 —
     // 두 레코드 모두 표시 이름이 "농촌진흥청"이라 사람이 직접 고르면 실수하기 쉽다.
-    const resolvedAgencyId = resolveRdaAgencyId(draft.agencyId, leadInstitutionName);
+    const rda2AffiliatedNames = fundingAgencies.find((a) => a.id === "fa-006")?.rda2AffiliatedInstitutionNames;
+    const resolvedAgencyId = resolveRdaAgencyId(draft.agencyId, leadInstitutionName, rda2AffiliatedNames);
     const resolvedAgency = fundingAgencies.find((a) => a.id === resolvedAgencyId)?.name ?? draft.agency;
     updateProject(projectId, {
       ...draft,
@@ -296,21 +302,36 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       priority: issuePriority,
       status: issueStatus,
       recipientGroups: issueRecipients,
+      recipientUserIds: issueRecipientUserIds,
+      institutionName: issueNoInstitution ? undefined : (issueInstitutionName.trim() || undefined),
+      noInstitution: issueNoInstitution,
     });
     setIssueContent("");
     setIssuePriority("MEDIUM");
     setIssueStatus("OPEN");
     setIssueRecipients([]);
+    setIssueRecipientUserIds([]);
+    setIssueInstitutionName("");
+    setIssueNoInstitution(false);
     setShowIssueForm(false);
   }
 
   function toggleIssueRecipient(group: IssueRecipientGroup) {
     setIssueRecipients((prev) => prev.includes(group) ? prev.filter((g) => g !== group) : [...prev, group]);
   }
+  function toggleIssueRecipientUser(userId: string) {
+    setIssueRecipientUserIds((prev) => prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]);
+  }
   function toggleEditIssueRecipient(group: IssueRecipientGroup) {
     setEditIssueDraft((d) => ({
       ...d,
       recipientGroups: d.recipientGroups.includes(group) ? d.recipientGroups.filter((g) => g !== group) : [...d.recipientGroups, group],
+    }));
+  }
+  function toggleEditIssueRecipientUser(userId: string) {
+    setEditIssueDraft((d) => ({
+      ...d,
+      recipientUserIds: d.recipientUserIds.includes(userId) ? d.recipientUserIds.filter((id) => id !== userId) : [...d.recipientUserIds, userId],
     }));
   }
 
@@ -765,6 +786,20 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
         {showIssueForm && (
           <div className="px-5 py-4 border-b border-slate-100 bg-blue-50/30">
             <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">이슈 발생 기관명</label>
+                <div className="flex items-center gap-2">
+                  <input value={issueInstitutionName} onChange={(e) => setIssueInstitutionName(e.target.value)}
+                    disabled={issueNoInstitution} placeholder="기관명을 입력하세요"
+                    className={`${inp} flex-1 disabled:bg-slate-50 disabled:text-slate-400`} />
+                  <label className="flex items-center gap-1.5 cursor-pointer shrink-0 whitespace-nowrap">
+                    <input type="checkbox" checked={issueNoInstitution}
+                      onChange={(e) => { setIssueNoInstitution(e.target.checked); if (e.target.checked) setIssueInstitutionName(""); }}
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30" />
+                    <span className="text-xs text-slate-600">선택 필요 없음</span>
+                  </label>
+                </div>
+              </div>
               <textarea value={issueContent} onChange={(e) => setIssueContent(e.target.value)}
                 placeholder="이슈 또는 메모 내용을 입력하세요"
                 className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
@@ -790,7 +825,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 </div>
               </div>
               <div>
-                <p className="text-xs text-slate-500 mb-1.5">알림 받을 대상 <span className="text-slate-400 font-normal">· 선택 안 하면 과제 담당자에게만 전달</span></p>
+                <p className="text-xs text-slate-500 mb-1.5">알림 받을 대상(전체) <span className="text-slate-400 font-normal">· 선택 안 하면 과제 담당자에게만 전달</span></p>
                 <div className="flex items-center gap-3">
                   {([
                     { value: "MANAGER", label: "담당자" },
@@ -802,6 +837,19 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                         onChange={() => toggleIssueRecipient(value)}
                         className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30" />
                       <span className="text-xs text-slate-600">{label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p className="text-xs text-slate-500 mb-1.5">알림 받을 대상(개인) <span className="text-slate-400 font-normal">· 위 전체 선택과 별개로 특정 인원을 추가 지정</span></p>
+                <div className="flex flex-wrap items-center gap-3">
+                  {selectableUsers.map((u) => (
+                    <label key={u.id} className="flex items-center gap-1.5 cursor-pointer">
+                      <input type="checkbox" checked={issueRecipientUserIds.includes(u.id)}
+                        onChange={() => toggleIssueRecipientUser(u.id)}
+                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30" />
+                      <span className="text-xs text-slate-600">{u.name}</span>
                     </label>
                   ))}
                 </div>
@@ -853,7 +901,21 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                         </select>
                       </div>
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs text-slate-500 mr-1.5 shrink-0">이슈 발생 기관</label>
+                      <input value={editIssueDraft.institutionName}
+                        onChange={(e) => setEditIssueDraft((d) => ({ ...d, institutionName: e.target.value }))}
+                        disabled={editIssueDraft.noInstitution} placeholder="기관명을 입력하세요"
+                        className={`${sel} w-40 py-1 disabled:bg-slate-50 disabled:text-slate-400`} />
+                      <label className="flex items-center gap-1.5 cursor-pointer shrink-0">
+                        <input type="checkbox" checked={editIssueDraft.noInstitution}
+                          onChange={(e) => setEditIssueDraft((d) => ({ ...d, noInstitution: e.target.checked, institutionName: e.target.checked ? "" : d.institutionName }))}
+                          className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30" />
+                        <span className="text-xs text-slate-600">선택 필요 없음</span>
+                      </label>
+                    </div>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <span className="text-xs text-slate-500 shrink-0">대상(전체)</span>
                       {([
                         { value: "MANAGER", label: "담당자" },
                         { value: "ACCOUNTANT", label: "회계담당자 전체" },
@@ -866,6 +928,17 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                           <span className="text-xs text-slate-600">{label}</span>
                         </label>
                       ))}
+                    </div>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <span className="text-xs text-slate-500 shrink-0">대상(개인)</span>
+                      {selectableUsers.map((u) => (
+                        <label key={u.id} className="flex items-center gap-1.5 cursor-pointer">
+                          <input type="checkbox" checked={editIssueDraft.recipientUserIds.includes(u.id)}
+                            onChange={() => toggleEditIssueRecipientUser(u.id)}
+                            className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30" />
+                          <span className="text-xs text-slate-600">{u.name}</span>
+                        </label>
+                      ))}
                       <div className="flex gap-2 ml-auto">
                         <button onClick={() => setEditingIssueId(null)}
                           className="px-3 py-1 text-xs text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
@@ -874,6 +947,9 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                             updateProjectIssue(issue.id, {
                               content: editIssueDraft.content.trim(), priority: editIssueDraft.priority, status: editIssueDraft.status,
                               recipientGroups: editIssueDraft.recipientGroups,
+                              recipientUserIds: editIssueDraft.recipientUserIds,
+                              institutionName: editIssueDraft.noInstitution ? undefined : (editIssueDraft.institutionName.trim() || undefined),
+                              noInstitution: editIssueDraft.noInstitution,
                             });
                             setEditingIssueId(null);
                           }}
@@ -894,7 +970,10 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                   </span>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-slate-700 leading-relaxed">{issue.content}</p>
-                    <p className="text-xs text-slate-400 mt-1">{issue.author} · {issue.createdAt}</p>
+                    <p className="text-xs text-slate-400 mt-1">
+                      {issue.author} · {issue.createdAt}
+                      {!issue.noInstitution && issue.institutionName && <> · {issue.institutionName}</>}
+                    </p>
                   </div>
                   {canManageIssues ? (
                     <select
@@ -925,7 +1004,11 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                     ) : (
                       <div className="flex items-center gap-0.5 shrink-0">
                         <button
-                          onClick={() => { setEditingIssueId(issue.id); setEditIssueDraft({ content: issue.content, priority: issue.priority, status: issue.status ?? "OPEN", recipientGroups: issue.recipientGroups ?? [] }); }}
+                          onClick={() => { setEditingIssueId(issue.id); setEditIssueDraft({
+                            content: issue.content, priority: issue.priority, status: issue.status ?? "OPEN",
+                            recipientGroups: issue.recipientGroups ?? [], recipientUserIds: issue.recipientUserIds ?? [],
+                            institutionName: issue.institutionName ?? "", noInstitution: issue.noInstitution ?? false,
+                          }); }}
                           className="p-1.5 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors">
                           <FiEdit2 size={13} />
                         </button>
@@ -1231,8 +1314,9 @@ function AddMemberForm({
 }
 
 // ─── Term section (per-연차 card in Tab 2) ───────────────────
-function TermSection({ group, projectNumber, agencyId, leadInstitutionId, leadInstitutionName, members, isSettlement }: {
+function TermSection({ group, allFees, projectNumber, agencyId, leadInstitutionId, leadInstitutionName, members, isSettlement }: {
   group: TermGroup;
+  allFees: TermFee[];
   projectNumber: string;
   agencyId: string;
   leadInstitutionId: string;
@@ -1250,6 +1334,14 @@ function TermSection({ group, projectNumber, agencyId, leadInstitutionId, leadIn
   const sendToAllInstitutions = fundingAgencies.find((a) => a.id === agencyId)?.noticeRecipientScope === "LEAD_AND_PARTICIPANTS";
 
   const [expanded, setExpanded] = useState(false);
+  const [showFeeDetail, setShowFeeDetail] = useState(false);
+
+  // 이 연차까지(포함) 그 기관 자신의 미청구수수료 누적 — 연차별 세부표의 "미청구수수료 누적" 열에 사용.
+  function getCumulativeUnclaimed(institutionId: string): number {
+    return allFees
+      .filter((af) => af.projectNumber === projectNumber && af.institutionId === institutionId && af.termNumber <= group.termNumber)
+      .reduce((s, af) => s + (af.unclaimedFee ?? 0), 0);
+  }
   const [issuingInvoice, setIssuingInvoice] = useState(false);
   const [invForm, setInvForm] = useState({
     issuedAt: new Date().toISOString().slice(0, 10),
@@ -1313,14 +1405,16 @@ function TermSection({ group, projectNumber, agencyId, leadInstitutionId, leadIn
     const inv = group.invoice;
     if (!inv) return;
     const remaining = Math.max(0, inv.totalAmount - rvForm.paidAmount);
+    // 미입금 상태의 기본값은 "미수"(OVERDUE) — 만기일(청구일+3개월)이 지나기 전까진 isOverdueByRule이
+    // 화면에 "미수"로만 보여주고, 만기일이 지나면 자동으로 "연체"로 승격된다.
     const status: Receivable["status"] = rvForm.paidAmount >= inv.totalAmount
-      ? "PAID" : rvForm.paidAmount > 0 ? "PARTIAL" : "PENDING";
-    const today = new Date().toISOString().slice(0, 10);
+      ? "PAID" : rvForm.paidAmount > 0 ? "PARTIAL" : "OVERDUE";
+    const dueDate = addMonths(inv.issuedAt, 3);
     if (group.receivable) {
       updateReceivable(group.receivable.id, {
         paidAmount: rvForm.paidAmount,
         receivableAmount: remaining,
-        dueDate: group.receivable.dueDate || today,
+        dueDate: group.receivable.dueDate || dueDate,
         status,
       });
     } else {
@@ -1336,7 +1430,7 @@ function TermSection({ group, projectNumber, agencyId, leadInstitutionId, leadIn
         billedAmount: inv.totalAmount,
         paidAmount: rvForm.paidAmount,
         receivableAmount: remaining,
-        dueDate: today,
+        dueDate,
         status,
       });
     }
@@ -1400,17 +1494,26 @@ function TermSection({ group, projectNumber, agencyId, leadInstitutionId, leadIn
         </div>
         <div className="flex items-center gap-6 text-xs text-slate-500 mr-2">
           <span>산정 <strong className="text-slate-700 ml-1">{fmtWonFull(group.totalCalculated)}</strong></span>
-          <span>신청 <strong className="text-slate-700 ml-1">{fmtWonFull(group.totalApplied)}</strong></span>
-          {group.receivable && (
-            <span className={group.receivable.receivableAmount > 0 ? "text-red-600 font-semibold" : "text-green-700"}>
-              미수금 {fmtWonFull(group.receivable.receivableAmount)}
-            </span>
-          )}
+          <span>당해 청구액 <strong className="text-slate-700 ml-1">{fmtWonFull(group.totalApplied)}</strong></span>
+          {/* 연차상시만 해당 — 85% 청구 후 이번 연차에 걷지 않고 남겨두는 15% 몫. 발행 대상은 아니고
+              정산 연차에 함께 걷힐 금액을 미리 확인만 할 수 있게 표시한다. */}
+          {!isSettlement && (() => {
+            const termUnclaimed = group.fees.reduce((s, f) => s + (f.unclaimedFee ?? 0), 0);
+            return termUnclaimed > 0 ? (
+              <span className="text-amber-600 font-semibold">당해 미청구액 <strong className="ml-1">{fmtWonFull(termUnclaimed)}</strong></span>
+            ) : null;
+          })()}
         </div>
       </div>
 
       {expanded && (
         <div className="border-t border-slate-100">
+          <div className="px-4 pt-2.5 flex justify-end">
+            <button onClick={() => setShowFeeDetail((v) => !v)}
+              className="text-[11px] text-slate-500 hover:text-blue-600 transition-colors">
+              {showFeeDetail ? "표준·미청구 숨기기 ▲" : "표준·미청구 수수료 표시 ▼"}
+            </button>
+          </div>
           {/* Institution fee table */}
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
@@ -1420,9 +1523,12 @@ function TermSection({ group, projectNumber, agencyId, leadInstitutionId, leadIn
                   <th className="text-center px-4 py-2.5">구분</th>
                   <th className="text-right px-4 py-2.5">사업비</th>
                   <th className="text-center px-4 py-2.5">요율</th>
+                  {showFeeDetail && <th className="text-right px-4 py-2.5">표준수수료</th>}
                   <th className="text-right px-4 py-2.5">표준액(산정)</th>
                   <th className="text-right px-4 py-2.5">조정액</th>
                   <th className="text-right px-4 py-2.5">수수료(적용)</th>
+                  {showFeeDetail && <th className="text-right px-4 py-2.5">미청구수수료</th>}
+                  {showFeeDetail && <th className="text-right px-4 py-2.5">미청구수수료 누적</th>}
                   <th className="text-center px-4 py-2.5">상태</th>
                 </tr>
               </thead>
@@ -1431,6 +1537,7 @@ function TermSection({ group, projectNumber, agencyId, leadInstitutionId, leadIn
                   const adj = f.appliedFee === 0 ? 0 : f.appliedFee - f.calculatedFee;
                   const rawGrade = members.find((m) => m.institutionId === f.institutionId)?.institutionGrade ?? "일반";
                   const grade = normalizeGrade(rawGrade);
+                  const cumulativeUnclaimed = getCumulativeUnclaimed(f.institutionId);
                   return (
                     <tr key={f.id} className="border-b border-slate-50 hover:bg-slate-50/50">
                       <td className="px-4 py-2.5 font-medium text-slate-800">{f.institutionName}</td>
@@ -1441,6 +1548,9 @@ function TermSection({ group, projectNumber, agencyId, leadInstitutionId, leadIn
                       </td>
                       <td className="px-4 py-2.5 text-right text-slate-600 whitespace-nowrap">{fmtWonFull(f.budget)}</td>
                       <td className="px-4 py-2.5 text-center text-blue-700 font-medium">{f.feeRate}%</td>
+                      {showFeeDetail && (
+                        <td className="px-4 py-2.5 text-right text-slate-500 whitespace-nowrap">{fmtWonFull(f.standardFee ?? f.calculatedFee)}</td>
+                      )}
                       <td className="px-4 py-2.5 text-right text-slate-700 whitespace-nowrap">{fmtWonFull(f.calculatedFee)}</td>
                       <td className="px-4 py-2.5 text-right whitespace-nowrap">
                         {adj === 0
@@ -1454,6 +1564,20 @@ function TermSection({ group, projectNumber, agencyId, leadInstitutionId, leadIn
                           {f.appliedFee === 0 ? "미적용" : fmtWonFull(f.appliedFee)}
                         </span>
                       </td>
+                      {showFeeDetail && (
+                        <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                          {(f.unclaimedFee ?? 0) === 0
+                            ? <span className="text-slate-300">-</span>
+                            : <span className="text-amber-600 font-medium">{fmtWonFull(f.unclaimedFee ?? 0)}</span>}
+                        </td>
+                      )}
+                      {showFeeDetail && (
+                        <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                          {cumulativeUnclaimed === 0
+                            ? <span className="text-slate-300">-</span>
+                            : <span className="text-amber-700 font-medium">{fmtWonFull(cumulativeUnclaimed)}</span>}
+                        </td>
+                      )}
                       <td className="px-4 py-2.5 text-center">
                         <StatusBadge label={FEE_STATUS[f.status].label} color={FEE_STATUS[f.status].color} />
                       </td>
@@ -1464,6 +1588,11 @@ function TermSection({ group, projectNumber, agencyId, leadInstitutionId, leadIn
               <tfoot>
                 <tr className="bg-slate-50 border-t border-slate-100">
                   <td colSpan={4} className="px-4 py-2 text-right text-xs text-slate-400">합계</td>
+                  {showFeeDetail && (
+                    <td className="px-4 py-2 text-right text-xs text-slate-500">
+                      {fmtWonFull(group.fees.reduce((s, f) => s + (f.standardFee ?? f.calculatedFee), 0))}
+                    </td>
+                  )}
                   <td className="px-4 py-2 text-right text-xs font-semibold text-slate-700">{fmtWonFull(group.totalCalculated)}</td>
                   <td className="px-4 py-2 text-right text-xs">
                     {(() => {
@@ -1475,6 +1604,16 @@ function TermSection({ group, projectNumber, agencyId, leadInstitutionId, leadIn
                     })()}
                   </td>
                   <td className="px-4 py-2 text-right text-xs font-bold text-slate-800">{fmtWonFull(group.totalApplied)}</td>
+                  {showFeeDetail && (
+                    <td className="px-4 py-2 text-right text-xs text-amber-600 font-medium">
+                      {fmtWonFull(group.fees.reduce((s, f) => s + (f.unclaimedFee ?? 0), 0))}
+                    </td>
+                  )}
+                  {showFeeDetail && (
+                    <td className="px-4 py-2 text-right text-xs text-amber-700 font-medium">
+                      {fmtWonFull(group.fees.reduce((s, f) => s + getCumulativeUnclaimed(f.institutionId), 0))}
+                    </td>
+                  )}
                   <td />
                 </tr>
               </tfoot>
@@ -1763,6 +1902,7 @@ function FeeManagementTab({ projectId }: { projectId: string }) {
         <TermSection
           key={group.key}
           group={group}
+          allFees={termFees}
           projectNumber={project.projectNumber}
           agencyId={project.agencyId}
           leadInstitutionId={project.leadInstitutionId}

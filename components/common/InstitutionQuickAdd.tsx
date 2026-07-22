@@ -83,10 +83,16 @@ export default function InstitutionQuickAdd({
           {error && <p className="text-[11px] text-red-600">{error}</p>}
           <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="기관명 *" />
           <div className="grid grid-cols-2 gap-2">
-            <input className={inputCls} value={bizNumber} onChange={(e) => setBizNumber(e.target.value)} placeholder="사업자등록번호 * (000-00-00000)" />
-            <select className={selectCls} value={type} onChange={(e) => setType(e.target.value as InstitutionType)}>
-              {INSTITUTION_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
+            <div>
+              <label className="block text-[11px] font-medium text-slate-500 mb-1">사업자등록번호 *</label>
+              <input className={inputCls} value={bizNumber} onChange={(e) => setBizNumber(e.target.value)} placeholder="000-00-00000" />
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-slate-500 mb-1">기관유형</label>
+              <select className={selectCls} value={type} onChange={(e) => setType(e.target.value as InstitutionType)}>
+                {INSTITUTION_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
           </div>
           <input className={inputCls} value={representativeName} onChange={(e) => setRepresentativeName(e.target.value)} placeholder="대표자명" />
           <div className="grid grid-cols-3 gap-2">

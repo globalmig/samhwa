@@ -137,8 +137,9 @@ export default function Header() {
       </div>
 
       <div className="flex items-center gap-3">
-        {/* 알림 — 조회 전용 계정은 알림을 받지 않으므로 아이콘 자체를 표시하지 않음 */}
-        {user?.role !== "VIEWER" && (
+        {/* 알림 — 조회 전용 계정도 담당 과제의 연체 알림은 받을 수 있어 아이콘을 항상 표시한다
+            (이슈/메모 알림은 isIssueVisibleToUser에서 여전히 조회 전용을 제외함) */}
+        {user && (
         <div className="relative">
           <button
             onClick={() => setNotifOpen((v) => !v)}

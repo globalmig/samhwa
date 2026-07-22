@@ -21,8 +21,11 @@ export default function DashboardPage() {
   const { receivables, projectIssues, termFees, taxInvoices, projects, fundingAgencies } = useStore();
 
   // 연도별 대시보드 — 배정일(과제 등록일) 기준. 등록일 미입력 과제는 연도별 집계에서 제외한다.
+  // 올해 연도는 등록된 과제가 아직 없어도 항상 선택지에 포함해 — 해가 바뀔 때마다 자동으로 새 연도가
+  // 드롭다운에 나타나고, 그 해 첫 과제가 등록되기 전에도 미리 선택할 수 있다.
   const availableYears = useMemo(() => {
     const years = new Set<string>();
+    years.add(String(new Date().getFullYear()));
     for (const p of projects) {
       if (p.registeredAt) years.add(p.registeredAt.slice(0, 4));
     }
@@ -102,27 +105,16 @@ export default function DashboardPage() {
           <p className="text-xs text-slate-500">
             {selectedYear === "ALL" ? "전체" : `${selectedYear}년`} 과제 {totalProjects}건 기준
           </p>
-          <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
-            <button
-              onClick={() => setSelectedYear("ALL")}
-              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
-                selectedYear === "ALL" ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700"
-              }`}
-            >
-              누적
-            </button>
+          <select
+            value={selectedYear}
+            onChange={(e) => setSelectedYear(e.target.value)}
+            className="text-xs font-medium text-slate-700 bg-slate-100 border-0 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/30 cursor-pointer"
+          >
+            <option value="ALL">누적</option>
             {availableYears.map((y) => (
-              <button
-                key={y}
-                onClick={() => setSelectedYear(y)}
-                className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
-                  selectedYear === y ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:text-slate-700"
-                }`}
-              >
-                {y}년
-              </button>
+              <option key={y} value={y}>{y}년</option>
             ))}
-          </div>
+          </select>
         </div>
         <div className="flex items-center gap-2 text-xs text-slate-500">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />

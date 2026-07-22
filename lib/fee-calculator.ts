@@ -67,26 +67,35 @@ export function buildPolicyDisplayRules(
 }
 
 // ─── RDA2(농촌진흥청 소속기관 트랙) 자동 판별 ───────────────────
-// 주관기관이 농촌진흥청 본청 또는 아래 5개 소속기관 중 하나면 RDA2(excludeLeadFromCalc) 정책 대상.
-export const RDA2_LEAD_INSTITUTION_NAMES = [
+// 주관기관이 농촌진흥청 본청 또는 소속기관 중 하나면 RDA2(excludeLeadFromCalc) 정책 대상.
+// 실제 목록은 FundingAgency(fa-006).rda2AffiliatedInstitutionNames로 관리한다(수수료 기준 관리 화면에서 편집 가능) —
+// 소속기관 구성이 바뀔 수 있어 코드에 고정하지 않는다. 이 기본값은 그 데이터를 못 불러온 경우의 안전장치일 뿐이다.
+const DEFAULT_RDA2_LEAD_INSTITUTION_NAMES = [
   "농촌진흥청",
   "국립농업과학원",
   "국립식량과학원",
   "농촌인력자원개발센터",
   "국립원예특작과학원",
   "국립축산과학원",
-] as const;
+];
 
-export function isRda2LeadInstitution(leadInstitutionName: string): boolean {
-  return (RDA2_LEAD_INSTITUTION_NAMES as readonly string[]).includes(leadInstitutionName);
+export function isRda2LeadInstitution(
+  leadInstitutionName: string,
+  affiliatedNames: readonly string[] = DEFAULT_RDA2_LEAD_INSTITUTION_NAMES,
+): boolean {
+  return affiliatedNames.includes(leadInstitutionName);
 }
 
 // 전담기관이 농촌진흥청 계열(RDA1="fa-005"/RDA2="fa-006")로 선택된 경우, 실제 적용할 트랙을
 // 주관기관명으로 자동 교정한다. 두 레코드 모두 표시 이름이 "농촌진흥청"이라 사람이 직접 고르면
 // 실수하기 쉬워서, 담당자가 뭘 고르든 주관기관명 기준으로 항상 올바른 쪽으로 맞춘다.
-export function resolveRdaAgencyId(selectedAgencyId: string, leadInstitutionName: string): string {
+export function resolveRdaAgencyId(
+  selectedAgencyId: string,
+  leadInstitutionName: string,
+  affiliatedNames?: readonly string[],
+): string {
   if (selectedAgencyId !== "fa-005" && selectedAgencyId !== "fa-006") return selectedAgencyId;
-  return isRda2LeadInstitution(leadInstitutionName) ? "fa-006" : "fa-005";
+  return isRda2LeadInstitution(leadInstitutionName, affiliatedNames) ? "fa-006" : "fa-005";
 }
 
 // ─── 완전 제외 대상 판정 (EXCLUDE 모드 정책의 면제등급) ──────────
@@ -331,9 +340,7 @@ export function calcTermFee(input: CalcInput): CalcResult {
     const stdFee = totalExemptCash > 0
       ? Math.round(exemptFeeTotal * (amountOf(m) / totalExemptCash))
       : 0;
-    // KETEP처럼 면제 산정 단계 자체에 청구비율을 미리 반영하는 정책은, 표준액을 한 번 줄인 값을
-    // "산정수수료"로 삼는다 (KEIT는 반영하지 않아 표준액 그대로가 산정수수료가 된다).
-    const calcFee = policy.exemptCalcAppliesBillingRatio ? Math.round(stdFee * billingRatio) : stdFee;
+    const calcFee = stdFee;
 
     // 정산 연차 요율 분기
     // - 자체정산: 정산 연차에도 85% (면제 유지, 기관이 자체 정산)
@@ -342,7 +349,9 @@ export function calcTermFee(input: CalcInput): CalcResult {
     const effectiveBillingRatio =
       isSettlement && m.settlementType === "위탁정산" ? 1.0 : billingRatio;
 
-    const billFee = Math.round(calcFee * effectiveBillingRatio);
+    // 산정액(calcFee)에서 청구비율만큼 청구액을 뗄 때는 반올림 없이 절사한다 — 미청구분은
+    // 그 나머지(calcFee - billFee)로 구해야 절사로 남는 1원 오차가 미청구액 쪽에 정확히 흡수된다.
+    const billFee = Math.floor(calcFee * effectiveBillingRatio);
     return {
       institutionId: m.institutionId,
       institutionName: m.institutionName,
@@ -351,7 +360,7 @@ export function calcTermFee(input: CalcInput): CalcResult {
       standardFee: stdFee,
       calculatedFee: calcFee,
       billingFee: billFee,
-      unclaimedFee: Math.round(calcFee * (1 - effectiveBillingRatio)),
+      unclaimedFee: calcFee - billFee,
     };
   });
 
@@ -364,7 +373,8 @@ export function calcTermFee(input: CalcInput): CalcResult {
   let generalUnclaimedFee: number;
 
   if (workType === "ANNUAL") {
-    generalBillingFee = Math.round(generalCalcFee * billingRatio);
+    // 산정액(generalCalcFee)에서 청구비율(85%)만큼 당해 청구액을 뗄 때는 반올림 없이 절사한다.
+    generalBillingFee = Math.floor(generalCalcFee * billingRatio);
     generalUnclaimedFee = generalCalcFee - generalBillingFee;
   } else {
     // 정산: 일반 100% + 과거 미청구 일반분 합산

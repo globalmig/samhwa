@@ -4,7 +4,7 @@ import { useState, useMemo } from "react";
 import { FiEdit2 } from "react-icons/fi";
 import { useStore, addReceivable, updateReceivable } from "@/lib/store";
 import { type Receivable } from "@/lib/mock";
-import { fmtWon, fmtDate } from "@/lib/utils";
+import { fmtWon, fmtDate, addMonths } from "@/lib/utils";
 import Link from "next/link";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
@@ -12,15 +12,6 @@ import DateInput from "@/components/common/DateInput";
 import MoneyInput from "@/components/common/MoneyInput";
 import { useCanWrite } from "@/lib/permissions";
 import { isOverdueByRule } from "@/lib/notifications";
-
-// 청구일로부터 n개월 뒤 날짜(yyyy-mm-dd). 잘못된 날짜면 빈 문자열.
-function addMonths(dateStr: string, months: number): string {
-  if (!dateStr) return "";
-  const d = new Date(`${dateStr}T00:00:00`);
-  if (isNaN(d.getTime())) return "";
-  d.setMonth(d.getMonth() + months);
-  return d.toISOString().slice(0, 10);
-}
 
 const STATUS_MAP: Record<Receivable["status"], { label: string; color: "red" | "amber" | "green" | "blue" }> = {
   OVERDUE: { label: "미수", color: "red" },

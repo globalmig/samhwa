@@ -2,10 +2,12 @@
 
 import { Fragment, useState } from "react";
 import Link from "next/link";
-import { FiPlus, FiX, FiCheck, FiEdit2, FiTrash2 } from "react-icons/fi";
+import * as XLSX from "xlsx";
+import { FiPlus, FiX, FiCheck, FiEdit2, FiTrash2, FiDownload } from "react-icons/fi";
 import { useStore, addProjectIssue, updateProjectIssue, deleteProjectIssue } from "@/lib/store";
 import { useCanWrite } from "@/lib/permissions";
 import type { ProjectIssue, IssueRecipientGroup } from "@/lib/mock";
+import UserMultiSelect from "@/components/common/UserMultiSelect";
 
 const PRIORITY_STYLE: Record<string, string> = {
   HIGH:   "bg-red-100 text-red-700",
@@ -39,12 +41,16 @@ type EditDraft = {
   priority: "HIGH" | "MEDIUM" | "LOW";
   status: "OPEN" | "IN_PROGRESS" | "RESOLVED";
   recipientGroups: IssueRecipientGroup[];
+  recipientUserIds: string[];
+  institutionName: string;
+  noInstitution: boolean;
 };
 
 export default function IssuesPage() {
   const canCreate = useCanWrite('issues');
   const canManage = useCanWrite('issues-manage');
-  const { projectIssues, projects, fundingAgencies } = useStore();
+  const { projectIssues, projects, fundingAgencies, users } = useStore();
+  const selectableUsers = users.filter((u) => u.status === "ACTIVE");
 
   const [priorityFilter, setPriorityFilter] = useState<"ALL" | "HIGH" | "MEDIUM" | "LOW">("ALL");
   const [statusFilter, setStatusFilter] = useState<"ALL" | "OPEN" | "IN_PROGRESS" | "RESOLVED">("ALL");
@@ -60,10 +66,16 @@ export default function IssuesPage() {
   const [formPriority, setFormPriority] = useState<"HIGH" | "MEDIUM" | "LOW">("MEDIUM");
   const [formStatus, setFormStatus] = useState<"OPEN" | "IN_PROGRESS" | "RESOLVED">("OPEN");
   const [formRecipients, setFormRecipients] = useState<IssueRecipientGroup[]>([]);
+  const [formRecipientUserIds, setFormRecipientUserIds] = useState<string[]>([]);
+  const [formInstitutionName, setFormInstitutionName] = useState("");
+  const [formNoInstitution, setFormNoInstitution] = useState(false);
 
   // Edit state
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState<EditDraft>({ content: "", priority: "MEDIUM", status: "OPEN", recipientGroups: [] });
+  const [editDraft, setEditDraft] = useState<EditDraft>({
+    content: "", priority: "MEDIUM", status: "OPEN", recipientGroups: [],
+    recipientUserIds: [], institutionName: "", noInstitution: false,
+  });
 
   // Delete confirm
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -104,18 +116,28 @@ export default function IssuesPage() {
       priority: formPriority,
       status: formStatus,
       recipientGroups: formRecipients,
+      recipientUserIds: formRecipientUserIds,
+      institutionName: formNoInstitution ? undefined : (formInstitutionName.trim() || undefined),
+      noInstitution: formNoInstitution,
     });
     setFormContent("");
     setFormPriority("MEDIUM");
     setFormStatus("OPEN");
     setFormProjectId("");
     setFormRecipients([]);
+    setFormRecipientUserIds([]);
+    setFormInstitutionName("");
+    setFormNoInstitution(false);
     setShowForm(false);
   }
 
   function startEdit(issue: ProjectIssue) {
     setEditingId(issue.id);
-    setEditDraft({ content: issue.content, priority: issue.priority, status: issue.status ?? "OPEN", recipientGroups: issue.recipientGroups ?? [] });
+    setEditDraft({
+      content: issue.content, priority: issue.priority, status: issue.status ?? "OPEN",
+      recipientGroups: issue.recipientGroups ?? [], recipientUserIds: issue.recipientUserIds ?? [],
+      institutionName: issue.institutionName ?? "", noInstitution: issue.noInstitution ?? false,
+    });
   }
 
   function saveEdit() {
@@ -125,8 +147,34 @@ export default function IssuesPage() {
       priority: editDraft.priority,
       status: editDraft.status,
       recipientGroups: editDraft.recipientGroups,
+      recipientUserIds: editDraft.recipientUserIds,
+      institutionName: editDraft.noInstitution ? undefined : (editDraft.institutionName.trim() || undefined),
+      noInstitution: editDraft.noInstitution,
     });
     setEditingId(null);
+  }
+
+  function exportToExcel() {
+    const data = filtered.map((issue) => {
+      const project = projects.find((p) => p.id === issue.projectId);
+      const agency = fundingAgencies.find((a) => a.id === project?.agencyId);
+      return {
+        "우선순위": PRIORITY_LABEL[issue.priority],
+        "진행여부": STATUS_LABEL[issue.status ?? "OPEN"],
+        "내용": issue.content,
+        "과제": project?.projectName ?? issue.projectNumber,
+        "과제번호": issue.projectNumber,
+        "전담기관": agency ? `${agency.shortName} · ${agency.name}` : "",
+        "기관명": issue.noInstitution ? "해당없음" : (issue.institutionName ?? ""),
+        "작성자": issue.author,
+        "작성일시": issue.createdAt,
+      };
+    });
+    const ws = XLSX.utils.json_to_sheet(data);
+    ws["!cols"] = Object.keys(data[0] ?? {}).map(() => ({ wch: 18 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "이슈현황");
+    XLSX.writeFile(wb, `이슈현황_${new Date().toISOString().slice(0, 10)}.xlsx`);
   }
 
   function confirmDelete(id: string) {
@@ -153,12 +201,18 @@ export default function IssuesPage() {
             완료 <span className="text-green-600 font-medium">{projectIssues.filter((i) => i.status === "RESOLVED").length}건</span>
           </p>
         </div>
-        {canCreate && (
-          <button onClick={() => setShowForm((v) => !v)}
-            className="flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
-            {showForm ? <><FiX size={12} /> 닫기</> : <><FiPlus size={12} /> 이슈 등록</>}
+        <div className="flex items-center gap-2">
+          <button onClick={exportToExcel}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+            <FiDownload size={12} /> 엑셀 다운로드
           </button>
-        )}
+          {canCreate && (
+            <button onClick={() => setShowForm((v) => !v)}
+              className="flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
+              {showForm ? <><FiX size={12} /> 닫기</> : <><FiPlus size={12} /> 이슈 등록</>}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* New issue form */}
@@ -174,6 +228,20 @@ export default function IssuesPage() {
                 <option key={p.id} value={p.id}>{p.projectName}</option>
               ))}
             </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">이슈 발생 기관명</label>
+            <div className="flex items-center gap-2">
+              <input value={formInstitutionName} onChange={(e) => setFormInstitutionName(e.target.value)}
+                disabled={formNoInstitution} placeholder="기관명을 입력하세요"
+                className={`${inp} flex-1 disabled:bg-slate-50 disabled:text-slate-400`} />
+              <label className="flex items-center gap-1.5 cursor-pointer shrink-0 whitespace-nowrap">
+                <input type="checkbox" checked={formNoInstitution}
+                  onChange={(e) => { setFormNoInstitution(e.target.checked); if (e.target.checked) setFormInstitutionName(""); }}
+                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30" />
+                <span className="text-xs text-slate-600">선택 필요 없음</span>
+              </label>
+            </div>
           </div>
           <textarea value={formContent} onChange={(e) => setFormContent(e.target.value)}
             placeholder="이슈 또는 메모 내용을 입력하세요"
@@ -200,7 +268,7 @@ export default function IssuesPage() {
             </div>
           </div>
           <div>
-            <p className="text-xs text-slate-500 mb-1.5">알림 받을 대상 <span className="text-slate-400 font-normal">· 선택 안 하면 과제 담당자에게만 전달</span></p>
+            <p className="text-xs text-slate-500 mb-1.5">알림 받을 대상(전체) <span className="text-slate-400 font-normal">· 선택 안 하면 과제 담당자에게만 전달</span></p>
             <div className="flex items-center gap-3">
               {RECIPIENT_OPTIONS.map(({ value, label }) => (
                 <label key={value} className="flex items-center gap-1.5 cursor-pointer">
@@ -211,6 +279,15 @@ export default function IssuesPage() {
                 </label>
               ))}
             </div>
+          </div>
+          <div>
+            <p className="text-xs text-slate-500 mb-1.5">알림 받을 대상(개인) <span className="text-slate-400 font-normal">· 위 전체 선택과 별개로 특정 인원을 추가 지정</span></p>
+            <UserMultiSelect
+              users={selectableUsers}
+              selectedIds={formRecipientUserIds}
+              onChange={setFormRecipientUserIds}
+              placeholder="이름으로 검색..."
+            />
           </div>
           <div className="flex justify-end gap-2">
             <button onClick={() => setShowForm(false)}
@@ -376,9 +453,26 @@ export default function IssuesPage() {
                         </td>
                       </tr>
                       <tr className="border-b border-blue-100 bg-blue-50/30">
-                        <td className="px-4 pb-3" colSpan={8}>
+                        <td className="px-4 pt-1 pb-2" colSpan={8}>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-slate-500 w-20 shrink-0">이슈 발생 기관</span>
+                            <input value={editDraft.institutionName}
+                              onChange={(e) => setEditDraft((d) => ({ ...d, institutionName: e.target.value }))}
+                              disabled={editDraft.noInstitution} placeholder="기관명을 입력하세요"
+                              className="text-xs border border-slate-200 rounded-lg px-2 py-1 bg-white disabled:bg-slate-50 disabled:text-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-400 w-48" />
+                            <label className="flex items-center gap-1.5 cursor-pointer shrink-0">
+                              <input type="checkbox" checked={editDraft.noInstitution}
+                                onChange={(e) => setEditDraft((d) => ({ ...d, noInstitution: e.target.checked, institutionName: e.target.checked ? "" : d.institutionName }))}
+                                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30" />
+                              <span className="text-xs text-slate-600">선택 필요 없음</span>
+                            </label>
+                          </div>
+                        </td>
+                      </tr>
+                      <tr className="border-b border-blue-100 bg-blue-50/30">
+                        <td className="px-4 pb-1" colSpan={8}>
                           <div className="flex items-center gap-3">
-                            <span className="text-xs text-slate-500">알림 받을 대상</span>
+                            <span className="text-xs text-slate-500 w-20 shrink-0">대상(전체)</span>
                             {RECIPIENT_OPTIONS.map(({ value, label }) => (
                               <label key={value} className="flex items-center gap-1.5 cursor-pointer">
                                 <input type="checkbox" checked={editDraft.recipientGroups.includes(value)}
@@ -387,6 +481,21 @@ export default function IssuesPage() {
                                 <span className="text-xs text-slate-600">{label}</span>
                               </label>
                             ))}
+                          </div>
+                        </td>
+                      </tr>
+                      <tr className="border-b border-blue-100 bg-blue-50/30">
+                        <td className="px-4 pb-3" colSpan={8}>
+                          <div className="flex items-start gap-3">
+                            <span className="text-xs text-slate-500 w-20 shrink-0 pt-1.5">대상(개인)</span>
+                            <div className="flex-1 max-w-sm">
+                              <UserMultiSelect
+                                users={selectableUsers}
+                                selectedIds={editDraft.recipientUserIds}
+                                onChange={(ids) => setEditDraft((d) => ({ ...d, recipientUserIds: ids }))}
+                                placeholder="이름으로 검색..."
+                              />
+                            </div>
                           </div>
                         </td>
                       </tr>
@@ -408,6 +517,9 @@ export default function IssuesPage() {
                     </td>
                     <td className="px-4 py-3 max-w-md">
                       <p className="text-sm text-slate-700 leading-relaxed line-clamp-2">{issue.content}</p>
+                      {!issue.noInstitution && issue.institutionName && (
+                        <p className="text-[11px] text-slate-400 mt-0.5">기관: {issue.institutionName}</p>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <p className="text-sm font-medium text-slate-700 line-clamp-1">

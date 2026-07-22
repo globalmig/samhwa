@@ -117,7 +117,6 @@ function makePolicyEmpty(agencyId: string | null, templatePolicy: FeePolicy | nu
     exemptGrades: templatePolicy?.exemptGrades ?? ["S", "A~C"],
     exemptionMode: templatePolicy?.exemptionMode ?? "DISCOUNT",
     defaultSettlementType: templatePolicy?.defaultSettlementType ?? "자체정산",
-    exemptCalcAppliesBillingRatio: templatePolicy?.exemptCalcAppliesBillingRatio ?? false,
     feeBasis: templatePolicy?.feeBasis ?? "CASH",
     hasAutonomyTrack: templatePolicy?.hasAutonomyTrack ?? true,
     annualBillingRate: templatePolicy?.annualBillingRate ?? 0.85,
@@ -257,10 +256,6 @@ function AgencyFeeModelSummary({ agency, policy }: { agency: { shortName: string
     ? "자체정산 — 정산 연차에도 85% 유지"
     : "위탁정산 — 정산 연차엔 100%";
 
-  const exemptCalcLabel = policy.exemptCalcAppliesBillingRatio
-    ? "산정 단계에 선반영 — 청구비율이 두 번 곱해짐"
-    : "산정 단계엔 미반영 — 청구 단계에서 한 번만 곱해짐";
-
   const feeBasisLabel = policy.feeBasis === "CASH_PLUS_INKIND" ? "현금 + 현물 합산" : "현금사업비만";
 
   const billingLabel = policy.annualBillingRate >= 1
@@ -302,14 +297,6 @@ function AgencyFeeModelSummary({ agency, policy }: { agency: { shortName: string
               <span className="shrink-0 w-24 text-slate-400 font-medium">정산구분 기본값</span>
               <span className={(policy.defaultSettlementType ?? "자체정산") === "자체정산" ? "text-emerald-700 font-medium" : "text-amber-700 font-medium"}>
                 {defaultSettlementLabel}
-              </span>
-            </div>
-          )}
-          {policy.exemptGrades.length > 0 && policy.exemptionMode === "DISCOUNT" && (
-            <div className="flex items-start gap-2">
-              <span className="shrink-0 w-24 text-slate-400 font-medium">면제 산정 방식</span>
-              <span className={policy.exemptCalcAppliesBillingRatio ? "text-fuchsia-700 font-medium" : "text-slate-700"}>
-                {exemptCalcLabel}
               </span>
             </div>
           )}
@@ -526,22 +513,6 @@ function PolicyForm({ initial, onSubmit, onClose }: { initial: PolicyFormData; o
                 }`}>위탁정산 (정산연차 100%)</button>
             </div>
           </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-2">면제기관 산정수수료에 청구비율 선반영</label>
-            <div className="flex items-center gap-3 pt-1">
-              {([false, true] as const).map((v) => (
-                <label key={String(v)} className="flex items-center gap-1.5 cursor-pointer">
-                  <input type="radio" name="exemptCalcAppliesBillingRatio" checked={(form.exemptCalcAppliesBillingRatio ?? false) === v}
-                    onChange={() => sf("exemptCalcAppliesBillingRatio", v)}
-                    className="text-blue-600 focus:ring-blue-500" />
-                  <span className="text-xs text-slate-700">{v ? "반영함 (KETEP — 비율 두 번 적용)" : "반영 안 함 (KEIT — 비율 한 번만 적용)"}</span>
-                </label>
-              ))}
-            </div>
-            <p className="text-[10px] text-slate-400 mt-1">
-              반영하면 면제기관 산정수수료 = 표준액 × 청구비율로 먼저 줄인 뒤, 청구 단계에서 같은 비율을 한 번 더 적용합니다.
-            </p>
-          </div>
         </div>
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">
@@ -620,6 +591,43 @@ function PolicyForm({ initial, onSubmit, onClose }: { initial: PolicyFormData; o
   );
 }
 
+// ─── RDA2 소속기관 자동판별 목록 편집기 ──────────────────────────
+// 주관기관명이 이 목록에 있으면 새 과제 등록/수정 시 RDA1 대신 RDA2 정책이 자동 적용된다(resolveRdaAgencyId).
+function RdaAffiliatedNamesEditor({ names, onChange }: { names: string[]; onChange: (names: string[]) => void }) {
+  function add() { onChange([...names, ""]); }
+  function remove(i: number) { onChange(names.filter((_, idx) => idx !== i)); }
+  function set(i: number, v: string) { onChange(names.map((n, idx) => (idx === i ? v : n))); }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <label className="block text-xs font-medium text-slate-600">
+          RDA2 소속기관 자동판별 목록
+          <span className="ml-1 text-slate-400 font-normal">· 주관기관명이 여기 있으면 RDA2로 자동 지정됨</span>
+        </label>
+        <button type="button" onClick={add} className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors">
+          <FiPlus size={11} />기관 추가
+        </button>
+      </div>
+      <div className="border border-slate-200 rounded-lg overflow-hidden">
+        {names.length === 0 ? (
+          <p className="px-3 py-3 text-xs text-slate-400">등록된 기관명이 없습니다. "기관 추가"로 등록하세요.</p>
+        ) : (
+          names.map((name, i) => (
+            <div key={i} className="flex items-center gap-2 px-3 py-1.5 border-b border-slate-100 last:border-0">
+              <input value={name} onChange={(e) => set(i, e.target.value)} placeholder="예: 국립농업과학원"
+                className="flex-1 text-xs border border-slate-200 rounded px-2 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+              <button type="button" onClick={() => remove(i)} className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors">
+                <FiTrash2 size={12} />
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── 전담기관 폼 ────────────────────────────────────────────────
 const EMPTY_AGENCY: Omit<FundingAgency, "id"> = {
   name: "", shortName: "", code: "", contactName: "", contactEmail: "",
@@ -685,6 +693,12 @@ function AgencyForm({ initial, onSubmit, onClose }: { initial: Omit<FundingAgenc
           <option value="LEAD_AND_PARTICIPANTS">주관+참여기관 모두</option>
         </select>
       </div>
+      {form.shortName === "RDA2" && (
+        <RdaAffiliatedNamesEditor
+          names={form.rda2AffiliatedInstitutionNames ?? []}
+          onChange={(names) => s("rda2AffiliatedInstitutionNames", names)}
+        />
+      )}
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
         <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
         <button onClick={() => onSubmit(form)} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">저장</button>

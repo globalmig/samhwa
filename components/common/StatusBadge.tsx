@@ -1,4 +1,4 @@
-type BadgeColor = "green" | "red" | "amber" | "blue" | "slate" | "purple" | "indigo";
+type BadgeColor = "green" | "red" | "amber" | "blue" | "slate" | "purple" | "indigo" | "teal";
 
 interface Props {
   label: string;
@@ -13,6 +13,7 @@ const colorMap: Record<BadgeColor, string> = {
   slate: "bg-slate-100 text-slate-600",
   purple: "bg-purple-50 text-purple-700",
   indigo: "bg-indigo-50 text-indigo-700",
+  teal: "bg-teal-50 text-teal-700",
 };
 
 export default function StatusBadge({ label, color }: Props) {

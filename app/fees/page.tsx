@@ -27,7 +27,7 @@ import {
   type ProjectIssue,
   COMPANY_INFO,
 } from "@/lib/mock";
-import { fmtWon, fmtDate, splitVatInclusive } from "@/lib/utils";
+import { fmtWon, fmtDate, splitVatInclusive, addMonths } from "@/lib/utils";
 import Modal from "@/components/common/Modal";
 import DateInput from "@/components/common/DateInput";
 import InstitutionQuickAdd from "@/components/common/InstitutionQuickAdd";
@@ -267,10 +267,9 @@ function SalesIssueModal({ target, onClose }: { target: SalesTarget; onClose: ()
         billedAt:         issuedAt,
         billedAmount:     totalAmount,
         receivableAmount: Math.max(0, totalAmount - target.paidAmount),
+        dueDate:          addMonths(issuedAt, 3),
       });
     } else {
-      const due = new Date(`${issuedAt}T00:00:00`);
-      due.setMonth(due.getMonth() + 3);
       addReceivable({
         invoiceNumber,
         projectNumber:       target.projectNumber,
@@ -283,8 +282,10 @@ function SalesIssueModal({ target, onClose }: { target: SalesTarget; onClose: ()
         billedAmount:        totalAmount,
         paidAmount:          0,
         receivableAmount:    totalAmount,
-        dueDate:             due.toISOString().slice(0, 10),
-        status:              "PENDING",
+        dueDate:             addMonths(issuedAt, 3),
+        // 발행 직후 미입금 상태의 기본값은 "미수"(OVERDUE) — 만기일이 지나기 전까진 isOverdueByRule이
+        // "연체"로 승격시키지 않으므로 화면엔 미수로만 표시되고, 만기일이 지나면 자동으로 연체가 된다.
+        status:              "OVERDUE",
       });
     }
 
@@ -1250,7 +1251,8 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
     const lead = institutions.find((i) => i.id === form.leadInstitutionId);
     // 전담기관이 농촌진흥청 계열(RDA1/RDA2)이면 주관기관명으로 실제 트랙을 자동 교정한다 —
     // 두 레코드 모두 표시 이름이 "농촌진흥청"이라 사람이 직접 고르면 실수하기 쉽다.
-    const resolvedAgencyId = resolveRdaAgencyId(form.agencyId, lead?.name ?? "");
+    const rda2AffiliatedNames = fundingAgencies.find((a) => a.id === "fa-006")?.rda2AffiliatedInstitutionNames;
+    const resolvedAgencyId = resolveRdaAgencyId(form.agencyId, lead?.name ?? "", rda2AffiliatedNames);
     const agency = fundingAgencies.find((a) => a.id === resolvedAgencyId);
     const created = addProject({
       projectNumber: form.projectNumber.trim(),
