@@ -1340,9 +1340,9 @@ export const termFees: TermFee[] = [
   { id: "tf-p011-y3-b", projectNumber: "RS-2024-00237560", projectName: "고효율 수소연료전지 스택 소재 개발", termYear: 2026, termNumber: 3, institutionId: "inst-009", institutionName: "(주)미래반도체", institutionType: "중소기업", budget: 150_000_000, feeRate: 3.5, calculatedFee: 395_280, appliedFee: 500_022, standardFee: 395_280, unclaimedFee: 0, status: "DRAFT" },
 
   // p-003 1연차 2022 — 주관: 나노소재기술 (IITP · 주관기관만 발송)
-  { id: "tf-031", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2022, termNumber: 1, institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", budget: 600_000_000, feeRate: 3.0, calculatedFee: 1_060_875, appliedFee: 901_744, status: "BILLED" },
-  { id: "tf-032", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2022, termNumber: 1, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 400_000_000, feeRate: 3.0, calculatedFee: 707_250, appliedFee: 601_163, status: "CONFIRMED" },
-  { id: "tf-033", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2022, termNumber: 1, institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", budget: 200_000_000, feeRate: 3.0, calculatedFee: 353_625, appliedFee: 300_581, status: "CONFIRMED" },
+  { id: "tf-031", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2022, termNumber: 1, institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", budget: 600_000_000, feeRate: 3.0, calculatedFee: 1_060_875, appliedFee: 901_743, standardFee: 1_060_875, unclaimedFee: 159_132, status: "BILLED" },
+  { id: "tf-032", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2022, termNumber: 1, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 400_000_000, feeRate: 3.0, calculatedFee: 707_250, appliedFee: 601_162, standardFee: 707_250, unclaimedFee: 106_088, status: "CONFIRMED" },
+  { id: "tf-033", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2022, termNumber: 1, institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", budget: 200_000_000, feeRate: 3.0, calculatedFee: 353_625, appliedFee: 300_581, standardFee: 353_625, unclaimedFee: 53_044, status: "CONFIRMED" },
 
   // p-004 2연차 — 주관: 연세대학교 (KOFPI · 주관기관만 발송)
   { id: "tf-013", projectNumber: "RS-2023-00187652", projectName: "바이오 플라스틱 생분해성 소재 개발", termYear: 2024, termNumber: 2, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 1_500_000_000, feeRate: 2.5, calculatedFee: 1_391_129, appliedFee: 1_391_129, status: "BILLED" },
@@ -1352,15 +1352,16 @@ export const termFees: TermFee[] = [
   { id: "tf-017", projectNumber: "RS-2023-00187652", projectName: "바이오 플라스틱 생분해성 소재 개발", termYear: 2024, termNumber: 2, institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", budget: 100_000_000, feeRate: 2.5, calculatedFee: 92_742, appliedFee: 92_742, status: "CONFIRMED" },
 
   // p-007 3연차 — 주관: (주)한국항공우주 (RDA1 · 주관+참여기관 모두 발송 → 전원 청구완료)
-  { id: "tf-022", projectNumber: "RS-2023-00176431", projectName: "도심항공모빌리티(UAM) 경량화 구조재 개발", termYear: 2024, termNumber: 3, institutionId: "inst-006", institutionName: "(주)한국항공우주", institutionType: "중견기업", budget: 1_200_000_000, feeRate: 2.5, calculatedFee: 30_000_000, appliedFee: 30_000_000, status: "BILLED" },
-  { id: "tf-023", projectNumber: "RS-2023-00176431", projectName: "도심항공모빌리티(UAM) 경량화 구조재 개발", termYear: 2024, termNumber: 3, institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", budget: 1_200_000_000, feeRate: 3.0, calculatedFee: 36_000_000, appliedFee: 36_000_000, status: "BILLED" },
-  { id: "tf-024", projectNumber: "RS-2023-00176431", projectName: "도심항공모빌리티(UAM) 경량화 구조재 개발", termYear: 2024, termNumber: 3, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 1_500_000_000, feeRate: 2.0, calculatedFee: 30_000_000, appliedFee: 30_000_000, status: "BILLED" },
-  { id: "tf-025", projectNumber: "RS-2023-00176431", projectName: "도심항공모빌리티(UAM) 경량화 구조재 개발", termYear: 2024, termNumber: 3, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 1_000_000_000, feeRate: 2.0, calculatedFee: 20_000_000, appliedFee: 20_000_000, status: "BILLED" },
+  // p-007(RDA1) 3연차 수수료는 예전 방식(사업비×요율%) 손입력 더미였고 4개 기관만 있어 실제
+  // 7개 참여기관과도 안 맞았음 — 정산연차라 1·2연차 이월액에도 의존하므로, 잠금을 풀고
+  // autoGenerateTermFees가 현재 RDA1 규칙(현금+현물, 최우수(S) 완전제외)대로 전 연차를 새로 계산하게 둔다.
 
   // p-008 1연차 2023 — 주관: 그린바이오텍 (RDA2 · 주관+참여기관 모두 발송 → 전원 청구완료)
-  { id: "tf-037", projectNumber: "RS-2024-00219874", projectName: "의료용 생체흡수성 임플란트 소재 개발", termYear: 2023, termNumber: 1, institutionId: "inst-008", institutionName: "그린바이오텍(주)", institutionType: "중소기업", budget: 1_100_000_000, feeRate: 3.0, calculatedFee: 33_000_000, appliedFee: 33_000_000, status: "BILLED" },
-  { id: "tf-038", projectNumber: "RS-2024-00219874", projectName: "의료용 생체흡수성 임플란트 소재 개발", termYear: 2023, termNumber: 1, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 350_000_000, feeRate: 2.0, calculatedFee: 7_000_000, appliedFee: 7_000_000, status: "BILLED" },
-  { id: "tf-039", projectNumber: "RS-2024-00219874", projectName: "의료용 생체흡수성 임플란트 소재 개발", termYear: 2023, termNumber: 1, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 200_000_000, feeRate: 2.0, calculatedFee: 4_000_000, appliedFee: 4_000_000, status: "BILLED" },
+  // RDA2 규칙(현금+현물, 최우수(S) 완전제외, excludeLeadFromCalc로 주관기관도 완전제외) 재계산 —
+  // 그린바이오텍(주관)·연세대(최우수S)는 산정기준액에서 완전 제외되어 수수료 0원, KIST만 산정 대상.
+  { id: "tf-037", projectNumber: "RS-2024-00219874", projectName: "의료용 생체흡수성 임플란트 소재 개발", termYear: 2023, termNumber: 1, institutionId: "inst-008", institutionName: "그린바이오텍(주)", institutionType: "중소기업", budget: 1_100_000_000, feeRate: 3.0, calculatedFee: 0, appliedFee: 0, standardFee: 0, unclaimedFee: 0, status: "BILLED" },
+  { id: "tf-038", projectNumber: "RS-2024-00219874", projectName: "의료용 생체흡수성 임플란트 소재 개발", termYear: 2023, termNumber: 1, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 350_000_000, feeRate: 2.0, calculatedFee: 0, appliedFee: 0, standardFee: 0, unclaimedFee: 0, status: "BILLED" },
+  { id: "tf-039", projectNumber: "RS-2024-00219874", projectName: "의료용 생체흡수성 임플란트 소재 개발", termYear: 2023, termNumber: 1, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 200_000_000, feeRate: 2.0, calculatedFee: 1_080_000, appliedFee: 918_000, standardFee: 1_080_000, unclaimedFee: 162_000, status: "BILLED" },
 ];
 
 // ============================================================
@@ -1531,8 +1532,8 @@ export const receivables: Receivable[] = [
     leadInstitutionId: "inst-006",
     leadInstitutionName: "(주)한국항공우주",
     billedAt: "2024-09-20",
-    billedAmount: 145_000_000,
-    paidAmount: 145_000_000,
+    billedAmount: 3_346_200,
+    paidAmount: 3_346_200,
     receivableAmount: 0,
     dueDate: "2024-12-19",
     status: "PAID",
@@ -1700,8 +1701,8 @@ export const receivables: Receivable[] = [
     leadInstitutionId: "inst-006",
     leadInstitutionName: "(주)한국항공우주",
     billedAt: "2022-09-30",
-    billedAmount: 136_000_000,
-    paidAmount: 136_000_000,
+    billedAmount: 2_187_900,
+    paidAmount: 2_187_900,
     receivableAmount: 0,
     dueDate: "2022-12-29",
     status: "PAID",
@@ -1717,8 +1718,8 @@ export const receivables: Receivable[] = [
     leadInstitutionId: "inst-006",
     leadInstitutionName: "(주)한국항공우주",
     billedAt: "2023-09-25",
-    billedAmount: 140_000_000,
-    paidAmount: 140_000_000,
+    billedAmount: 2_187_900,
+    paidAmount: 2_187_900,
     receivableAmount: 0,
     dueDate: "2023-12-24",
     status: "PAID",
@@ -2067,9 +2068,9 @@ export const taxInvoices: TaxInvoice[] = [
     leadInstitutionId: "inst-006",
     leadInstitutionName: "(주)한국항공우주",
     issuedAt: "2024-09-20",
-    supplyAmount: 145_000_000,
-    taxAmount: 14_500_000,
-    totalAmount: 159_500_000,
+    supplyAmount: 3_042_000,
+    taxAmount: 304_200,
+    totalAmount: 3_346_200,
     status: "ISSUED",
   },
   {
@@ -2233,9 +2234,9 @@ export const taxInvoices: TaxInvoice[] = [
     leadInstitutionId: "inst-006",
     leadInstitutionName: "(주)한국항공우주",
     issuedAt: "2022-09-30",
-    supplyAmount: 136_000_000,
-    taxAmount: 13_600_000,
-    totalAmount: 149_600_000,
+    supplyAmount: 1_989_000,
+    taxAmount: 198_900,
+    totalAmount: 2_187_900,
     status: "ISSUED",
   },
   {
@@ -2248,9 +2249,9 @@ export const taxInvoices: TaxInvoice[] = [
     leadInstitutionId: "inst-006",
     leadInstitutionName: "(주)한국항공우주",
     issuedAt: "2023-09-25",
-    supplyAmount: 140_000_000,
-    taxAmount: 14_000_000,
-    totalAmount: 154_000_000,
+    supplyAmount: 1_989_000,
+    taxAmount: 198_900,
+    totalAmount: 2_187_900,
     status: "ISSUED",
   },
 ];
