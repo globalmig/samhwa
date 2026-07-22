@@ -1299,10 +1299,10 @@ export interface TermFee {
 // RDA1/RDA2 2건은 아직 예전 손입력 더미 그대로 — RDA는 S등급 완전제외(EXCLUDE) 규칙이 있어 별도 확인 후 정정 필요.
 export const termFees: TermFee[] = [
   // p-001 2연차 — 주관: 삼화전자 (KEIT · 주관기관만 발송)
-  { id: "tf-001", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2024, termNumber: 2, institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", budget: 700_000_000, feeRate: 2.8, calculatedFee: 553_500, appliedFee: 470_475, status: "BILLED" },
-  { id: "tf-002", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2024, termNumber: 2, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 1_200_000_000, feeRate: 2.8, calculatedFee: 948_857, appliedFee: 806_529, status: "CONFIRMED" },
-  { id: "tf-003", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2024, termNumber: 2, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 500_000_000, feeRate: 2.8, calculatedFee: 395_357, appliedFee: 336_054, status: "CONFIRMED" },
-  { id: "tf-004", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2024, termNumber: 2, institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", budget: 400_000_000, feeRate: 2.8, calculatedFee: 316_286, appliedFee: 268_843, status: "CONFIRMED" },
+  { id: "tf-001", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2024, termNumber: 2, institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", budget: 700_000_000, feeRate: 2.8, calculatedFee: 1_291_500, appliedFee: 1_097_775, standardFee: 1_291_500, unclaimedFee: 193_725, status: "BILLED" },
+  { id: "tf-002", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2024, termNumber: 2, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 1_200_000_000, feeRate: 2.8, calculatedFee: 130_235, appliedFee: 110_700, standardFee: 130_235, unclaimedFee: 19_535, status: "CONFIRMED" },
+  { id: "tf-003", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2024, termNumber: 2, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 500_000_000, feeRate: 2.8, calculatedFee: 54_265, appliedFee: 46_125, standardFee: 54_265, unclaimedFee: 8_140, status: "CONFIRMED" },
+  { id: "tf-004", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2024, termNumber: 2, institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", budget: 400_000_000, feeRate: 2.8, calculatedFee: 738_000, appliedFee: 627_300, standardFee: 738_000, unclaimedFee: 110_700, status: "CONFIRMED" },
 
   // p-002 1~3연차 — 과제 구성 예시(P001·A과제) 템플릿 기준 재구성 후 calcTermFee 실제 정책 로직으로
   // 재계산한 값(KETEP DISCOUNT 모드, 연세대=최우수·자체정산 유지). 시딩 시점에 바로 "수수료 청구 관리"
