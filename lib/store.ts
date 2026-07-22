@@ -985,6 +985,11 @@ export function autoGenerateTermFees(projectId: string): void {
   // 연차마다 달라지는 경우 실제로 미뤘던 기관과 다른 기관이 그 몫을 떠안는 오류가 생긴다.
   const stageUnclaimed: Record<number, number> = {};
   const stageUnclaimedByInst: Record<number, Record<string, number>> = {};
+  // stageExemptUnclaimedByInst: 면제기관(DISCOUNT 모드 자체정산)이 연차상시 동안 미뤄온 몫(연차상시엔
+  // 청구하지 않고 매출비용으로 소멸시키는 게 기본).단, 정산 연차에 그 기관이 위탁정산으로 전환해
+  // 일반기관 취급을 받게 되면(exemptBreakdown에서 빠지고 nonExempt로 재분류), 자체정산이던 동안 쌓인
+  // 미청구분을 그제서야 함께 청구해야 한다 — 그렇지 않으면 전환 시점에 과거 미청구분이 그냥 사라진다.
+  const stageExemptUnclaimedByInst: Record<number, Record<string, number>> = {};
 
   for (let termNumber = 1; termNumber <= project.totalTerms; termNumber++) {
     const termStartDate = new Date(startDate);
@@ -1011,7 +1016,7 @@ export function autoGenerateTermFees(projectId: string): void {
         role: m.role,
         grade: normalizeGrade(m.institutionGrade ?? "일반"),
         institutionType: m.institutionType,
-        settlementType: m.settlementType ?? "위탁정산",
+        settlementType: m.settlementType ?? policy.defaultSettlementType ?? "자체정산",
         cashBudget: ab.cashBudget,
         inKindBudget: ab.inKindBudget,
       });
@@ -1038,10 +1043,16 @@ export function autoGenerateTermFees(projectId: string): void {
     // 이번 연차에 기관별로 새로 미뤄지는 몫(ANNUAL일 때만 채움) — 연차 루프가 끝난 뒤
     // stageUnclaimedByInst에 합산한다.
     const instAnnualUnclaimed: Record<string, number> = {};
+    // 면제기관이 이번 연차(ANNUAL)에 새로 미루는 몫 — 연차 루프가 끝난 뒤 stageExemptUnclaimedByInst에 합산한다.
+    const instAnnualExemptUnclaimed: Record<string, number> = {};
+    // 이번 정산 연차에 "면제기관 → 일반기관 전환"으로 과거 미청구분을 함께 걷은 총액(집계용 totalBillingFee 보정에 사용).
+    let exemptCarryoverBilledThisTerm = 0;
 
-    // 기관별 TermFee 생성 — 이미 확정(CONFIRMED/BILLED)되어 보존 중인 기관×연차는 건드리지 않는다.
+    // 기관별 TermFee 생성 — 이미 확정(CONFIRMED/BILLED)되어 보존 중인 기관×연차는 새로 생성하지 않는다.
+    // 단, 이월액 집계(instAnnualUnclaimed → stageUnclaimedByInst)는 확정 여부와 무관하게 항상 계산해야 한다 —
+    // 그렇지 않으면 그 연차가 확정되는 순간 해당 기관들의 미청구 몫이 이후 정산 연차 집계에서 통째로 빠지는 오류가 생긴다.
     for (const cm of calcMembers) {
-      if (lockedKeys.has(`${termYear}|${termNumber}|${cm.institutionId}`)) continue;
+      const isLocked = lockedKeys.has(`${termYear}|${termNumber}|${cm.institutionId}`);
 
       const member = members.find((m) => m.institutionId === cm.institutionId);
       const ab = member?.annualBudgets?.find((b) => b.termNumber === termNumber);
@@ -1063,6 +1074,12 @@ export function autoGenerateTermFees(projectId: string): void {
         const ed = result.exemptBreakdown.find((e) => e.institutionId === cm.institutionId);
         instCalcFee = ed?.calculatedFee ?? 0;
         instAppliedFee = ed?.billingFee ?? 0;
+        // 면제기관이 연차상시 동안 미루는 몫만 추적한다 — 정산 연차까지 자체정산을 유지해 계속
+        // 면제기관으로 남으면(이 분기 자체), 그 미청구분은 매출비용으로 소멸시키는 게 기본 처리라
+        // 더 이상 추적하지 않는다(정산 연차에 도달한 시점엔 stageExemptUnclaimedByInst가 리셋된다).
+        if (workType === "ANNUAL") {
+          instAnnualExemptUnclaimed[cm.institutionId] = ed?.unclaimedFee ?? 0;
+        }
       } else {
         // 이 기관의 일반수수료(generalFee) 몫 — 반올림 전 값으로 유지해야 아래 이월액 계산이
         // 반올림 오차 없이 정확해진다.
@@ -1075,12 +1092,19 @@ export function autoGenerateTermFees(projectId: string): void {
           // (전체를 합쳐서 이번 연차 비율로 재배분하면, 기관별 사업비 비중이 연차마다 달라질 때
           //  실제로 미뤘던 기관과 다른 기관이 그 몫을 떠안는 오류가 생긴다.)
           const ownCarried = stageUnclaimedByInst[stageNumber]?.[cm.institutionId] ?? 0;
-          instAppliedFee = Math.round(instShare + ownCarried);
+          // 이 기관이 연차상시 동안엔 면제기관(자체정산)이었다가 정산 연차에 위탁정산으로 전환해
+          // 일반기관 취급을 받는 경우 — 자체정산이던 동안 쌓인 미청구분을 여기서 함께 청구한다.
+          // (그대로 두면 전환 시점에 그 미청구분이 아무 데도 반영되지 않고 사라진다.)
+          const ownExemptCarried = stageExemptUnclaimedByInst[stageNumber]?.[cm.institutionId] ?? 0;
+          instAppliedFee = Math.round(instShare + ownCarried + ownExemptCarried);
+          exemptCarryoverBilledThisTerm += ownExemptCarried;
         } else {
           instAppliedFee = Math.round(instShare * result.billingRatio);
           instAnnualUnclaimed[cm.institutionId] = instShare - instShare * result.billingRatio;
         }
       }
+
+      if (isLocked) continue;
 
       newFees.push({
         id: genId("tf"),
@@ -1128,7 +1152,9 @@ export function autoGenerateTermFees(projectId: string): void {
       generalBillingFee: result.generalBillingFee,
       generalUnclaimedFee: result.generalUnclaimedFee,
       carriedOverUnclaimed: result.carriedOverUnclaimed,
-      totalBillingFee: result.totalBillingFee,
+      // calcTermFee는 기관별 면제→일반 전환 이월분(exemptCarryoverBilledThisTerm)을 알지 못하므로
+      // (그 계산은 이 함수에서 기관별로 사후 처리한다) 여기서 더해 기관별 합계와 어긋나지 않게 한다.
+      totalBillingFee: result.totalBillingFee + exemptCarryoverBilledThisTerm,
       overrides: [],
       status: "DRAFT",
       createdAt: new Date().toISOString().slice(0, 10),
@@ -1139,11 +1165,16 @@ export function autoGenerateTermFees(projectId: string): void {
       if (workType === "SETTLEMENT") {
         stageUnclaimed[stageNumber] = 0;
         stageUnclaimedByInst[stageNumber] = {};
+        stageExemptUnclaimedByInst[stageNumber] = {};
       } else {
         stageUnclaimed[stageNumber] = (stageUnclaimed[stageNumber] ?? 0) + result.generalUnclaimedFee;
         stageUnclaimedByInst[stageNumber] = stageUnclaimedByInst[stageNumber] ?? {};
         for (const [instId, amt] of Object.entries(instAnnualUnclaimed)) {
           stageUnclaimedByInst[stageNumber][instId] = (stageUnclaimedByInst[stageNumber][instId] ?? 0) + amt;
+        }
+        stageExemptUnclaimedByInst[stageNumber] = stageExemptUnclaimedByInst[stageNumber] ?? {};
+        for (const [instId, amt] of Object.entries(instAnnualExemptUnclaimed)) {
+          stageExemptUnclaimedByInst[stageNumber][instId] = (stageExemptUnclaimedByInst[stageNumber][instId] ?? 0) + amt;
         }
       }
     }

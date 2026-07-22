@@ -20,6 +20,7 @@ import MoneyInput from "@/components/common/MoneyInput";
 import DateInput from "@/components/common/DateInput";
 import NoticeLetterPreview, { type NoticeStatusRow } from "@/components/common/NoticeLetterPreview";
 import InstitutionQuickAdd from "@/components/common/InstitutionQuickAdd";
+import AgreementStructureEditor from "@/components/common/AgreementStructureEditor";
 import { useCanWrite } from "@/lib/permissions";
 import { getCurrentUser } from "@/lib/auth";
 
@@ -164,6 +165,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   }
 
   const policy = resolvePolicy(project.agencyId, feePolicies, project.programType ?? "GENERAL");
+  const defaultSettlementType = policy?.defaultSettlementType ?? "자체정산";
   const calcMembers: CalcMember[] = policy ? members.flatMap((m) => {
     const { cashBudget, inKindBudget } = getCurrentTermBudget(m);
     const amount = policy.feeBasis === "CASH_PLUS_INKIND" ? cashBudget + inKindBudget : cashBudget;
@@ -174,7 +176,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       role: m.role as "LEAD" | "PARTICIPANT",
       grade: normalizeGrade(m.institutionGrade ?? "일반"),
       institutionType: m.institutionType,
-      settlementType: (m.settlementType ?? "위탁정산") as "위탁정산" | "자체정산",
+      settlementType: (m.settlementType ?? defaultSettlementType) as "위탁정산" | "자체정산",
       cashBudget,
       inKindBudget,
     }];
@@ -397,7 +399,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">공동기관 수</label>
                 <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-white text-slate-500">
-                  {members.length}개
+                  {members.filter((m) => m.role === "PARTICIPANT").length}개
                 </div>
                 <p className="text-[10px] text-slate-400 mt-1">참여기관 목록에서 기관을 추가·삭제하면 자동 반영됩니다</p>
               </div>
@@ -520,6 +522,13 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               </div>
             )}
           </div>
+
+          <AgreementStructureEditor
+            agreementType={draft.agreementType}
+            stages={draft.stages}
+            totalTerms={draft.totalTerms}
+            onChange={(agreementType, stages) => setDraft((p) => ({ ...p, agreementType, stages }))}
+          />
         </div>
       </div>
 
@@ -652,7 +661,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                     <td className="px-4 py-3 text-center">
                       {editingMembers ? (
                         <select
-                          value={getMemberVal(m, "settlementType") ?? "위탁정산"}
+                          value={getMemberVal(m, "settlementType") ?? defaultSettlementType}
                           onChange={(e) => setMemberField(m.id, "settlementType", e.target.value as ProjectMember["settlementType"])}
                           className="text-xs border border-slate-200 rounded-lg px-2 py-1 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400">
                           <option value="위탁정산">위탁정산</option>
@@ -660,9 +669,9 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                         </select>
                       ) : (
                         <span className={`text-xs font-medium px-2 py-0.5 rounded ${
-                          (m.settlementType ?? "위탁정산") === "자체정산" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"
+                          (m.settlementType ?? defaultSettlementType) === "자체정산" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"
                         }`}>
-                          {m.settlementType ?? "위탁정산"}
+                          {m.settlementType ?? defaultSettlementType}
                         </span>
                       )}
                     </td>

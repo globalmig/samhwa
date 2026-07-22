@@ -574,10 +574,10 @@ export const projects: Project[] = [
     agency: "한국에너지기술평가원",
     leadInstitutionId: "inst-003",
     leadInstitutionName: "(주)에너텍솔루션",
-    totalBudget: 4_500_000_000,
+    totalBudget: 400_000_000,
     startDate: "2024-01-01",
-    endDate: "2027-12-31",
-    totalTerms: 4,
+    endDate: "2026-12-31",
+    totalTerms: 3,
     currentTerm: 1,
     status: "ACTIVE",
     researchLead: "이연구",
@@ -798,12 +798,11 @@ export const projectMembers: ProjectMember[] = [
   { id: "pm-004", projectId: "p-001", projectNumber: "RS-2024-00214837", institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", role: "PARTICIPANT", budget: 400_000_000, feeRate: 2.5, calculatedFee: 10_000_000, institutionGrade: "일반", contactName: "최담당", contactEmail: "choi@nanomat.co.kr", contactPhone: "031-456-7890", annualBudgets: [{ termYear: 2023, termNumber: 1, cashBudget: 300_000_000, inKindBudget: 0 }, { termYear: 2024, termNumber: 2, cashBudget: 400_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 3, cashBudget: 350_000_000, inKindBudget: 0 }] },
 
   // p-002: (주)에너텍솔루션 주관, 6개 기관
-  { id: "pm-005", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", role: "LEAD", budget: 1_500_000_000, feeRate: 2.5, calculatedFee: 37_500_000, institutionGrade: "우수(B)", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 1_500_000_000, inKindBudget: 0 }] },
-  { id: "pm-006", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", role: "PARTICIPANT", budget: 2_000_000_000, feeRate: 2.0, calculatedFee: 40_000_000, institutionGrade: "최우수(S)", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 2_000_000_000, inKindBudget: 0 }] },
-  { id: "pm-007", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 500_000_000, feeRate: 2.0, calculatedFee: 10_000_000, institutionGrade: "우수(A)", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 500_000_000, inKindBudget: 0 }] },
-  { id: "pm-008", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", role: "PARTICIPANT", budget: 300_000_000, feeRate: 2.0, calculatedFee: 6_000_000, institutionGrade: "우수(B)", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 300_000_000, inKindBudget: 0 }] },
-  { id: "pm-009", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-010", institutionName: "(주)클린에너지솔루션", institutionType: "중견기업", role: "PARTICIPANT", budget: 100_000_000, feeRate: 2.5, calculatedFee: 2_500_000, institutionGrade: "우수(C)", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 100_000_000, inKindBudget: 0 }] },
-  { id: "pm-010", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-011", institutionName: "하이테크머티리얼(주)", institutionType: "스타트업", role: "PARTICIPANT", budget: 100_000_000, feeRate: 2.5, calculatedFee: 2_500_000, institutionGrade: "일반", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 100_000_000, inKindBudget: 0 }] },
+  // 과제 구성 예시(P001·A과제) 템플릿 기준 재구성 — 주관(기관A) + 공동 3개(기관B 최우수·기관C 우수·기관D 일반), 1단계 3년차.
+  { id: "pm-005", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", role: "LEAD", budget: 900_000_000, feeRate: 3.5, calculatedFee: 0, institutionGrade: "일반", settlementType: "위탁정산", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 200_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 2, cashBudget: 300_000_000, inKindBudget: 0 }, { termYear: 2026, termNumber: 3, cashBudget: 400_000_000, inKindBudget: 0 }] },
+  { id: "pm-006", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", role: "PARTICIPANT", budget: 550_000_000, feeRate: 3.5, calculatedFee: 0, institutionGrade: "최우수(S)", settlementType: "자체정산", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 100_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 2, cashBudget: 150_000_000, inKindBudget: 0 }, { termYear: 2026, termNumber: 3, cashBudget: 300_000_000, inKindBudget: 0 }] },
+  { id: "pm-007", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 350_000_000, feeRate: 3.5, calculatedFee: 0, institutionGrade: "우수(A)", settlementType: "위탁정산", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 50_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 2, cashBudget: 100_000_000, inKindBudget: 0 }, { termYear: 2026, termNumber: 3, cashBudget: 200_000_000, inKindBudget: 0 }] },
+  { id: "pm-010", projectId: "p-002", projectNumber: "RS-2024-00198321", institutionId: "inst-011", institutionName: "하이테크머티리얼(주)", institutionType: "스타트업", role: "PARTICIPANT", budget: 300_000_000, feeRate: 3.5, calculatedFee: 0, institutionGrade: "일반", settlementType: "위탁정산", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 50_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 2, cashBudget: 100_000_000, inKindBudget: 0 }, { termYear: 2026, termNumber: 3, cashBudget: 150_000_000, inKindBudget: 0 }] },
 
   // p-003: 나노소재기술 주관, 3개 기관
   { id: "pm-011", projectId: "p-003", projectNumber: "RS-2024-00201547", institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", role: "LEAD", budget: 600_000_000, feeRate: 2.5, calculatedFee: 15_000_000, institutionGrade: "일반", annualBudgets: [{ termYear: 2022, termNumber: 1, cashBudget: 600_000_000, inKindBudget: 0 }, { termYear: 2023, termNumber: 2, cashBudget: 700_000_000, inKindBudget: 0 }, { termYear: 2024, termNumber: 3, cashBudget: 800_000_000, inKindBudget: 0 }] },
@@ -893,6 +892,16 @@ export interface FeePolicy {
   // DISCOUNT: 면제등급도 산정기준액에 포함해 계산한 뒤 85% 할인 (KEIT/KETEP)
   // EXCLUDE: 면제등급을 산정기준액에서 완전히 제외 — 연차상시도 수행하지 않음 (IITP/RDA1/RDA2)
   exemptionMode: "DISCOUNT" | "EXCLUDE";
+  // 면제기관(정산면제 등급)의 정산구분이 참여기관 화면에서 개별 지정되지 않았을 때 적용할 기본값.
+  // 정산구분은 연차상시(ANNUAL)에는 영향이 없고 정산 연차(SETTLEMENT)에만 영향을 준다 —
+  // 위탁정산=정산 연차 100%, 자체정산=정산 연차에도 85% 유지.
+  defaultSettlementType?: "위탁정산" | "자체정산";
+  // 면제기관 수수료의 "산정" 단계 자체에 연차상시 청구비율(annualBillingRate)을 미리 반영할지 여부.
+  // false(기본, KEIT): 면제기관 산정수수료 = 표준액 그대로, 청구 단계에서 비율을 한 번만 적용.
+  // true(KETEP): 면제기관 산정수수료 = 표준액 × 청구비율(면제 할인 개념)로 먼저 줄인 뒤,
+  //   청구 단계에서 같은 비율(연차상시 85%/정산 자체정산 85%/위탁정산 100%)을 그 산정액에 다시 적용 —
+  //   결과적으로 면제기관에는 비율이 두 번 곱해진다. KEIT는 한 번만 적용되어야 하므로 정책별로 분기한다.
+  exemptCalcAppliesBillingRatio?: boolean;
   feeBasis: "CASH" | "CASH_PLUS_INKIND"; // CASH_PLUS_INKIND: RDA1/RDA2 — 현금+현물 합산 기준
   hasAutonomyTrack: boolean;           // 자율성트랙 과제 존재 여부
   annualBillingRate: number;           // 연차상시 청구 비율 (0.85=KEIT/KETEP, 1.0=KOFPI 등 미청구 없는 기관)
@@ -1053,6 +1062,7 @@ export const feePolicies: FeePolicy[] = [
     coInstAddonMethod: "TIERED" as const,
     exemptGrades: ["S", "A~C"],
     exemptionMode: "DISCOUNT" as const,
+    defaultSettlementType: "자체정산" as const,
     feeBasis: "CASH" as const,
     hasAutonomyTrack: true,
     annualBillingRate: 0.85,
@@ -1073,6 +1083,7 @@ export const feePolicies: FeePolicy[] = [
     coInstAddonMethod: "TIERED" as const,
     exemptGrades: ["S", "A~C"],
     exemptionMode: "DISCOUNT" as const,
+    defaultSettlementType: "자체정산" as const,
     feeBasis: "CASH" as const,
     hasAutonomyTrack: true,
     annualBillingRate: 0.85,
@@ -1094,6 +1105,7 @@ export const feePolicies: FeePolicy[] = [
     coInstAddonMethod: "FLAT" as const,
     exemptGrades: ["S"],
     exemptionMode: "DISCOUNT" as const,
+    exemptCalcAppliesBillingRatio: true,
     feeBasis: "CASH" as const,
     hasAutonomyTrack: false,
     annualBillingRate: 0.85,
@@ -1254,13 +1266,24 @@ export const termFees: TermFee[] = [
   { id: "tf-003", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2024, termNumber: 2, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 500_000_000, feeRate: 2.8, calculatedFee: 395_357, appliedFee: 336_054, status: "CONFIRMED" },
   { id: "tf-004", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2024, termNumber: 2, institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", budget: 400_000_000, feeRate: 2.8, calculatedFee: 316_286, appliedFee: 268_843, status: "CONFIRMED" },
 
-  // p-002 1연차 — 주관: (주)에너텍솔루션 (KETEP · 주관기관만 발송)
-  { id: "tf-005", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", budget: 1_500_000_000, feeRate: 3.5, calculatedFee: 1_021_500, appliedFee: 868_275, status: "BILLED" },
-  { id: "tf-006", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 2_000_000_000, feeRate: 3.5, calculatedFee: 1_362_000, appliedFee: 1_157_700, status: "CONFIRMED" },
-  { id: "tf-007", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 500_000_000, feeRate: 3.5, calculatedFee: 340_500, appliedFee: 289_425, status: "CONFIRMED" },
-  { id: "tf-008", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", budget: 300_000_000, feeRate: 3.5, calculatedFee: 204_300, appliedFee: 173_655, status: "CONFIRMED" },
-  { id: "tf-009", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-010", institutionName: "(주)클린에너지솔루션", institutionType: "중견기업", budget: 100_000_000, feeRate: 3.5, calculatedFee: 68_100, appliedFee: 57_885, status: "CONFIRMED" },
-  { id: "tf-010", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-011", institutionName: "하이테크머티리얼(주)", institutionType: "스타트업", budget: 100_000_000, feeRate: 3.5, calculatedFee: 68_100, appliedFee: 57_885, status: "CONFIRMED" },
+  // p-002 1~3연차 — 과제 구성 예시(P001·A과제) 템플릿 기준 재구성 후 calcTermFee 실제 정책 로직으로
+  // 재계산한 값(KETEP DISCOUNT 모드, 연세대=최우수·자체정산 유지). 시딩 시점에 바로 "수수료 청구 관리"
+  // 목록에 나타나도록 autoGenerateTermFees를 거치지 않고 정적으로 채워둠 — 참여기관 추가/사업비 수정
+  // 등으로 실제 편집이 발생하면 이후엔 자동 재계산 경로를 탄다.
+  // (아래 receivables/taxInvoices/emailDispatches/settlements/projectIssues의 옛 1연차 관련 기록은
+  //  구성 변경 전 금액·기관 기준으로 남아 있으므로 별도로 정리가 필요함)
+  { id: "tf-005", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", budget: 200_000_000, feeRate: 3.5, calculatedFee: 1_212_000, appliedFee: 1_030_200, status: "DRAFT" },
+  { id: "tf-006", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 100_000_000, feeRate: 3.5, calculatedFee: 128_775, appliedFee: 109_459, status: "DRAFT" },
+  { id: "tf-007", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 50_000_000, feeRate: 3.5, calculatedFee: 303_000, appliedFee: 257_550, status: "DRAFT" },
+  { id: "tf-010", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-011", institutionName: "하이테크머티리얼(주)", institutionType: "스타트업", budget: 50_000_000, feeRate: 3.5, calculatedFee: 303_000, appliedFee: 257_550, status: "DRAFT" },
+  { id: "tf-p002-y2-lead", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2025, termNumber: 2, institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", budget: 300_000_000, feeRate: 3.5, calculatedFee: 1_185_840, appliedFee: 1_007_964, status: "DRAFT" },
+  { id: "tf-p002-y2-s", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2025, termNumber: 2, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 150_000_000, feeRate: 3.5, calculatedFee: 139_995, appliedFee: 118_996, status: "DRAFT" },
+  { id: "tf-p002-y2-a", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2025, termNumber: 2, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 100_000_000, feeRate: 3.5, calculatedFee: 395_280, appliedFee: 335_988, status: "DRAFT" },
+  { id: "tf-p002-y2-b", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2025, termNumber: 2, institutionId: "inst-011", institutionName: "하이테크머티리얼(주)", institutionType: "스타트업", budget: 100_000_000, feeRate: 3.5, calculatedFee: 395_280, appliedFee: 335_988, status: "DRAFT" },
+  { id: "tf-p002-y3-lead", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2026, termNumber: 3, institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", budget: 400_000_000, feeRate: 3.5, calculatedFee: 1_054_080, appliedFee: 1_413_756, status: "DRAFT" },
+  { id: "tf-p002-y3-s", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2026, termNumber: 3, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 300_000_000, feeRate: 3.5, calculatedFee: 358_785, appliedFee: 304_967, status: "DRAFT" },
+  { id: "tf-p002-y3-a", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2026, termNumber: 3, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 200_000_000, feeRate: 3.5, calculatedFee: 527_040, appliedFee: 631_782, status: "DRAFT" },
+  { id: "tf-p002-y3-b", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2026, termNumber: 3, institutionId: "inst-011", institutionName: "하이테크머티리얼(주)", institutionType: "스타트업", budget: 150_000_000, feeRate: 3.5, calculatedFee: 395_280, appliedFee: 500_022, status: "DRAFT" },
 
   // p-003 1연차 2022 — 주관: 나노소재기술 (IITP · 주관기관만 발송)
   { id: "tf-031", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2022, termNumber: 1, institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", budget: 600_000_000, feeRate: 3.0, calculatedFee: 1_060_875, appliedFee: 901_744, status: "BILLED" },

@@ -32,9 +32,10 @@ import Modal from "@/components/common/Modal";
 import DateInput from "@/components/common/DateInput";
 import InstitutionQuickAdd from "@/components/common/InstitutionQuickAdd";
 import MoneyInput from "@/components/common/MoneyInput";
+import AgreementStructureEditor, { type Stage } from "@/components/common/AgreementStructureEditor";
 import { useCanWrite } from "@/lib/permissions";
 import { getCurrentUser } from "@/lib/auth";
-import { resolveRdaAgencyId } from "@/lib/fee-calculator";
+import { resolveRdaAgencyId, isSettlementTerm } from "@/lib/fee-calculator";
 
 // ── 타입 ──────────────────────────────────────────────────────
 type FeeRow = {
@@ -1203,6 +1204,8 @@ type NewProjectDraft = {
   researchLead: string;
   assignedManager: string;
   projectDivision: "" | "위탁" | "공동";
+  agreementType: "BATCH" | "STAGED";
+  stages: Stage[] | undefined;
 };
 
 const EMPTY_NEW_PROJECT: NewProjectDraft = {
@@ -1223,6 +1226,8 @@ const EMPTY_NEW_PROJECT: NewProjectDraft = {
   researchLead: "",
   assignedManager: "",
   projectDivision: "",
+  agreementType: "BATCH",
+  stages: undefined,
 };
 
 function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) {
@@ -1268,6 +1273,8 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
       researchLead: form.researchLead || undefined,
       assignedManager: form.assignedManager || undefined,
       projectDivision: form.projectDivision || undefined,
+      agreementType: form.agreementType,
+      stages: form.agreementType === "STAGED" ? form.stages : undefined,
     });
     onClose(created.id);
   }
@@ -1322,6 +1329,12 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
           <input className={inputCls} type="number" min={1} value={form.currentTerm} onChange={(e) => s("currentTerm", Number(e.target.value))} />
         </div>
       </div>
+      <AgreementStructureEditor
+        agreementType={form.agreementType}
+        stages={form.stages}
+        totalTerms={form.totalTerms}
+        onChange={(agreementType, stages) => setForm((p) => ({ ...p, agreementType, stages }))}
+      />
       <div className="rounded-lg border border-slate-100 bg-slate-50/50 px-4 py-3 space-y-3">
         <p className="text-xs font-semibold text-slate-600">사업비 구분 (당해 기준 — 참여기관·연차별 사업비는 등록 후 상세 화면에서 추가)</p>
         <div className="grid grid-cols-3 gap-4">
@@ -1389,6 +1402,16 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
   );
 }
 
+// ── 연차별 당해시작일/종료일 계산 (autoGenerateTermFees와 동일한 기준: 과제 시작일 + (연차-1)년) ──
+function termDateRange(projectStartDate: string, termNumber: number): { start: string; end: string } {
+  const start = new Date(projectStartDate);
+  start.setFullYear(start.getFullYear() + termNumber - 1);
+  const end = new Date(start);
+  end.setFullYear(end.getFullYear() + 1);
+  end.setDate(end.getDate() - 1);
+  return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
+}
+
 // ── useFeeRows ────────────────────────────────────────────────
 function useFeeRows(): FeeRow[] {
   const {
@@ -1443,6 +1466,12 @@ function useFeeRows(): FeeRow[] {
       const billingType = project?.billingType ?? (invoice ? "정발행" : "");
       const appliedFeeTotal = fees.reduce((s, f) => s + f.appliedFee, 0);
 
+      // 과제구분(연차상시/정산)과 당해시작일/종료일은 과제 전체 기간이 아니라 "이 행이 나타내는 연차"
+      // 기준으로 계산해야 한다 — 다년차 과제는 연차마다 행이 따로 나오므로, project 레벨 고정값을 그대로
+      // 쓰면 모든 연차 행이 똑같은 날짜/구분을 보여줘서 어느 연차인지 구분이 안 된다.
+      const termRange = project ? termDateRange(project.startDate, f0.termNumber) : null;
+      const projectCategory = project ? (isSettlementTerm(project, f0.termNumber) ? "정산" : "연차상시") : "연차상시";
+
       return {
         key,
         projectId:           project?.id ?? "",
@@ -1452,9 +1481,9 @@ function useFeeRows(): FeeRow[] {
         projectName:         f0.projectName,
         leadInstitutionName: project?.leadInstitutionName ?? "",
         researchLead:        project?.researchLead ?? "",
-        projectCategory:     project?.projectCategory ?? "연차상시",
-        startDate:           project?.startDate ?? "",
-        endDate:             project?.endDate ?? "",
+        projectCategory,
+        startDate:           termRange?.start ?? project?.startDate ?? "",
+        endDate:             termRange?.end ?? project?.endDate ?? "",
         stageStartDate:      project?.stageStartDate ?? "",
         stageEndDate:        project?.stageEndDate ?? "",
         billingType,
@@ -1559,6 +1588,7 @@ const COLUMNS = [
   { key: "projectName",        label: "과제명",      width: "w-52",  align: "text-left"   },
   { key: "leadInstitutionName",label: "주관기관",    width: "w-32",  align: "text-left"   },
   { key: "researchLead",       label: "연구책임자",  width: "w-20",  align: "text-center" },
+  { key: "term",                label: "연차",        width: "w-16",  align: "text-center" },
   { key: "projectCategory",    label: "과제구분",    width: "w-20",  align: "text-center" },
   { key: "startDate",          label: "당해시작일",  width: "w-24",  align: "text-center" },
   { key: "endDate",            label: "당해종료일",  width: "w-24",  align: "text-center" },
@@ -1742,6 +1772,22 @@ export default function FeesPage() {
      invoiceDateFrom, invoiceDateTo, termEndDateFrom, termEndDateTo, agencyAssignedFrom, agencyAssignedTo]
   );
 
+  // 같은 과제(연차별로 여러 행)를 시각적으로 묶어 보여주기 위한 그룹 인덱스 — filtered는 이미
+  // projectNumber로 정렬되어 있으므로, 앞 행과 과제번호가 바뀔 때마다 그룹을 하나씩 증가시킨다.
+  const rowGroupIndex = useMemo(() => {
+    const map = new Map<string, number>();
+    let group = -1;
+    let prevProjectNumber: string | null = null;
+    for (const row of filtered) {
+      if (row.projectNumber !== prevProjectNumber) {
+        group += 1;
+        prevProjectNumber = row.projectNumber;
+      }
+      map.set(row.key, group);
+    }
+    return map;
+  }, [filtered]);
+
   // 요약 통계
   const totalSupply     = filtered.reduce((s, r) => s + r.supplyAmount, 0);
   const totalPaid       = filtered.reduce((s, r) => s + r.paidAmount, 0);
@@ -1810,6 +1856,9 @@ export default function FeesPage() {
         return row.researchLead ? (
           <Link href={`/researchers/${encodeURIComponent(row.researchLead)}`} className="text-xs text-slate-700 hover:text-blue-600 hover:underline transition-colors">{row.researchLead}</Link>
         ) : <span className="text-slate-300">—</span>;
+
+      case "term":
+        return <span className="text-xs font-semibold text-slate-700 whitespace-nowrap">{row.termYear}년 {row.termNumber}연차</span>;
 
       case "projectCategory":
         return (
@@ -1923,6 +1972,7 @@ export default function FeesPage() {
       "과제명": r.projectName,
       "주관기관": r.leadInstitutionName,
       "연구책임자": r.researchLead,
+      "연차": `${r.termYear}년 ${r.termNumber}연차`,
       "과제구분": r.projectCategory,
       "당해시작일": r.startDate,
       "당해종료일": r.endDate,
@@ -2210,14 +2260,20 @@ export default function FeesPage() {
                   </td>
                 </tr>
               ) : (
-                filtered.flatMap((row) => {
+                filtered.flatMap((row, idx) => {
                   const isExpanded   = expandedKey === row.key;
                   const hasReceivable = row.receivableId !== "";
                   const isFullyPaid   = row.collectionStatus === "PAID";
+                  // 같은 과제(연차별 여러 행)를 옅은 배경색으로 묶어 보여주고, 다른 과제로 넘어가는
+                  // 경계엔 굵은 구분선을 넣어 어디까지가 한 과제인지 한눈에 보이게 한다.
+                  const isGroupStart = idx === 0 || filtered[idx - 1].projectNumber !== row.projectNumber;
+                  const groupBg = (rowGroupIndex.get(row.key) ?? 0) % 2 === 1 ? "bg-slate-50/50" : "bg-white";
                   return [
                     <tr
                       key={row.key}
-                      className={`border-b border-slate-50 transition-colors ${isExpanded ? "bg-blue-50/30" : "hover:bg-slate-50"}`}
+                      className={`transition-colors ${isExpanded ? "bg-blue-50/30" : `${groupBg} hover:bg-slate-100/70`} ${
+                        isGroupStart ? "border-t-2 border-t-slate-200" : "border-t border-t-slate-50"
+                      } border-b border-b-slate-50`}
                     >
                       {canEdit && (
                         <td className="px-2 py-2.5 text-center shrink-0">

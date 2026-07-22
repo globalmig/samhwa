@@ -116,6 +116,8 @@ function makePolicyEmpty(agencyId: string | null, templatePolicy: FeePolicy | nu
     coInstAddonMethod: templatePolicy?.coInstAddonMethod ?? "TIERED",
     exemptGrades: templatePolicy?.exemptGrades ?? ["S", "A~C"],
     exemptionMode: templatePolicy?.exemptionMode ?? "DISCOUNT",
+    defaultSettlementType: templatePolicy?.defaultSettlementType ?? "자체정산",
+    exemptCalcAppliesBillingRatio: templatePolicy?.exemptCalcAppliesBillingRatio ?? false,
     feeBasis: templatePolicy?.feeBasis ?? "CASH",
     hasAutonomyTrack: templatePolicy?.hasAutonomyTrack ?? true,
     annualBillingRate: templatePolicy?.annualBillingRate ?? 0.85,
@@ -251,6 +253,14 @@ function AgencyFeeModelSummary({ agency, policy }: { agency: { shortName: string
     ? policy.exemptGrades.join("·") + " 등급 — 산정기준액에서 완전 제외(연차상시도 안함)"
     : policy.exemptGrades.join("·") + " 등급 (자체정산 선택 시 85% 할인)";
 
+  const defaultSettlementLabel = (policy.defaultSettlementType ?? "자체정산") === "자체정산"
+    ? "자체정산 — 정산 연차에도 85% 유지"
+    : "위탁정산 — 정산 연차엔 100%";
+
+  const exemptCalcLabel = policy.exemptCalcAppliesBillingRatio
+    ? "산정 단계에 선반영 — 청구비율이 두 번 곱해짐"
+    : "산정 단계엔 미반영 — 청구 단계에서 한 번만 곱해짐";
+
   const feeBasisLabel = policy.feeBasis === "CASH_PLUS_INKIND" ? "현금 + 현물 합산" : "현금사업비만";
 
   const billingLabel = policy.annualBillingRate >= 1
@@ -287,6 +297,22 @@ function AgencyFeeModelSummary({ agency, policy }: { agency: { shortName: string
             <span className="shrink-0 w-24 text-slate-400 font-medium">면제기관</span>
             <span className={`text-slate-700 ${policy.exemptGrades.length === 0 ? "text-slate-500 italic" : ""}`}>{exemptLabel}</span>
           </div>
+          {policy.exemptGrades.length > 0 && policy.exemptionMode === "DISCOUNT" && (
+            <div className="flex items-start gap-2">
+              <span className="shrink-0 w-24 text-slate-400 font-medium">정산구분 기본값</span>
+              <span className={(policy.defaultSettlementType ?? "자체정산") === "자체정산" ? "text-emerald-700 font-medium" : "text-amber-700 font-medium"}>
+                {defaultSettlementLabel}
+              </span>
+            </div>
+          )}
+          {policy.exemptGrades.length > 0 && policy.exemptionMode === "DISCOUNT" && (
+            <div className="flex items-start gap-2">
+              <span className="shrink-0 w-24 text-slate-400 font-medium">면제 산정 방식</span>
+              <span className={policy.exemptCalcAppliesBillingRatio ? "text-fuchsia-700 font-medium" : "text-slate-700"}>
+                {exemptCalcLabel}
+              </span>
+            </div>
+          )}
           <div className="flex items-start gap-2">
             <span className="shrink-0 w-24 text-slate-400 font-medium">가산금 방식</span>
             <span className="text-slate-700">{addonLabel}</span>
@@ -481,6 +507,40 @@ function PolicyForm({ initial, onSubmit, onClose }: { initial: PolicyFormData; o
               <option value="CASH">현금사업비만</option>
               <option value="CASH_PLUS_INKIND">현금 + 현물 합산 (RDA)</option>
             </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">
+              면제기관 정산구분 기본값
+              <span className="ml-1 text-slate-400 font-normal">· 참여기관별로 개별 지정 안 했을 때 적용</span>
+            </label>
+            <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-medium">
+              <button type="button"
+                onClick={() => sf("defaultSettlementType", "자체정산")}
+                className={`flex-1 px-2 py-1.5 transition-colors ${
+                  (form.defaultSettlementType ?? "자체정산") === "자체정산" ? "bg-emerald-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"
+                }`}>자체정산 (정산연차도 85%)</button>
+              <button type="button"
+                onClick={() => sf("defaultSettlementType", "위탁정산")}
+                className={`flex-1 px-2 py-1.5 border-l border-slate-200 transition-colors ${
+                  form.defaultSettlementType === "위탁정산" ? "bg-amber-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"
+                }`}>위탁정산 (정산연차 100%)</button>
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-2">면제기관 산정수수료에 청구비율 선반영</label>
+            <div className="flex items-center gap-3 pt-1">
+              {([false, true] as const).map((v) => (
+                <label key={String(v)} className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" name="exemptCalcAppliesBillingRatio" checked={(form.exemptCalcAppliesBillingRatio ?? false) === v}
+                    onChange={() => sf("exemptCalcAppliesBillingRatio", v)}
+                    className="text-blue-600 focus:ring-blue-500" />
+                  <span className="text-xs text-slate-700">{v ? "반영함 (KETEP — 비율 두 번 적용)" : "반영 안 함 (KEIT — 비율 한 번만 적용)"}</span>
+                </label>
+              ))}
+            </div>
+            <p className="text-[10px] text-slate-400 mt-1">
+              반영하면 면제기관 산정수수료 = 표준액 × 청구비율로 먼저 줄인 뒤, 청구 단계에서 같은 비율을 한 번 더 적용합니다.
+            </p>
           </div>
         </div>
         <div>

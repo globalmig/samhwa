@@ -331,7 +331,9 @@ export function calcTermFee(input: CalcInput): CalcResult {
     const stdFee = totalExemptCash > 0
       ? Math.round(exemptFeeTotal * (amountOf(m) / totalExemptCash))
       : 0;
-    const calcFee = stdFee;
+    // KETEP처럼 면제 산정 단계 자체에 청구비율을 미리 반영하는 정책은, 표준액을 한 번 줄인 값을
+    // "산정수수료"로 삼는다 (KEIT는 반영하지 않아 표준액 그대로가 산정수수료가 된다).
+    const calcFee = policy.exemptCalcAppliesBillingRatio ? Math.round(stdFee * billingRatio) : stdFee;
 
     // 정산 연차 요율 분기
     // - 자체정산: 정산 연차에도 85% (면제 유지, 기관이 자체 정산)
