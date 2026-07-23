@@ -390,6 +390,113 @@ export const institutions: Institution[] = [
     registeredAt: "2024-03-15",
     status: "ACTIVE",
   },
+  // inst-012~015: RDA1 "과제 구성 예시(P001·A과제)" 템플릿 재현용 신규 기관
+  {
+    id: "inst-012",
+    name: "다솜팜텍(주)",
+    type: "중소기업",
+    bizNumber: "512-86-11223",
+    representativeName: "윤다솜",
+    contactName: "장현우",
+    contactEmail: "jang.hw@dasompnf.co.kr",
+    contactPhone: "063-271-8800",
+    projectCount: 1,
+    registeredAt: "2021-02-10",
+    status: "ACTIVE",
+  },
+  {
+    id: "inst-013",
+    name: "전북대학교",
+    type: "대학",
+    bizNumber: "245-83-00219",
+    representativeName: "양총장",
+    contactName: "임서연",
+    contactEmail: "lim.sy@jbnu.ac.kr",
+    contactPhone: "063-270-1114",
+    projectCount: 1,
+    registeredAt: "2021-02-10",
+    status: "ACTIVE",
+  },
+  {
+    id: "inst-014",
+    name: "한국식품연구원",
+    type: "정부출연연구소",
+    bizNumber: "312-82-00335",
+    representativeName: "서원장",
+    contactName: "한지민",
+    contactEmail: "han.jm@kfri.re.kr",
+    contactPhone: "063-219-9000",
+    projectCount: 1,
+    registeredAt: "2021-02-10",
+    status: "ACTIVE",
+  },
+  {
+    id: "inst-015",
+    name: "청보식물(주)",
+    type: "중소기업",
+    bizNumber: "601-87-44556",
+    representativeName: "정청보",
+    contactName: "오민석",
+    contactEmail: "oh.ms@cheongbo.co.kr",
+    contactPhone: "061-333-2200",
+    projectCount: 1,
+    registeredAt: "2021-02-10",
+    status: "ACTIVE",
+  },
+  // inst-016~019: RDA2 "과제 구성 예시(P001·A과제)" 템플릿 재현용 신규 기관 — p-014(RDA1판)의 RDA2 대응.
+  // inst-016(주관)은 rda2AffiliatedInstitutionNames에 속한 소속기관이라 excludeLeadFromCalc가 실제로 발동한다.
+  {
+    id: "inst-016",
+    name: "국립원예특작과학원",
+    type: "공공기관",
+    bizNumber: "128-83-00214",
+    representativeName: "정원예",
+    contactName: "배시설",
+    contactEmail: "bae.ss@korea.kr",
+    contactPhone: "063-238-6600",
+    projectCount: 1,
+    registeredAt: "2024-01-05",
+    status: "ACTIVE",
+  },
+  {
+    id: "inst-017",
+    name: "충남대학교",
+    type: "대학",
+    bizNumber: "314-83-00121",
+    representativeName: "노총장",
+    contactName: "김서준",
+    contactEmail: "kim.sj@cnu.ac.kr",
+    contactPhone: "042-821-5114",
+    projectCount: 1,
+    registeredAt: "2024-01-05",
+    status: "ACTIVE",
+  },
+  {
+    id: "inst-018",
+    name: "한국농촌경제연구원",
+    type: "정부출연연구소",
+    bizNumber: "215-82-00448",
+    representativeName: "구원장",
+    contactName: "최유진",
+    contactEmail: "choi.yj@krei.re.kr",
+    contactPhone: "061-820-2000",
+    projectCount: 1,
+    registeredAt: "2024-01-05",
+    status: "ACTIVE",
+  },
+  {
+    id: "inst-019",
+    name: "새싹팜텍(주)",
+    type: "중소기업",
+    bizNumber: "708-81-33219",
+    representativeName: "표새싹",
+    contactName: "안도현",
+    contactEmail: "ahn.dh@saessakfarm.co.kr",
+    contactPhone: "063-451-7700",
+    projectCount: 1,
+    registeredAt: "2024-01-05",
+    status: "ACTIVE",
+  },
 ];
 
 // ============================================================
@@ -792,6 +899,107 @@ export const projects: Project[] = [
     assignedManager: "이회계",
     registeredAt: "2024-01-05",
   },
+  // p-012: IITP 단계협약 예시 — "과제 구성 예시(P001·A과제)" 템플릿을 IITP(EXCLUDE 모드)로 재현
+  // (기존 p-002/p-011과 동일한 예산 구조지만 서로 다른 기관·과제로 분리 구성 — 최우수(S) 완전제외 검증용)
+  {
+    id: "p-012",
+    projectNumber: "RS-2024-00253119",
+    projectName: "지능형 엣지 AI 통신모듈 개발",
+    agencyId: "fa-003",
+    agency: "정보통신기획평가원",
+    leadInstitutionId: "inst-001",
+    leadInstitutionName: "삼화전자(주)",
+    totalBudget: 1_050_000_000,
+    startDate: "2024-01-01",
+    endDate: "2026-12-31",
+    totalTerms: 3,
+    currentTerm: 3,
+    status: "ACTIVE",
+    agreementType: "STAGED",
+    stages: [{ stageNumber: 1, startTermNumber: 1, endTermNumber: 3 }],
+    researchLead: "김정보",
+    projectCode: "IITP-2024-003",
+    projectDivision: "위탁",
+    assignedManager: "이회계",
+    registeredAt: "2024-01-05",
+  },
+  // p-013: RDA1 2단계 단계협약 검증용 (1단계 1~3년차, 2단계 4~5년차)
+  // 매년 동일한 사업비를 유지해 단계 경계를 넘어갈 때 이월액(연차상시 15%)이 리셋되고
+  // 정산 연차에 100%+15%×N으로 청구되는지 화면에서 그대로 확인할 수 있게 구성.
+  {
+    id: "p-013",
+    projectNumber: "RS-2021-00300001",
+    projectName: "RDA1 단계협약 검증용 과제",
+    agencyId: "fa-005",
+    agency: "농촌진흥청",
+    leadInstitutionId: "inst-001",
+    leadInstitutionName: "삼화전자(주)",
+    totalBudget: 1_750_000_000,
+    startDate: "2021-03-01",
+    endDate: "2026-02-28",
+    totalTerms: 5,
+    currentTerm: 5,
+    status: "ACTIVE",
+    agreementType: "STAGED",
+    stages: [
+      { stageNumber: 1, startTermNumber: 1, endTermNumber: 3 },
+      { stageNumber: 2, startTermNumber: 4, endTermNumber: 5 },
+    ],
+    researchLead: "김검증",
+    projectCode: "RDA1-VERIFY-001",
+    projectDivision: "공동",
+    assignedManager: "박담당",
+    registeredAt: "2021-03-05",
+  },
+  // p-014: RDA1 "과제 구성 예시(P001·A과제)" 템플릿을 실제 수치 그대로 재현 (1단계 3년차, 신규 기관 4개)
+  // 기관B(최우수·비영리)는 EXCLUDE 규칙으로 산정기준액에서 완전 제외, 기관C(우수)는 면제 없이 위탁정산.
+  {
+    id: "p-014",
+    projectNumber: "RS-2021-00311234",
+    projectName: "노지작물 스마트 재배관리 시스템 개발",
+    agencyId: "fa-005",
+    agency: "농촌진흥청",
+    leadInstitutionId: "inst-012",
+    leadInstitutionName: "다솜팜텍(주)",
+    totalBudget: 2_610_000_000,
+    startDate: "2021-01-01",
+    endDate: "2023-12-31",
+    totalTerms: 3,
+    currentTerm: 3,
+    status: "ACTIVE",
+    agreementType: "STAGED",
+    stages: [{ stageNumber: 1, startTermNumber: 1, endTermNumber: 3 }],
+    researchLead: "윤다솜",
+    projectCode: "RDA1-P001-A",
+    projectDivision: "공동",
+    assignedManager: "박담당",
+    registeredAt: "2021-01-05",
+  },
+  // p-015: RDA2 "과제 구성 예시(P001·A과제)" 그대로 재현 — p-014(RDA1판)와 동일한 예산 구성을
+  // RDA2로 옮긴 버전. 주관기관(inst-016 국립원예특작과학원)이 rda2AffiliatedInstitutionNames에
+  // 속해 있어 excludeLeadFromCalc가 적용되고, 기관B(최우수 S)는 EXCLUDE 규칙으로 완전 제외된다.
+  {
+    id: "p-015",
+    projectNumber: "RS-2024-00262077",
+    projectName: "시설원예 스마트팜 환경제어 시스템 개발",
+    agencyId: "fa-006",
+    agency: "농촌진흥청",
+    leadInstitutionId: "inst-016",
+    leadInstitutionName: "국립원예특작과학원",
+    totalBudget: 2_610_000_000,
+    startDate: "2024-01-01",
+    endDate: "2026-12-31",
+    totalTerms: 3,
+    currentTerm: 3,
+    status: "ACTIVE",
+    agreementType: "STAGED",
+    stages: [{ stageNumber: 1, startTermNumber: 1, endTermNumber: 3 }],
+    researchLead: "정원예",
+    projectCode: "RDA2-P001-A",
+    projectDivision: "공동",
+    assignedManager: "박담당",
+    registeredAt: "2024-01-05",
+  },
 ];
 
 // ============================================================
@@ -891,6 +1099,32 @@ export const projectMembers: ProjectMember[] = [
   { id: "pm-043", projectId: "p-011", projectNumber: "RS-2024-00237560", institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", role: "PARTICIPANT", budget: 550_000_000, feeRate: 3.5, calculatedFee: 0, institutionGrade: "최우수(S)", settlementType: "자체정산", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 100_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 2, cashBudget: 150_000_000, inKindBudget: 0 }, { termYear: 2026, termNumber: 3, cashBudget: 300_000_000, inKindBudget: 0 }] },
   { id: "pm-044", projectId: "p-011", projectNumber: "RS-2024-00237560", institutionId: "inst-008", institutionName: "그린바이오텍(주)", institutionType: "중소기업", role: "PARTICIPANT", budget: 350_000_000, feeRate: 3.5, calculatedFee: 0, institutionGrade: "우수(A)", settlementType: "위탁정산", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 50_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 2, cashBudget: 100_000_000, inKindBudget: 0 }, { termYear: 2026, termNumber: 3, cashBudget: 200_000_000, inKindBudget: 0 }] },
   { id: "pm-045", projectId: "p-011", projectNumber: "RS-2024-00237560", institutionId: "inst-009", institutionName: "(주)미래반도체", institutionType: "중소기업", role: "PARTICIPANT", budget: 300_000_000, feeRate: 3.5, calculatedFee: 0, institutionGrade: "일반", settlementType: "위탁정산", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 50_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 2, cashBudget: 100_000_000, inKindBudget: 0 }, { termYear: 2026, termNumber: 3, cashBudget: 150_000_000, inKindBudget: 0 }] },
+
+  // p-012: 삼화전자 주관, 3개 기관 (IITP 단계협약 예시 — "과제 구성 예시(P001·A과제)" 템플릿을 EXCLUDE 모드로 재현, 1단계 3년차)
+  // 부산대(최우수 S·비영리)는 IITP 정책상 산정기준액에서 완전 제외되어 전 연차 수수료 0원.
+  { id: "pm-046", projectId: "p-012", projectNumber: "RS-2024-00253119", institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", role: "LEAD", budget: 900_000_000, feeRate: 3.0, calculatedFee: 0, institutionGrade: "일반", settlementType: "위탁정산", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 200_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 2, cashBudget: 300_000_000, inKindBudget: 0 }, { termYear: 2026, termNumber: 3, cashBudget: 400_000_000, inKindBudget: 0 }] },
+  { id: "pm-047", projectId: "p-012", projectNumber: "RS-2024-00253119", institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", role: "PARTICIPANT", budget: 550_000_000, feeRate: 3.0, calculatedFee: 0, institutionGrade: "최우수(S)", settlementType: "위탁정산", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 100_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 2, cashBudget: 150_000_000, inKindBudget: 0 }, { termYear: 2026, termNumber: 3, cashBudget: 300_000_000, inKindBudget: 0 }] },
+  { id: "pm-048", projectId: "p-012", projectNumber: "RS-2024-00253119", institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 350_000_000, feeRate: 3.0, calculatedFee: 0, institutionGrade: "우수(A)", settlementType: "위탁정산", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 50_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 2, cashBudget: 100_000_000, inKindBudget: 0 }, { termYear: 2026, termNumber: 3, cashBudget: 200_000_000, inKindBudget: 0 }] },
+  { id: "pm-049", projectId: "p-012", projectNumber: "RS-2024-00253119", institutionId: "inst-008", institutionName: "그린바이오텍(주)", institutionType: "중소기업", role: "PARTICIPANT", budget: 300_000_000, feeRate: 3.0, calculatedFee: 0, institutionGrade: "일반", settlementType: "위탁정산", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 50_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 2, cashBudget: 100_000_000, inKindBudget: 0 }, { termYear: 2026, termNumber: 3, cashBudget: 150_000_000, inKindBudget: 0 }] },
+
+  // p-013: RDA1 단계협약 검증용 — 매년 총사업비(현금+현물) 350,000,000원 고정(3~5억 구간, 표준수수료 1,452,000원 매년 동일)으로 유지해
+  // 1단계(1~3년차)·2단계(4~5년차) 각각의 연차상시(85%)·정산(100%+이월분) 청구액을 화면에서 바로 비교할 수 있게 함.
+  { id: "pm-050", projectId: "p-013", projectNumber: "RS-2021-00300001", institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", role: "LEAD", budget: 200_000_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "일반", annualBudgets: [{ termYear: 2021, termNumber: 1, cashBudget: 200_000_000, inKindBudget: 0 }, { termYear: 2022, termNumber: 2, cashBudget: 200_000_000, inKindBudget: 0 }, { termYear: 2023, termNumber: 3, cashBudget: 200_000_000, inKindBudget: 0 }, { termYear: 2024, termNumber: 4, cashBudget: 200_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 5, cashBudget: 200_000_000, inKindBudget: 0 }] },
+  { id: "pm-051", projectId: "p-013", projectNumber: "RS-2021-00300001", institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", role: "PARTICIPANT", budget: 150_000_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "일반", annualBudgets: [{ termYear: 2021, termNumber: 1, cashBudget: 150_000_000, inKindBudget: 0 }, { termYear: 2022, termNumber: 2, cashBudget: 150_000_000, inKindBudget: 0 }, { termYear: 2023, termNumber: 3, cashBudget: 150_000_000, inKindBudget: 0 }, { termYear: 2024, termNumber: 4, cashBudget: 150_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 5, cashBudget: 150_000_000, inKindBudget: 0 }] },
+
+  // p-014: RDA1 과제구성예시(P001·A과제) 그대로 재현 — 기관A(주관·일반) 1,200,000,000 / 기관B(공동·최우수·업무안함) 550,000,000 /
+  // 기관C(공동·우수·위탁정산) 410,000,000 / 기관D(공동·일반·위탁정산) 450,000,000, 연차별 합계 570M/820M/1,220M(3년차 정산)
+  { id: "pm-052", projectId: "p-014", projectNumber: "RS-2021-00311234", institutionId: "inst-012", institutionName: "다솜팜텍(주)", institutionType: "중소기업", role: "LEAD", budget: 1_200_000_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "일반", settlementType: "위탁정산", annualBudgets: [{ termYear: 2021, termNumber: 1, cashBudget: 300_000_000, inKindBudget: 0 }, { termYear: 2022, termNumber: 2, cashBudget: 400_000_000, inKindBudget: 0 }, { termYear: 2023, termNumber: 3, cashBudget: 500_000_000, inKindBudget: 0 }] },
+  { id: "pm-053", projectId: "p-014", projectNumber: "RS-2021-00311234", institutionId: "inst-013", institutionName: "전북대학교", institutionType: "대학", role: "PARTICIPANT", budget: 550_000_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "최우수(S)", annualBudgets: [{ termYear: 2021, termNumber: 1, cashBudget: 100_000_000, inKindBudget: 0 }, { termYear: 2022, termNumber: 2, cashBudget: 150_000_000, inKindBudget: 0 }, { termYear: 2023, termNumber: 3, cashBudget: 300_000_000, inKindBudget: 0 }] },
+  { id: "pm-054", projectId: "p-014", projectNumber: "RS-2021-00311234", institutionId: "inst-014", institutionName: "한국식품연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 410_000_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "우수(A)", settlementType: "위탁정산", annualBudgets: [{ termYear: 2021, termNumber: 1, cashBudget: 70_000_000, inKindBudget: 0 }, { termYear: 2022, termNumber: 2, cashBudget: 120_000_000, inKindBudget: 0 }, { termYear: 2023, termNumber: 3, cashBudget: 220_000_000, inKindBudget: 0 }] },
+  { id: "pm-055", projectId: "p-014", projectNumber: "RS-2021-00311234", institutionId: "inst-015", institutionName: "청보식물(주)", institutionType: "중소기업", role: "PARTICIPANT", budget: 450_000_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "일반", settlementType: "위탁정산", annualBudgets: [{ termYear: 2021, termNumber: 1, cashBudget: 100_000_000, inKindBudget: 0 }, { termYear: 2022, termNumber: 2, cashBudget: 150_000_000, inKindBudget: 0 }, { termYear: 2023, termNumber: 3, cashBudget: 200_000_000, inKindBudget: 0 }] },
+
+  // p-015: RDA2 과제구성예시(P001·A과제) 그대로 재현 — 기관A(주관·소속기관·excludeLeadFromCalc로 완전제외) 1,200,000,000 /
+  // 기관B(공동·최우수·EXCLUDE 완전제외) 550,000,000 / 기관C(공동·우수·위탁정산) 410,000,000 / 기관D(공동·일반·위탁정산) 450,000,000
+  { id: "pm-056", projectId: "p-015", projectNumber: "RS-2024-00262077", institutionId: "inst-016", institutionName: "국립원예특작과학원", institutionType: "공공기관", role: "LEAD", budget: 1_200_000_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "일반", settlementType: "위탁정산", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 300_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 2, cashBudget: 400_000_000, inKindBudget: 0 }, { termYear: 2026, termNumber: 3, cashBudget: 500_000_000, inKindBudget: 0 }] },
+  { id: "pm-057", projectId: "p-015", projectNumber: "RS-2024-00262077", institutionId: "inst-017", institutionName: "충남대학교", institutionType: "대학", role: "PARTICIPANT", budget: 550_000_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "최우수(S)", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 100_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 2, cashBudget: 150_000_000, inKindBudget: 0 }, { termYear: 2026, termNumber: 3, cashBudget: 300_000_000, inKindBudget: 0 }] },
+  { id: "pm-058", projectId: "p-015", projectNumber: "RS-2024-00262077", institutionId: "inst-018", institutionName: "한국농촌경제연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 410_000_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "우수(A)", settlementType: "위탁정산", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 70_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 2, cashBudget: 120_000_000, inKindBudget: 0 }, { termYear: 2026, termNumber: 3, cashBudget: 220_000_000, inKindBudget: 0 }] },
+  { id: "pm-059", projectId: "p-015", projectNumber: "RS-2024-00262077", institutionId: "inst-019", institutionName: "새싹팜텍(주)", institutionType: "중소기업", role: "PARTICIPANT", budget: 450_000_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "일반", settlementType: "위탁정산", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 100_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 2, cashBudget: 150_000_000, inKindBudget: 0 }, { termYear: 2026, termNumber: 3, cashBudget: 200_000_000, inKindBudget: 0 }] },
 ];
 
 // ============================================================
@@ -1339,6 +1573,21 @@ export const termFees: TermFee[] = [
   { id: "tf-p011-y3-a", projectNumber: "RS-2024-00237560", projectName: "고효율 수소연료전지 스택 소재 개발", termYear: 2026, termNumber: 3, institutionId: "inst-008", institutionName: "그린바이오텍(주)", institutionType: "중소기업", budget: 200_000_000, feeRate: 3.5, calculatedFee: 527_040, appliedFee: 631_782, standardFee: 527_040, unclaimedFee: 0, status: "DRAFT" },
   { id: "tf-p011-y3-b", projectNumber: "RS-2024-00237560", projectName: "고효율 수소연료전지 스택 소재 개발", termYear: 2026, termNumber: 3, institutionId: "inst-009", institutionName: "(주)미래반도체", institutionType: "중소기업", budget: 150_000_000, feeRate: 3.5, calculatedFee: 395_280, appliedFee: 500_022, standardFee: 395_280, unclaimedFee: 0, status: "DRAFT" },
 
+  // p-012 1~3연차 — "과제 구성 예시(P001·A과제)" 템플릿을 IITP(EXCLUDE 모드, S등급 완전제외) 정책의
+  // calcTermFee 실제 계산으로 재현. 부산대(최우수 S)는 산정기준액에서 완전 제외되어 전 연차 0원.
+  { id: "tf-p012-y1-lead", projectNumber: "RS-2024-00253119", projectName: "지능형 엣지 AI 통신모듈 개발", termYear: 2024, termNumber: 1, institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", budget: 200_000_000, feeRate: 3.0, calculatedFee: 1_161_500, appliedFee: 987_275, standardFee: 1_161_500, unclaimedFee: 174_225, status: "DRAFT" },
+  { id: "tf-p012-y1-s", projectNumber: "RS-2024-00253119", projectName: "지능형 엣지 AI 통신모듈 개발", termYear: 2024, termNumber: 1, institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", budget: 100_000_000, feeRate: 3.0, calculatedFee: 0, appliedFee: 0, standardFee: 0, unclaimedFee: 0, status: "DRAFT" },
+  { id: "tf-p012-y1-a", projectNumber: "RS-2024-00253119", projectName: "지능형 엣지 AI 통신모듈 개발", termYear: 2024, termNumber: 1, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 50_000_000, feeRate: 3.0, calculatedFee: 290_375, appliedFee: 246_819, standardFee: 290_375, unclaimedFee: 43_556, status: "DRAFT" },
+  { id: "tf-p012-y1-b", projectNumber: "RS-2024-00253119", projectName: "지능형 엣지 AI 통신모듈 개발", termYear: 2024, termNumber: 1, institutionId: "inst-008", institutionName: "그린바이오텍(주)", institutionType: "중소기업", budget: 50_000_000, feeRate: 3.0, calculatedFee: 290_375, appliedFee: 246_819, standardFee: 290_375, unclaimedFee: 43_556, status: "DRAFT" },
+  { id: "tf-p012-y2-lead", projectNumber: "RS-2024-00253119", projectName: "지능형 엣지 AI 통신모듈 개발", termYear: 2025, termNumber: 2, institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", budget: 300_000_000, feeRate: 3.0, calculatedFee: 1_136_430, appliedFee: 965_966, standardFee: 1_136_430, unclaimedFee: 170_464, status: "DRAFT" },
+  { id: "tf-p012-y2-s", projectNumber: "RS-2024-00253119", projectName: "지능형 엣지 AI 통신모듈 개발", termYear: 2025, termNumber: 2, institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", budget: 150_000_000, feeRate: 3.0, calculatedFee: 0, appliedFee: 0, standardFee: 0, unclaimedFee: 0, status: "DRAFT" },
+  { id: "tf-p012-y2-a", projectNumber: "RS-2024-00253119", projectName: "지능형 엣지 AI 통신모듈 개발", termYear: 2025, termNumber: 2, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 100_000_000, feeRate: 3.0, calculatedFee: 378_810, appliedFee: 321_989, standardFee: 378_810, unclaimedFee: 56_821, status: "DRAFT" },
+  { id: "tf-p012-y2-b", projectNumber: "RS-2024-00253119", projectName: "지능형 엣지 AI 통신모듈 개발", termYear: 2025, termNumber: 2, institutionId: "inst-008", institutionName: "그린바이오텍(주)", institutionType: "중소기업", budget: 100_000_000, feeRate: 3.0, calculatedFee: 378_810, appliedFee: 321_988, standardFee: 378_810, unclaimedFee: 56_822, status: "DRAFT" },
+  { id: "tf-p012-y3-lead", projectNumber: "RS-2024-00253119", projectName: "지능형 엣지 AI 통신모듈 개발", termYear: 2026, termNumber: 3, institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", budget: 400_000_000, feeRate: 3.0, calculatedFee: 1_010_160, appliedFee: 1_354_849, standardFee: 1_010_160, unclaimedFee: 0, status: "DRAFT" },
+  { id: "tf-p012-y3-s", projectNumber: "RS-2024-00253119", projectName: "지능형 엣지 AI 통신모듈 개발", termYear: 2026, termNumber: 3, institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", budget: 300_000_000, feeRate: 3.0, calculatedFee: 0, appliedFee: 0, standardFee: 0, unclaimedFee: 0, status: "DRAFT" },
+  { id: "tf-p012-y3-a", projectNumber: "RS-2024-00253119", projectName: "지능형 엣지 AI 통신모듈 개발", termYear: 2026, termNumber: 3, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 200_000_000, feeRate: 3.0, calculatedFee: 505_080, appliedFee: 605_457, standardFee: 505_080, unclaimedFee: 0, status: "DRAFT" },
+  { id: "tf-p012-y3-b", projectNumber: "RS-2024-00253119", projectName: "지능형 엣지 AI 통신모듈 개발", termYear: 2026, termNumber: 3, institutionId: "inst-008", institutionName: "그린바이오텍(주)", institutionType: "중소기업", budget: 150_000_000, feeRate: 3.0, calculatedFee: 378_810, appliedFee: 479_188, standardFee: 378_810, unclaimedFee: 0, status: "DRAFT" },
+
   // p-003 1연차 2022 — 주관: 나노소재기술 (IITP · 주관기관만 발송)
   { id: "tf-031", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2022, termNumber: 1, institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", budget: 600_000_000, feeRate: 3.0, calculatedFee: 1_060_875, appliedFee: 901_743, standardFee: 1_060_875, unclaimedFee: 159_132, status: "BILLED" },
   { id: "tf-032", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2022, termNumber: 1, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 400_000_000, feeRate: 3.0, calculatedFee: 707_250, appliedFee: 601_162, standardFee: 707_250, unclaimedFee: 106_088, status: "CONFIRMED" },
@@ -1362,6 +1611,50 @@ export const termFees: TermFee[] = [
   { id: "tf-037", projectNumber: "RS-2024-00219874", projectName: "의료용 생체흡수성 임플란트 소재 개발", termYear: 2023, termNumber: 1, institutionId: "inst-008", institutionName: "그린바이오텍(주)", institutionType: "중소기업", budget: 1_100_000_000, feeRate: 3.0, calculatedFee: 0, appliedFee: 0, standardFee: 0, unclaimedFee: 0, status: "BILLED" },
   { id: "tf-038", projectNumber: "RS-2024-00219874", projectName: "의료용 생체흡수성 임플란트 소재 개발", termYear: 2023, termNumber: 1, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 350_000_000, feeRate: 2.0, calculatedFee: 0, appliedFee: 0, standardFee: 0, unclaimedFee: 0, status: "BILLED" },
   { id: "tf-039", projectNumber: "RS-2024-00219874", projectName: "의료용 생체흡수성 임플란트 소재 개발", termYear: 2023, termNumber: 1, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 200_000_000, feeRate: 2.0, calculatedFee: 1_080_000, appliedFee: 918_000, standardFee: 1_080_000, unclaimedFee: 162_000, status: "BILLED" },
+
+  // p-013 1~5연차 — RDA1 2단계 단계협약 검증용. autoGenerateTermFees 실제 계산값을 그대로 정적으로
+  // 채워둠(p-002/p-011/p-012와 동일한 이유 — 시딩 시점에 바로 "수수료 청구 관리" 목록에 나타나야 함).
+  { id: "tf-p013-y1-lead", projectNumber: "RS-2021-00300001", projectName: "RDA1 단계협약 검증용 과제", termYear: 2021, termNumber: 1, institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", budget: 200_000_000, feeRate: 2.8, calculatedFee: 829_714, appliedFee: 705_257, standardFee: 829_714, unclaimedFee: 124_457, status: "DRAFT" },
+  { id: "tf-p013-y1-p", projectNumber: "RS-2021-00300001", projectName: "RDA1 단계협약 검증용 과제", termYear: 2021, termNumber: 1, institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", budget: 150_000_000, feeRate: 2.8, calculatedFee: 622_286, appliedFee: 528_943, standardFee: 622_286, unclaimedFee: 93_343, status: "DRAFT" },
+  { id: "tf-p013-y2-lead", projectNumber: "RS-2021-00300001", projectName: "RDA1 단계협약 검증용 과제", termYear: 2022, termNumber: 2, institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", budget: 200_000_000, feeRate: 2.8, calculatedFee: 829_714, appliedFee: 705_257, standardFee: 829_714, unclaimedFee: 124_457, status: "DRAFT" },
+  { id: "tf-p013-y2-p", projectNumber: "RS-2021-00300001", projectName: "RDA1 단계협약 검증용 과제", termYear: 2022, termNumber: 2, institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", budget: 150_000_000, feeRate: 2.8, calculatedFee: 622_286, appliedFee: 528_943, standardFee: 622_286, unclaimedFee: 93_343, status: "DRAFT" },
+  { id: "tf-p013-y3-lead", projectNumber: "RS-2021-00300001", projectName: "RDA1 단계협약 검증용 과제", termYear: 2023, termNumber: 3, institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", budget: 200_000_000, feeRate: 2.8, calculatedFee: 829_714, appliedFee: 1_078_628, standardFee: 829_714, unclaimedFee: 0, status: "DRAFT" },
+  { id: "tf-p013-y3-p", projectNumber: "RS-2021-00300001", projectName: "RDA1 단계협약 검증용 과제", termYear: 2023, termNumber: 3, institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", budget: 150_000_000, feeRate: 2.8, calculatedFee: 622_286, appliedFee: 808_972, standardFee: 622_286, unclaimedFee: 0, status: "DRAFT" },
+  { id: "tf-p013-y4-lead", projectNumber: "RS-2021-00300001", projectName: "RDA1 단계협약 검증용 과제", termYear: 2024, termNumber: 4, institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", budget: 200_000_000, feeRate: 2.8, calculatedFee: 829_714, appliedFee: 705_257, standardFee: 829_714, unclaimedFee: 124_457, status: "DRAFT" },
+  { id: "tf-p013-y4-p", projectNumber: "RS-2021-00300001", projectName: "RDA1 단계협약 검증용 과제", termYear: 2024, termNumber: 4, institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", budget: 150_000_000, feeRate: 2.8, calculatedFee: 622_286, appliedFee: 528_943, standardFee: 622_286, unclaimedFee: 93_343, status: "DRAFT" },
+  { id: "tf-p013-y5-lead", projectNumber: "RS-2021-00300001", projectName: "RDA1 단계협약 검증용 과제", termYear: 2025, termNumber: 5, institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", budget: 200_000_000, feeRate: 2.8, calculatedFee: 829_714, appliedFee: 954_171, standardFee: 829_714, unclaimedFee: 0, status: "DRAFT" },
+  { id: "tf-p013-y5-p", projectNumber: "RS-2021-00300001", projectName: "RDA1 단계협약 검증용 과제", termYear: 2025, termNumber: 5, institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", budget: 150_000_000, feeRate: 2.8, calculatedFee: 622_286, appliedFee: 715_629, standardFee: 622_286, unclaimedFee: 0, status: "DRAFT" },
+
+  // p-014 1~3연차 — RDA1 "과제 구성 예시(P001·A과제)" 템플릿 재현. 전북대학교(최우수 S·비영리)는
+  // EXCLUDE 규칙으로 산정기준액에서 완전 제외되어 전 연차 0원(문서의 "업무안함"과 동일).
+  { id: "tf-p014-y1-lead", projectNumber: "RS-2021-00311234", projectName: "노지작물 스마트 재배관리 시스템 개발", termYear: 2021, termNumber: 1, institutionId: "inst-012", institutionName: "다솜팜텍(주)", institutionType: "중소기업", budget: 300_000_000, feeRate: 2.8, calculatedFee: 968_936, appliedFee: 823_596, standardFee: 968_936, unclaimedFee: 145_340, status: "DRAFT" },
+  { id: "tf-p014-y1-s", projectNumber: "RS-2021-00311234", projectName: "노지작물 스마트 재배관리 시스템 개발", termYear: 2021, termNumber: 1, institutionId: "inst-013", institutionName: "전북대학교", institutionType: "대학", budget: 100_000_000, feeRate: 2.8, calculatedFee: 0, appliedFee: 0, standardFee: 0, unclaimedFee: 0, status: "DRAFT" },
+  { id: "tf-p014-y1-a", projectNumber: "RS-2021-00311234", projectName: "노지작물 스마트 재배관리 시스템 개발", termYear: 2021, termNumber: 1, institutionId: "inst-014", institutionName: "한국식품연구원", institutionType: "정부출연연구소", budget: 70_000_000, feeRate: 2.8, calculatedFee: 226_085, appliedFee: 192_172, standardFee: 226_085, unclaimedFee: 33_913, status: "DRAFT" },
+  { id: "tf-p014-y1-d", projectNumber: "RS-2021-00311234", projectName: "노지작물 스마트 재배관리 시스템 개발", termYear: 2021, termNumber: 1, institutionId: "inst-015", institutionName: "청보식물(주)", institutionType: "중소기업", budget: 100_000_000, feeRate: 2.8, calculatedFee: 322_979, appliedFee: 274_532, standardFee: 322_979, unclaimedFee: 48_447, status: "DRAFT" },
+  { id: "tf-p014-y2-lead", projectNumber: "RS-2021-00311234", projectName: "노지작물 스마트 재배관리 시스템 개발", termYear: 2022, termNumber: 2, institutionId: "inst-012", institutionName: "다솜팜텍(주)", institutionType: "중소기업", budget: 400_000_000, feeRate: 2.8, calculatedFee: 988_657, appliedFee: 840_358, standardFee: 988_657, unclaimedFee: 148_299, status: "DRAFT" },
+  { id: "tf-p014-y2-s", projectNumber: "RS-2021-00311234", projectName: "노지작물 스마트 재배관리 시스템 개발", termYear: 2022, termNumber: 2, institutionId: "inst-013", institutionName: "전북대학교", institutionType: "대학", budget: 150_000_000, feeRate: 2.8, calculatedFee: 0, appliedFee: 0, standardFee: 0, unclaimedFee: 0, status: "DRAFT" },
+  { id: "tf-p014-y2-a", projectNumber: "RS-2021-00311234", projectName: "노지작물 스마트 재배관리 시스템 개발", termYear: 2022, termNumber: 2, institutionId: "inst-014", institutionName: "한국식품연구원", institutionType: "정부출연연구소", budget: 120_000_000, feeRate: 2.8, calculatedFee: 296_597, appliedFee: 252_108, standardFee: 296_597, unclaimedFee: 44_489, status: "DRAFT" },
+  { id: "tf-p014-y2-d", projectNumber: "RS-2021-00311234", projectName: "노지작물 스마트 재배관리 시스템 개발", termYear: 2022, termNumber: 2, institutionId: "inst-015", institutionName: "청보식물(주)", institutionType: "중소기업", budget: 150_000_000, feeRate: 2.8, calculatedFee: 370_746, appliedFee: 315_134, standardFee: 370_746, unclaimedFee: 55_612, status: "DRAFT" },
+  { id: "tf-p014-y3-lead", projectNumber: "RS-2021-00311234", projectName: "노지작물 스마트 재배관리 시스템 개발", termYear: 2023, termNumber: 3, institutionId: "inst-012", institutionName: "다솜팜텍(주)", institutionType: "중소기업", budget: 500_000_000, feeRate: 2.8, calculatedFee: 900_000, appliedFee: 1_193_639, standardFee: 900_000, unclaimedFee: 0, status: "DRAFT" },
+  { id: "tf-p014-y3-s", projectNumber: "RS-2021-00311234", projectName: "노지작물 스마트 재배관리 시스템 개발", termYear: 2023, termNumber: 3, institutionId: "inst-013", institutionName: "전북대학교", institutionType: "대학", budget: 300_000_000, feeRate: 2.8, calculatedFee: 0, appliedFee: 0, standardFee: 0, unclaimedFee: 0, status: "DRAFT" },
+  { id: "tf-p014-y3-a", projectNumber: "RS-2021-00311234", projectName: "노지작물 스마트 재배관리 시스템 개발", termYear: 2023, termNumber: 3, institutionId: "inst-014", institutionName: "한국식품연구원", institutionType: "정부출연연구소", budget: 220_000_000, feeRate: 2.8, calculatedFee: 396_000, appliedFee: 474_402, standardFee: 396_000, unclaimedFee: 0, status: "DRAFT" },
+  { id: "tf-p014-y3-d", projectNumber: "RS-2021-00311234", projectName: "노지작물 스마트 재배관리 시스템 개발", termYear: 2023, termNumber: 3, institutionId: "inst-015", institutionName: "청보식물(주)", institutionType: "중소기업", budget: 200_000_000, feeRate: 2.8, calculatedFee: 360_000, appliedFee: 464_059, standardFee: 360_000, unclaimedFee: 0, status: "DRAFT" },
+
+  // p-015: RDA2 과제구성예시(P001·A과제) 재현 — calcTermFee 실제 계산값을 그대로 정적으로 넣음.
+  // 기관A(주관·excludeLeadFromCalc)·기관B(최우수S·EXCLUDE)는 산정기준액에서 완전 제외되어 전 연차 0원.
+  // 기관C·D만 산정 대상 — 3년차는 정산(100%+1·2년차 이월분 합산).
+  { id: "tf-p015-y1-lead", projectNumber: "RS-2024-00262077", projectName: "시설원예 스마트팜 환경제어 시스템 개발", termYear: 2024, termNumber: 1, institutionId: "inst-016", institutionName: "국립원예특작과학원", institutionType: "공공기관", budget: 300_000_000, feeRate: 2.8, calculatedFee: 0, appliedFee: 0, standardFee: 0, unclaimedFee: 0, status: "DRAFT" },
+  { id: "tf-p015-y1-b", projectNumber: "RS-2024-00262077", projectName: "시설원예 스마트팜 환경제어 시스템 개발", termYear: 2024, termNumber: 1, institutionId: "inst-017", institutionName: "충남대학교", institutionType: "대학", budget: 100_000_000, feeRate: 2.8, calculatedFee: 0, appliedFee: 0, standardFee: 0, unclaimedFee: 0, status: "DRAFT" },
+  { id: "tf-p015-y1-c", projectNumber: "RS-2024-00262077", projectName: "시설원예 스마트팜 환경제어 시스템 개발", termYear: 2024, termNumber: 1, institutionId: "inst-018", institutionName: "한국농촌경제연구원", institutionType: "정부출연연구소", budget: 70_000_000, feeRate: 2.8, calculatedFee: 443_882, appliedFee: 377_300, standardFee: 443_882, unclaimedFee: 66_582, status: "DRAFT" },
+  { id: "tf-p015-y1-d", projectNumber: "RS-2024-00262077", projectName: "시설원예 스마트팜 환경제어 시스템 개발", termYear: 2024, termNumber: 1, institutionId: "inst-019", institutionName: "새싹팜텍(주)", institutionType: "중소기업", budget: 100_000_000, feeRate: 2.8, calculatedFee: 634_118, appliedFee: 539_000, standardFee: 634_118, unclaimedFee: 95_118, status: "DRAFT" },
+  { id: "tf-p015-y2-lead", projectNumber: "RS-2024-00262077", projectName: "시설원예 스마트팜 환경제어 시스템 개발", termYear: 2025, termNumber: 2, institutionId: "inst-016", institutionName: "국립원예특작과학원", institutionType: "공공기관", budget: 400_000_000, feeRate: 2.8, calculatedFee: 0, appliedFee: 0, standardFee: 0, unclaimedFee: 0, status: "DRAFT" },
+  { id: "tf-p015-y2-b", projectNumber: "RS-2024-00262077", projectName: "시설원예 스마트팜 환경제어 시스템 개발", termYear: 2025, termNumber: 2, institutionId: "inst-017", institutionName: "충남대학교", institutionType: "대학", budget: 150_000_000, feeRate: 2.8, calculatedFee: 0, appliedFee: 0, standardFee: 0, unclaimedFee: 0, status: "DRAFT" },
+  { id: "tf-p015-y2-c", projectNumber: "RS-2024-00262077", projectName: "시설원예 스마트팜 환경제어 시스템 개발", termYear: 2025, termNumber: 2, institutionId: "inst-018", institutionName: "한국농촌경제연구원", institutionType: "정부출연연구소", budget: 120_000_000, feeRate: 2.8, calculatedFee: 528_000, appliedFee: 448_800, standardFee: 528_000, unclaimedFee: 79_200, status: "DRAFT" },
+  { id: "tf-p015-y2-d", projectNumber: "RS-2024-00262077", projectName: "시설원예 스마트팜 환경제어 시스템 개발", termYear: 2025, termNumber: 2, institutionId: "inst-019", institutionName: "새싹팜텍(주)", institutionType: "중소기업", budget: 150_000_000, feeRate: 2.8, calculatedFee: 660_000, appliedFee: 561_000, standardFee: 660_000, unclaimedFee: 99_000, status: "DRAFT" },
+  { id: "tf-p015-y3-lead", projectNumber: "RS-2024-00262077", projectName: "시설원예 스마트팜 환경제어 시스템 개발", termYear: 2026, termNumber: 3, institutionId: "inst-016", institutionName: "국립원예특작과학원", institutionType: "공공기관", budget: 500_000_000, feeRate: 2.8, calculatedFee: 0, appliedFee: 0, standardFee: 0, unclaimedFee: 0, status: "DRAFT" },
+  { id: "tf-p015-y3-b", projectNumber: "RS-2024-00262077", projectName: "시설원예 스마트팜 환경제어 시스템 개발", termYear: 2026, termNumber: 3, institutionId: "inst-017", institutionName: "충남대학교", institutionType: "대학", budget: 300_000_000, feeRate: 2.8, calculatedFee: 0, appliedFee: 0, standardFee: 0, unclaimedFee: 0, status: "DRAFT" },
+  { id: "tf-p015-y3-c", projectNumber: "RS-2024-00262077", projectName: "시설원예 스마트팜 환경제어 시스템 개발", termYear: 2026, termNumber: 3, institutionId: "inst-018", institutionName: "한국농촌경제연구원", institutionType: "정부출연연구소", budget: 220_000_000, feeRate: 2.8, calculatedFee: 760_571, appliedFee: 906_353, standardFee: 760_571, unclaimedFee: 0, status: "DRAFT" },
+  { id: "tf-p015-y3-d", projectNumber: "RS-2024-00262077", projectName: "시설원예 스마트팜 환경제어 시스템 개발", termYear: 2026, termNumber: 3, institutionId: "inst-019", institutionName: "새싹팜텍(주)", institutionType: "중소기업", budget: 200_000_000, feeRate: 2.8, calculatedFee: 691_429, appliedFee: 885_547, standardFee: 691_429, unclaimedFee: 0, status: "DRAFT" },
 ];
 
 // ============================================================

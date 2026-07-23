@@ -374,8 +374,8 @@ export function calcTermFee(input: CalcInput): CalcResult {
   });
   ratioGroups.forEach((indices, ratio) => {
     const groupCalc = indices.map((i) => exemptStdShares[i]);
-    // 그룹 청구 총액도 절사(내림)해서 정하고(기존 방식과 동일), 그 총액을 그룹 내에서 다시 정확히 배분한다.
-    const groupBillTotal = Math.floor(groupCalc.reduce((s, c) => s + c, 0) * ratio);
+    // 그룹 청구 총액은 반올림해서 정하고(일반기관과 동일 규칙), 그 총액을 그룹 내에서 다시 정확히 배분한다.
+    const groupBillTotal = Math.round(groupCalc.reduce((s, c) => s + c, 0) * ratio);
     const groupBill = allocateExact(groupBillTotal, groupCalc);
     indices.forEach((i, k) => { exemptBillShares[i] = groupBill[k]; });
   });
@@ -405,8 +405,9 @@ export function calcTermFee(input: CalcInput): CalcResult {
   let generalUnclaimedFee: number;
 
   if (workType === "ANNUAL") {
-    // 산정액(generalCalcFee)에서 청구비율(85%)만큼 당해 청구액을 뗄 때는 반올림 없이 절사한다.
-    generalBillingFee = Math.floor(generalCalcFee * billingRatio);
+    // 산정액(generalCalcFee)에서 청구비율(85%)만큼 당해 청구액을 뗄 때는 반올림한다(정확히 .5원에
+    // 걸리는 경우 위로 반올림) — 절사(Math.floor)하면 .5원 경계에서 1원 부족하게 청구되는 사례가 있었다.
+    generalBillingFee = Math.round(generalCalcFee * billingRatio);
     generalUnclaimedFee = generalCalcFee - generalBillingFee;
   } else {
     // 정산: 일반 100% + 과거 미청구 일반분 합산

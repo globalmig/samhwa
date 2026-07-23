@@ -1005,11 +1005,14 @@ export function autoGenerateTermFees(projectId: string): void {
     // 단계 내 누적 미청구 계산
     const carriedOverUnclaimed = stageUnclaimed[stageNumber] ?? 0;
 
-    // 이 연차에 예산이 있는 기관만 추출
+    // 이 연차에 산정기준액(feeBasis)이 있는 기관만 추출 — CASH_PLUS_INKIND(RDA1/RDA2) 정책에서는
+    // 현금사업비가 0원이어도 현물사업비만으로 대상에 포함될 수 있으므로, cashBudget만으로 걸러내면
+    // 현물전용 공동기관이 산정 대상에서 통째로 빠지는 오류가 생긴다.
+    const feeBasis = policy.feeBasis ?? "CASH";
     const calcMembers: CalcMember[] = [];
     for (const m of members) {
       const ab = m.annualBudgets?.find((b) => b.termNumber === termNumber);
-      if (!ab || ab.cashBudget <= 0) continue;
+      if (!ab || getMemberAmount(ab, feeBasis) <= 0) continue;
       calcMembers.push({
         institutionId: m.institutionId,
         institutionName: m.institutionName,
@@ -1034,7 +1037,6 @@ export function autoGenerateTermFees(projectId: string): void {
     // 면제기관 / 완전제외기관 ID 집합
     const exemptIds = new Set(result.exemptBreakdown.map((e) => e.institutionId));
     const excludedIds = new Set(result.excludedInstitutionIds);
-    const feeBasis = policy.feeBasis ?? "CASH";
     const nonExemptMembers = calcMembers.filter(
       (m) => !exemptIds.has(m.institutionId) && !excludedIds.has(m.institutionId)
     );
