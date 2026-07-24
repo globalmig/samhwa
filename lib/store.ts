@@ -1186,21 +1186,23 @@ export function autoGenerateTermFees(projectId: string): void {
     });
 
     // 다음 연차로 단계 내 미청구 누적 (정산 연차면 해당 단계 미청구 리셋)
-    if (isActive) {
-      if (workType === "SETTLEMENT") {
-        stageUnclaimed[stageNumber] = 0;
-        stageUnclaimedByInst[stageNumber] = {};
-        stageExemptUnclaimedByInst[stageNumber] = {};
-      } else {
-        stageUnclaimed[stageNumber] = (stageUnclaimed[stageNumber] ?? 0) + result.generalUnclaimedFee;
-        stageUnclaimedByInst[stageNumber] = stageUnclaimedByInst[stageNumber] ?? {};
-        for (const [instId, amt] of Object.entries(instAnnualUnclaimed)) {
-          stageUnclaimedByInst[stageNumber][instId] = (stageUnclaimedByInst[stageNumber][instId] ?? 0) + amt;
-        }
-        stageExemptUnclaimedByInst[stageNumber] = stageExemptUnclaimedByInst[stageNumber] ?? {};
-        for (const [instId, amt] of Object.entries(instAnnualExemptUnclaimed)) {
-          stageExemptUnclaimedByInst[stageNumber][instId] = (stageExemptUnclaimedByInst[stageNumber][instId] ?? 0) + amt;
-        }
+    // 실제 달력상 연차 시작일(isActive) 도래 여부와 무관하게, 해당 연차의 사업비가 입력되어
+    // 계산된 이상(calcMembers가 있어 여기까지 온 이상) 항상 누적해야 한다 — 그렇지 않으면
+    // 전체 연차 사업비를 미리 입력해두고 실제 달력일보다 앞서 확정한 연차(예: 과제를 직접
+    // 생성해 4개 연차를 한번에 등록한 경우)의 미청구액이 정산 연차 합산에서 누락된다.
+    if (workType === "SETTLEMENT") {
+      stageUnclaimed[stageNumber] = 0;
+      stageUnclaimedByInst[stageNumber] = {};
+      stageExemptUnclaimedByInst[stageNumber] = {};
+    } else {
+      stageUnclaimed[stageNumber] = (stageUnclaimed[stageNumber] ?? 0) + result.generalUnclaimedFee;
+      stageUnclaimedByInst[stageNumber] = stageUnclaimedByInst[stageNumber] ?? {};
+      for (const [instId, amt] of Object.entries(instAnnualUnclaimed)) {
+        stageUnclaimedByInst[stageNumber][instId] = (stageUnclaimedByInst[stageNumber][instId] ?? 0) + amt;
+      }
+      stageExemptUnclaimedByInst[stageNumber] = stageExemptUnclaimedByInst[stageNumber] ?? {};
+      for (const [instId, amt] of Object.entries(instAnnualExemptUnclaimed)) {
+        stageExemptUnclaimedByInst[stageNumber][instId] = (stageExemptUnclaimedByInst[stageNumber][instId] ?? 0) + amt;
       }
     }
   }

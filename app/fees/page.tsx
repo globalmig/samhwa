@@ -510,6 +510,10 @@ function parseEmails(raw: string): string[] {
   return raw.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
 }
 
+function generateBatchId(): string {
+  return `BATCH-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.floor(Math.random() * 9000) + 1000}`;
+}
+
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function fileToDataUrl(file: File): Promise<string> {
@@ -625,8 +629,12 @@ function StandardAttachmentsPanel() {
 type AttachmentRow = { name: string; checked: boolean; dataUrl?: string };
 
 function DispatchModal({ target, onClose }: { target: DispatchTarget; onClose: () => void }) {
-  const { standardAttachments } = useStore();
+  const { standardAttachments, users } = useStore();
   const bizRegAttachment = standardAttachments.find((a) => a.id === "sa-biz-reg");
+  // getCurrentUser()는 로그인 시점 스냅샷이라 이후 등록된 하이웍스 계정 정보가 반영되지 않으므로,
+  // 실시간 store에서 같은 id의 사용자 레코드를 다시 찾아 발신 계정으로 사용한다.
+  const senderUser = users.find((u) => u.id === getCurrentUser()?.id) ?? null;
+  const canSendMail = !!senderUser?.hiworksEmail && !!senderUser?.hiworksMailPassword;
   const isOther = target.kind === "OTHER";
   const termLabel = `${target.termNumber}연차`;
 
@@ -701,6 +709,7 @@ ${COMPANY_INFO.name} 드림`;
   const [attachments,  setAttachments]  = useState<AttachmentRow[]>(() => buildAttachments(target.feeCategory));
   const [sending,      setSending]      = useState(false);
   const [sent,         setSent]         = useState(false);
+  const [sendError,    setSendError]    = useState("");
   const [showStandardPanel, setShowStandardPanel] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const replaceIndexRef = useRef<number | null>(null);
@@ -717,7 +726,7 @@ ${COMPANY_INFO.name} 드림`;
 
   const emails = parseEmails(toEmailRaw);
   const invalidEmails = emails.filter((e) => !EMAIL_RE.test(e));
-  const canSend = emails.length > 0 && invalidEmails.length === 0 && !sending;
+  const canSend = emails.length > 0 && invalidEmails.length === 0 && !sending && canSendMail;
 
   function toggleAttach(i: number) {
     setAttachments((prev) => prev.map((a, idx) => idx === i ? { ...a, checked: !a.checked } : a));
@@ -743,28 +752,57 @@ ${COMPANY_INFO.name} 드림`;
     });
   }
 
-  function handleSend() {
-    if (!canSend) return;
+  async function handleSend() {
+    if (!canSend || !senderUser?.hiworksEmail || !senderUser?.hiworksMailPassword) return;
     setSending(true);
-    setTimeout(() => {
-      const batchId = `BATCH-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.floor(Math.random() * 9000) + 1000}`;
-      addEmailDispatch({
-        batchId,
-        sentAt:               new Date().toISOString().replace("T", " ").slice(0, 16),
-        senderName:           getCurrentUser()?.name ?? "시스템",
-        recipientInstitution: target.leadInstitutionName,
-        recipientEmail:       emails.join(", "),
-        subject,
-        emailType:            isOther ? "OTHER" : "TAX_INVOICE",
-        feeCategory:          isOther ? undefined : feeCategory,
-        isReverseRequest:     target.kind === "REVERSE" ? true : undefined,
-        attachments:          attachments.filter((a) => a.checked).map((a) => a.name),
-        status:               "SUCCESS",
-        body,
+    setSendError("");
+
+    const checkedAttachments = attachments.filter((a) => a.checked);
+    const mailAttachments = checkedAttachments
+      .filter((a): a is AttachmentRow & { dataUrl: string } => !!a.dataUrl)
+      .map((a) => ({ filename: a.name, dataUrl: a.dataUrl }));
+
+    let status: "SUCCESS" | "FAILED" = "SUCCESS";
+    try {
+      const res = await fetch("/api/notices/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          senderEmail: senderUser.hiworksEmail,
+          senderPassword: senderUser.hiworksMailPassword,
+          senderName: senderUser.name,
+          to: emails,
+          subject,
+          text: body,
+          attachments: mailAttachments,
+        }),
       });
-      setSending(false);
-      setSent(true);
-    }, 600);
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        status = "FAILED";
+        setSendError(json.error || "메일 발송에 실패했습니다.");
+      }
+    } catch {
+      status = "FAILED";
+      setSendError("메일 발송 중 네트워크 오류가 발생했습니다.");
+    }
+
+    addEmailDispatch({
+      batchId: generateBatchId(),
+      sentAt:               new Date().toISOString().replace("T", " ").slice(0, 16),
+      senderName:           senderUser.name,
+      recipientInstitution: target.leadInstitutionName,
+      recipientEmail:       emails.join(", "),
+      subject,
+      emailType:            isOther ? "OTHER" : "TAX_INVOICE",
+      feeCategory:          isOther ? undefined : feeCategory,
+      isReverseRequest:     target.kind === "REVERSE" ? true : undefined,
+      attachments:          checkedAttachments.map((a) => a.name),
+      status,
+      body,
+    });
+    setSending(false);
+    if (status === "SUCCESS") setSent(true);
   }
 
   if (sent) {
@@ -902,6 +940,11 @@ ${COMPANY_INFO.name} 드림`;
                 <span className={`flex-1 text-xs truncate ${a.checked ? "text-slate-700" : "text-slate-300 line-through"}`}>
                   {a.name}
                 </span>
+                {!a.dataUrl && (
+                  <span className="text-[10px] text-amber-500 whitespace-nowrap" title="실제 파일이 등록되지 않아 발송 시 첨부되지 않습니다">
+                    파일 없음
+                  </span>
+                )}
                 <button
                   type="button"
                   onClick={() => { replaceIndexRef.current = i; fileInputRef.current?.click(); }}
@@ -934,6 +977,11 @@ ${COMPANY_INFO.name} 드림`;
           className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 text-slate-700 resize-y focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 font-mono leading-relaxed"
         />
       </div>
+
+      <p className="text-[11px] text-slate-400">
+        발신 계정: {canSendMail ? senderUser!.hiworksEmail : <span className="text-red-500">등록된 하이웍스 계정이 없습니다 (관리자 &gt; 사용자 관리에서 등록)</span>}
+      </p>
+      {sendError && <p className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{sendError}</p>}
 
       {/* 버튼 */}
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
@@ -1345,7 +1393,7 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
             <MoneyInput className={inputCls} value={form.govGrant} onChange={(v) => s("govGrant", v)} />
           </div>
           <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">당해 민간원금</label>
+            <label className="block text-xs font-medium text-slate-500 mb-1">당해 민간현금</label>
             <MoneyInput className={inputCls} value={form.privateCash} onChange={(v) => s("privateCash", v)} />
           </div>
           <div>

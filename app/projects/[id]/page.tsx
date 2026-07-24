@@ -11,7 +11,7 @@ import {
   addReceivable, updateReceivable, addEmailDispatch, updateTermFee, updateUnclaimedFee,
   updateProjectMember, autoGenerateTermFees, addProjectMember, deleteProjectMember, deleteProject,
 } from "@/lib/store";
-import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, EMPTY_NOTICE_TEMPLATE, COMPANY_INFO } from "@/lib/mock";
+import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type SystemUser, EMPTY_NOTICE_TEMPLATE, COMPANY_INFO } from "@/lib/mock";
 import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isNonProfitInstitution, resolveRdaAgencyId, type CalcMember } from "@/lib/fee-calculator";
 import { fmtWonFull, fmtDate, splitVatInclusive, addMonths } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
@@ -19,6 +19,7 @@ import Modal from "@/components/common/Modal";
 import MoneyInput from "@/components/common/MoneyInput";
 import DateInput from "@/components/common/DateInput";
 import NoticeLetterPreview, { type NoticeStatusRow } from "@/components/common/NoticeLetterPreview";
+import { buildNoticeEmailHtml } from "@/lib/notice-email-html";
 import InstitutionQuickAdd from "@/components/common/InstitutionQuickAdd";
 import UserMultiSelect from "@/components/common/UserMultiSelect";
 import AgreementStructureEditor from "@/components/common/AgreementStructureEditor";
@@ -619,6 +620,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500">정산구분</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-slate-500">현금예산 (원)</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-slate-500">현물예산 (원)</th>
+                <th className="text-right px-4 py-3 text-xs font-medium text-slate-500">합계금액 (원)</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500">구분</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-slate-500">산정 수수료 ({currentTerm}연차)</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 w-24">연차별 사업비</th>
@@ -710,6 +712,9 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                         <span className="text-sm text-slate-700">{fmtWonFull(inKindBudget)}</span>
                       )}
                     </td>
+                    <td className="px-4 py-3 text-right">
+                      <span className="text-sm font-medium text-slate-800">{fmtWonFull(cashBudget + inKindBudget)}</span>
+                    </td>
                     <td className="px-4 py-3 text-center">
                       {excludedIds.has(m.institutionId)
                         ? <span className="text-xs font-medium px-2 py-0.5 rounded bg-red-100 text-red-600">제외</span>
@@ -754,6 +759,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 <td className={`px-4 py-2.5 text-right font-bold ${budgetMatchesAnnual ? "text-slate-800" : "text-red-600"}`}>
                   현물 {fmtWonFull(totalInKindBudget)}
                 </td>
+                <td className="px-4 py-2.5 text-right font-bold text-slate-800">{fmtWonFull(totalCashBudget + totalInKindBudget)}</td>
                 <td />
                 <td className="px-4 py-2.5 text-right font-bold text-slate-800">{fmtWonFull(totalCalcFee)}</td>
                 <td />
@@ -1302,9 +1308,10 @@ function AddMemberForm({
 }
 
 // ─── Term section (per-연차 card in Tab 2) ───────────────────
-function TermSection({ group, allFees, projectNumber, agencyId, leadInstitutionId, leadInstitutionName, members, isSettlement }: {
+function TermSection({ group, allFees, project, projectNumber, agencyId, leadInstitutionId, leadInstitutionName, members, isSettlement }: {
   group: TermGroup;
   allFees: TermFee[];
+  project: Project;
   projectNumber: string;
   agencyId: string;
   leadInstitutionId: string;
@@ -1325,10 +1332,20 @@ function TermSection({ group, allFees, projectNumber, agencyId, leadInstitutionI
   const [showFeeDetail, setShowFeeDetail] = useState(false);
 
   // 이 연차까지(포함) 그 기관 자신의 미청구수수료 누적 — 연차별 세부표의 "미청구수수료 누적" 열에 사용.
+  // 일반기관은 정산 연차에 그동안 미뤄온 몫을 전액 청구·회수하므로(그 정산 연차 자신의 unclaimedFee가 0),
+  // 그 시점에 누적을 0으로 리셋한다. 반면 자체정산을 유지하는 면제기관은 정산 연차에도 15%를 못 걷고
+  // 매몰비용으로 남으므로(그 정산 연차의 unclaimedFee가 0이 아님) 리셋하지 않고 계속 누적한다.
   function getCumulativeUnclaimed(institutionId: string): number {
-    return allFees
+    const feesForInst = allFees
       .filter((af) => af.projectNumber === projectNumber && af.institutionId === institutionId && af.termNumber <= group.termNumber)
-      .reduce((s, af) => s + (af.unclaimedFee ?? 0), 0);
+      .sort((a, b) => a.termNumber - b.termNumber);
+    let running = 0;
+    for (const af of feesForInst) {
+      const u = af.unclaimedFee ?? 0;
+      const resolvedAtSettlement = isSettlementTerm(project, af.termNumber) && u === 0;
+      running = resolvedAtSettlement ? 0 : running + u;
+    }
+    return running;
   }
   const [issuingInvoice, setIssuingInvoice] = useState(false);
   const [invForm, setInvForm] = useState({
@@ -1891,6 +1908,7 @@ function FeeManagementTab({ projectId }: { projectId: string }) {
           key={group.key}
           group={group}
           allFees={termFees}
+          project={project}
           projectNumber={project.projectNumber}
           agencyId={project.agencyId}
           leadInstitutionId={project.leadInstitutionId}
@@ -1912,6 +1930,7 @@ function SettlementNoticeModal({
   recipientEmail,
   docNumber,
   issuedDate,
+  senderUser,
   onClose,
 }: {
   project: Project;
@@ -1921,32 +1940,68 @@ function SettlementNoticeModal({
   recipientEmail: string;
   docNumber: string;
   issuedDate: string;
+  senderUser: SystemUser | null;
   onClose: () => void;
 }) {
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
   const [toEmail, setToEmail] = useState(recipientEmail);
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
+  const [sendError, setSendError] = useState("");
 
   const selectedTemplate = templates.find((t) => t.id === templateId) ?? templates[0];
   const template = selectedTemplate?.content ?? EMPTY_NOTICE_TEMPLATE;
 
-  function send() {
+  const canSendMail = !!senderUser?.hiworksEmail && !!senderUser?.hiworksMailPassword;
+
+  async function send() {
+    if (!senderUser?.hiworksEmail || !senderUser?.hiworksMailPassword) {
+      setSendError("발신 계정(하이웍스)이 등록되어 있지 않습니다. 관리자 > 사용자 관리에서 먼저 등록해주세요.");
+      return;
+    }
     setSending(true);
+    setSendError("");
+    const subject = `[${project.projectNumber}] ${template.title || "정산절차 안내 및 수수료 청구"}`;
+    const html = buildNoticeEmailHtml({ template, statusRows, docNumber, issuedDate });
+
+    let status: "SUCCESS" | "FAILED" = "SUCCESS";
+    try {
+      const res = await fetch("/api/notices/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          senderEmail: senderUser.hiworksEmail,
+          senderPassword: senderUser.hiworksMailPassword,
+          senderName: senderUser.name,
+          to: [toEmail],
+          subject,
+          html,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        status = "FAILED";
+        setSendError(json.error || "메일 발송에 실패했습니다.");
+      }
+    } catch {
+      status = "FAILED";
+      setSendError("메일 발송 중 네트워크 오류가 발생했습니다.");
+    }
+
     addEmailDispatch({
       batchId: `BATCH-${Date.now()}`,
       sentAt: new Date().toISOString().replace("T", " ").slice(0, 16),
-      senderName: getCurrentUser()?.name ?? "시스템",
+      senderName: senderUser.name,
       recipientInstitution: project.leadInstitutionName,
       recipientEmail: toEmail,
-      subject: `[${project.projectNumber}] ${template.title || "정산절차 안내 및 수수료 청구"}`,
+      subject,
       emailType: "SETTLEMENT_NOTICE",
-      attachments: template.attachments,
-      status: "SUCCESS",
+      attachments: template.attachments.map((a) => a.name),
+      status,
       noticeSnapshot: { template, statusRows, docNumber, issuedDate },
     });
     setSending(false);
-    setSent(true);
+    if (status === "SUCCESS") setSent(true);
   }
 
   if (sent) {
@@ -2018,11 +2073,16 @@ function SettlementNoticeModal({
         />
       </div>
 
+      <p className="text-[11px] text-slate-400">
+        발신 계정: {canSendMail ? senderUser!.hiworksEmail : <span className="text-red-500">등록된 하이웍스 계정이 없습니다 (관리자 &gt; 사용자 관리에서 등록)</span>}
+      </p>
+      {sendError && <p className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{sendError}</p>}
+
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
         <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
         <button
           onClick={send}
-          disabled={!toEmail.trim() || sending}
+          disabled={!toEmail.trim() || sending || !canSendMail}
           className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           <FiSend size={14} />
@@ -2037,7 +2097,7 @@ function SettlementNoticeModal({
 export default function ProjectDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
-  const { projects, fundingAgencies, agencyNoticeTemplates, projectMembers, emailDispatches } = useStore();
+  const { projects, fundingAgencies, agencyNoticeTemplates, projectMembers, emailDispatches, users } = useStore();
   const canEditProjects = useCanWrite('projects');
   const [activeTab, setActiveTab] = useState<"info" | "fees">("info");
   const [showNotice, setShowNotice] = useState(false);
@@ -2073,6 +2133,9 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const noticeSeq = emailDispatches.filter((e) => e.emailType === "SETTLEMENT_NOTICE").length + 1;
   const noticeDocNumber = `${COMPANY_INFO.docNumberPrefix} ${new Date().getFullYear()}-${String(noticeSeq).padStart(4, "0")}`;
   const noticeIssuedDate = new Date().toISOString().slice(0, 10).replace(/-/g, ".");
+  // getCurrentUser()는 로그인 시점의 스냅샷이라 이후 등록된 하이웍스 계정 정보가 반영되지 않으므로,
+  // 실시간 store에서 같은 id의 사용자 레코드를 다시 찾아 발신 계정으로 사용한다.
+  const senderUser = users.find((u) => u.id === getCurrentUser()?.id) ?? null;
 
   return (
     <div className="space-y-4">
@@ -2176,6 +2239,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
             recipientEmail={leadMember?.contactEmail ?? ""}
             docNumber={noticeDocNumber}
             issuedDate={noticeIssuedDate}
+            senderUser={senderUser}
             onClose={() => setShowNotice(false)}
           />
         </Modal>

@@ -35,12 +35,24 @@ export default function MoneyInput({ value, onChange, className, placeholder, di
     onChange(num);
   }
 
+  // '+' 입력 시 0을 3개 채워 넣는 단축키로 사용한다 (예: 1 → 1,000, 1,000 → 1,000,000).
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key !== "+") return;
+    e.preventDefault();
+    const digits = text.replace(/[^\d]/g, "");
+    if (digits === "") return;
+    const num = Number(digits) * 1000;
+    setText(num.toLocaleString("ko-KR"));
+    onChange(num);
+  }
+
   return (
     <input
       type="text"
       inputMode="numeric"
       value={text}
       onChange={(e) => handleChange(e.target.value)}
+      onKeyDown={handleKeyDown}
       onFocus={onFocus}
       onBlur={onBlur}
       title={title}
