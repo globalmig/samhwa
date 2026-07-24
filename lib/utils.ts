@@ -27,6 +27,18 @@ export function fmtRate(r: number): string {
   return `${r}%`;
 }
 
+// 과제 시작일(1연차 기준일) + 연차번호로부터 그 연차의 당해시작일/당해종료일을 계산.
+// 수수료 청구 관리 목록·과제 상세 등 여러 화면에서 동일하게 적용하기 위한 공통 함수 —
+// 각자 따로 계산하면 화면마다 당해시작일/종료일 산정 기준이 어긋난다.
+export function termDateRange(projectStartDate: string, termNumber: number): { start: string; end: string } {
+  const start = new Date(projectStartDate);
+  start.setFullYear(start.getFullYear() + termNumber - 1);
+  const end = new Date(start);
+  end.setFullYear(end.getFullYear() + 1);
+  end.setDate(end.getDate() - 1);
+  return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
+}
+
 // 기준일로부터 n개월 뒤 날짜(yyyy-mm-dd). 잘못된 날짜면 빈 문자열.
 // 채권(미수금) 만기일 = 청구일 + 3개월 규칙을 여러 화면(수수료 청구 관리·과제 상세·미수금 관리)에서
 // 동일하게 적용하기 위한 공통 함수 — 각자 따로 계산하면 화면마다 만기일 산정 기준이 어긋난다.

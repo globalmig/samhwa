@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { addInstitution } from "@/lib/store";
 import { type Institution, type InstitutionType } from "@/lib/mock";
 
@@ -8,6 +8,10 @@ const inputCls = "w-full text-sm border border-slate-200 rounded-lg px-3 py-2 te
 const selectCls = `${inputCls} bg-white`;
 
 const INSTITUTION_TYPES: InstitutionType[] = ["대기업", "중견기업", "중소기업", "스타트업", "대학", "정부출연연구소", "공공기관"];
+
+// 등록된 기관이 수천 곳 이상이라 드롭다운 전체 나열은 비현실적 — 검색어로 걸러진 결과만
+// 최대 이 개수만큼 보여준다.
+const MAX_SUGGESTIONS = 50;
 
 // 과제/참여기관 등록 폼에서 새 기관을 그 자리에서 만들 수 있게 하는 공용 위젯.
 // "새 기관 추가" 토글 시 최소 필드만 입력받아 addInstitution 호출 후 바로 선택된 상태로 전환한다.
@@ -31,6 +35,34 @@ export default function InstitutionQuickAdd({
   const [contactEmail, setContactEmail] = useState("");
   const [contactPhone, setContactPhone] = useState("");
   const [error, setError] = useState("");
+
+  const selectedInstitution = institutions.find((i) => i.id === value) ?? null;
+  // null = 편집 중이 아님(선택된 기관명을 그대로 보여줌). 문자열 = 사용자가 입력 중인 검색어.
+  const [draftQuery, setDraftQuery] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  const displayValue = draftQuery ?? selectedInstitution?.name ?? "";
+  const trimmedQuery = (draftQuery ?? "").trim().toLowerCase();
+  const suggestions = (
+    trimmedQuery
+      ? institutions.filter(
+          (i) => i.name.toLowerCase().includes(trimmedQuery) || i.bizNumber.includes(trimmedQuery)
+        )
+      : institutions
+  ).slice(0, MAX_SUGGESTIONS);
+
+  function selectInstitution(i: Institution) {
+    onChange(i.id);
+    setDraftQuery(null);
+    setOpen(false);
+  }
+
+  function handleBlur(e: React.FocusEvent<HTMLDivElement>) {
+    if (wrapRef.current?.contains(e.relatedTarget as Node)) return;
+    setOpen(false);
+    setDraftQuery(null);
+  }
 
   function reset() {
     setName(""); setBizNumber(""); setType("중소기업");
@@ -74,10 +106,41 @@ export default function InstitutionQuickAdd({
         </button>
       </div>
       {!adding ? (
-        <select className={selectCls} value={value} onChange={(e) => onChange(e.target.value)}>
-          <option value="">선택하세요</option>
-          {institutions.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
-        </select>
+        <div ref={wrapRef} onBlur={handleBlur} className="relative">
+          <input
+            className={inputCls}
+            value={displayValue}
+            onChange={(e) => { setDraftQuery(e.target.value); setOpen(true); }}
+            onFocus={() => setOpen(true)}
+            placeholder="기관명 또는 사업자등록번호로 검색"
+          />
+          {open && (
+            <div className="absolute z-20 mt-1 w-full max-h-64 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+              {suggestions.length === 0 ? (
+                <div className="px-3 py-2 text-xs text-slate-400">검색 결과가 없습니다</div>
+              ) : (
+                suggestions.map((i) => (
+                  <button
+                    key={i.id}
+                    type="button"
+                    onClick={() => selectInstitution(i)}
+                    className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-blue-50 transition-colors ${
+                      i.id === value ? "bg-blue-50 text-blue-700" : "text-slate-700"
+                    }`}
+                  >
+                    <span className="truncate">{i.name}</span>
+                    <span className="shrink-0 text-[11px] text-slate-400">{i.bizNumber}</span>
+                  </button>
+                ))
+              )}
+              {suggestions.length === MAX_SUGGESTIONS && (
+                <div className="px-3 py-1.5 text-[10px] text-slate-400 border-t border-slate-100">
+                  검색어를 입력하면 더 정확히 찾을 수 있습니다
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       ) : (
         <div className="rounded-lg border border-blue-100 bg-blue-50/40 p-3 space-y-2">
           {error && <p className="text-[11px] text-red-600">{error}</p>}

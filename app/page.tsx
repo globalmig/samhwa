@@ -76,26 +76,63 @@ export default function DashboardPage() {
   const totalCollected = receivables_.reduce((s, r) => s + r.paidAmount, 0);
   const collectionRate = totalBilled > 0 ? (totalCollected / totalBilled) * 100 : 0;
 
-  // 전담기관별 수금 현황 — receivables를 과제번호로 전담기관에 연결해 집계
+  // 전담기관별 수금 현황 — 과제(배정)·연차수수료·receivables(청구/수금)를 과제번호로 전담기관에 연결해 집계
   const agencyRows = useMemo(() => {
     const projectByNumber = new Map(projects_.map((p) => [p.projectNumber, p]));
-    const map = new Map<string, { id: string; name: string; issuedAmount: number; collectedAmount: number; issuedCount: number }>();
+    type AgencyRow = {
+      id: string; name: string;
+      projectCount: number; totalFee: number;
+      issuedAmount: number; issuedCount: number;
+      collectedAmount: number; collectedCount: number;
+    };
+    const map = new Map<string, AgencyRow>();
+    function getEntry(agencyId: string, agencyName: string): AgencyRow {
+      const entry = map.get(agencyId) ?? {
+        id: agencyId, name: agencyName,
+        projectCount: 0, totalFee: 0,
+        issuedAmount: 0, issuedCount: 0,
+        collectedAmount: 0, collectedCount: 0,
+      };
+      map.set(agencyId, entry);
+      return entry;
+    }
+
+    // 배정건수 — 전담기관에 배정된 과제 수(청구 여부와 무관)
+    for (const p of projects_) {
+      const agency = fundingAgencies.find((a) => a.id === p.agencyId);
+      if (!agency) continue;
+      getEntry(agency.id, agency.name).projectCount += 1;
+    }
+
+    // 수수료 — 연차별 적용 수수료 합계
+    for (const f of termFees_) {
+      const project = projectByNumber.get(f.projectNumber);
+      const agency = project ? fundingAgencies.find((a) => a.id === project.agencyId) : undefined;
+      if (!agency) continue;
+      getEntry(agency.id, agency.name).totalFee += f.appliedFee;
+    }
+
+    // 청구/수금 — receivables 기준
     for (const r of receivables_) {
       const project = projectByNumber.get(r.projectNumber);
       const agency = project ? fundingAgencies.find((a) => a.id === project.agencyId) : undefined;
       if (!agency) continue;
-      const entry = map.get(agency.id) ?? { id: agency.id, name: agency.name, issuedAmount: 0, collectedAmount: 0, issuedCount: 0 };
+      const entry = getEntry(agency.id, agency.name);
       entry.issuedAmount += r.billedAmount;
-      entry.collectedAmount += r.paidAmount;
       entry.issuedCount += 1;
-      map.set(agency.id, entry);
+      entry.collectedAmount += r.paidAmount;
+      if (r.paidAmount > 0) entry.collectedCount += 1;
     }
-    return Array.from(map.values()).sort((a, b) => b.issuedAmount - a.issuedAmount);
-  }, [receivables_, projects_, fundingAgencies]);
 
+    return Array.from(map.values()).sort((a, b) => b.issuedAmount - a.issuedAmount);
+  }, [projects_, termFees_, receivables_, fundingAgencies]);
+
+  const totalProjectCount = agencyRows.reduce((s, r) => s + r.projectCount, 0);
+  const totalFeeSum = agencyRows.reduce((s, r) => s + r.totalFee, 0);
   const totalIssued = agencyRows.reduce((s, r) => s + r.issuedAmount, 0);
   const totalIssuedCount = agencyRows.reduce((s, r) => s + r.issuedCount, 0);
   const totalRowsCollected = agencyRows.reduce((s, r) => s + r.collectedAmount, 0);
+  const totalCollectedCount = agencyRows.reduce((s, r) => s + r.collectedCount, 0);
 
   return (
     <div className="space-y-5">
@@ -248,17 +285,22 @@ export default function DashboardPage() {
             <thead>
               <tr className="border-b border-slate-100 bg-slate-50">
                 <th className="text-left px-5 py-3 text-xs font-medium text-slate-500">전담기관</th>
-                <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">청구액 (원)</th>
-                <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">수금액 (원)</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">배정 건수</th>
+                <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">수수료 (원)</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">청구 건수</th>
+                <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">청구액 (원)</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">수금 건수</th>
+                <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">수금액 (원)</th>
+                <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">청구율</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">수금률</th>
                 <th className="w-8 px-3" />
               </tr>
             </thead>
             <tbody>
               {agencyRows.length === 0 ? (
-                <tr><td colSpan={6} className="px-5 py-8 text-center text-sm text-slate-400">청구 내역이 없습니다</td></tr>
+                <tr><td colSpan={9} className="px-5 py-8 text-center text-sm text-slate-400">청구 내역이 없습니다</td></tr>
               ) : agencyRows.map((row, idx) => {
+                const billingRate = row.projectCount > 0 ? (row.issuedCount / row.projectCount) * 100 : 0;
                 const rate = row.issuedAmount > 0 ? (row.collectedAmount / row.issuedAmount) * 100 : 0;
                 return (
                   <tr
@@ -272,9 +314,15 @@ export default function DashboardPage() {
                         <span className="text-sm font-medium text-slate-700 group-hover:text-blue-700">{row.name}</span>
                       </div>
                     </td>
-                    <td className="px-4 py-3.5 text-right text-sm text-slate-700 tabular-nums">{row.issuedAmount.toLocaleString("ko-KR")}</td>
-                    <td className="px-4 py-3.5 text-right text-sm text-slate-700 tabular-nums">{row.collectedAmount.toLocaleString("ko-KR")}</td>
+                    <td className="px-4 py-3.5 text-center text-sm text-slate-600">{row.projectCount}건</td>
+                    <td className="px-4 py-3.5 text-right text-sm text-slate-700 tabular-nums">{row.totalFee.toLocaleString("ko-KR")}</td>
                     <td className="px-4 py-3.5 text-center text-sm text-slate-600">{row.issuedCount}건</td>
+                    <td className="px-4 py-3.5 text-right text-sm text-slate-700 tabular-nums">{row.issuedAmount.toLocaleString("ko-KR")}</td>
+                    <td className="px-4 py-3.5 text-center text-sm text-slate-600">{row.collectedCount}건</td>
+                    <td className="px-4 py-3.5 text-right text-sm text-slate-700 tabular-nums">{row.collectedAmount.toLocaleString("ko-KR")}</td>
+                    <td className="px-4 py-3.5 text-right tabular-nums">
+                      <span className={`text-sm font-semibold ${billingRate >= 90 ? "text-emerald-600" : billingRate >= 50 ? "text-blue-600" : "text-red-500"}`}>{row.projectCount > 0 ? fmtRate(billingRate) : "–"}</span>
+                    </td>
                     <td className="px-4 py-3.5 text-right tabular-nums">
                       <span className={`text-sm font-semibold ${rate >= 90 ? "text-emerald-600" : rate >= 50 ? "text-blue-600" : "text-red-500"}`}>{row.issuedAmount > 0 ? fmtRate(rate) : "–"}</span>
                     </td>
@@ -290,9 +338,13 @@ export default function DashboardPage() {
             <tfoot>
               <tr className="bg-slate-50 border-t border-slate-200">
                 <td className="px-5 py-3 text-xs font-semibold text-slate-600">합계</td>
-                <td className="px-4 py-3 text-right text-xs font-semibold text-slate-700 tabular-nums">{totalIssued.toLocaleString("ko-KR")}</td>
-                <td className="px-4 py-3 text-right text-xs font-semibold text-slate-700 tabular-nums">{totalRowsCollected.toLocaleString("ko-KR")}</td>
+                <td className="px-4 py-3 text-center text-xs font-semibold text-slate-700">{totalProjectCount}건</td>
+                <td className="px-4 py-3 text-right text-xs font-semibold text-slate-700 tabular-nums">{totalFeeSum.toLocaleString("ko-KR")}</td>
                 <td className="px-4 py-3 text-center text-xs font-semibold text-slate-700">{totalIssuedCount}건</td>
+                <td className="px-4 py-3 text-right text-xs font-semibold text-slate-700 tabular-nums">{totalIssued.toLocaleString("ko-KR")}</td>
+                <td className="px-4 py-3 text-center text-xs font-semibold text-slate-700">{totalCollectedCount}건</td>
+                <td className="px-4 py-3 text-right text-xs font-semibold text-slate-700 tabular-nums">{totalRowsCollected.toLocaleString("ko-KR")}</td>
+                <td className="px-4 py-3 text-right text-xs font-semibold text-blue-600 tabular-nums">{totalProjectCount > 0 ? fmtRate((totalIssuedCount / totalProjectCount) * 100) : "–"}</td>
                 <td className="px-4 py-3 text-right text-xs font-semibold text-blue-600 tabular-nums">{totalIssued > 0 ? fmtRate((totalRowsCollected / totalIssued) * 100) : "–"}</td>
                 <td />
               </tr>

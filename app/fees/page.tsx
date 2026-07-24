@@ -27,7 +27,7 @@ import {
   type ProjectIssue,
   COMPANY_INFO,
 } from "@/lib/mock";
-import { fmtWon, fmtDate, splitVatInclusive, addMonths } from "@/lib/utils";
+import { fmtWon, fmtDate, splitVatInclusive, addMonths, termDateRange } from "@/lib/utils";
 import Modal from "@/components/common/Modal";
 import DateInput from "@/components/common/DateInput";
 import InstitutionQuickAdd from "@/components/common/InstitutionQuickAdd";
@@ -84,6 +84,7 @@ type FeeRow = {
   fees: TermFee[];
   termYear: number;
   termNumber: number;
+  totalTerms: number;
   effectivePolicy: FeePolicy | null;
   projectStatus: "ACTIVE" | "COMPLETED" | "SUSPENDED" | "";
   // 수정용 참조 id
@@ -395,6 +396,11 @@ function SalesCancelModal({ target, onClose }: { target: SalesTarget; onClose: (
     if (!target.taxInvoiceId) { onClose(); return; }
     if (mode === "delete") {
       updateTaxInvoice(target.taxInvoiceId, { issuedAt: "", status: "CANCELED" });
+      // billingType이 "정발행"으로 저장되어 있으면 취소 후에도 계속 그 표시가 남으므로 초기화한다.
+      // (세금계산서가 실제로 취소됐는지와 무관하게 project.billingType은 별도 필드라 자동으로 안 지워짐)
+      if (target.projectId && target.currentBillingType === "정발행") {
+        updateProject(target.projectId, { billingType: undefined });
+      }
     } else {
       if (!newDate) return;
       updateTaxInvoice(target.taxInvoiceId, { issuedAt: newDate, status: "MODIFIED" });
@@ -1452,16 +1458,6 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
   );
 }
 
-// ── 연차별 당해시작일/종료일 계산 (autoGenerateTermFees와 동일한 기준: 과제 시작일 + (연차-1)년) ──
-function termDateRange(projectStartDate: string, termNumber: number): { start: string; end: string } {
-  const start = new Date(projectStartDate);
-  start.setFullYear(start.getFullYear() + termNumber - 1);
-  const end = new Date(start);
-  end.setFullYear(end.getFullYear() + 1);
-  end.setDate(end.getDate() - 1);
-  return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
-}
-
 // ── useFeeRows ────────────────────────────────────────────────
 function useFeeRows(): FeeRow[] {
   const {
@@ -1512,8 +1508,10 @@ function useFeeRows(): FeeRow[] {
         .filter((i) => i.projectNumber === f0.projectNumber)
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
-      // 발행구분 — billingType 없으면 세금계산서 유무로 판별
-      const billingType = project?.billingType ?? (invoice ? "정발행" : "");
+      // 발행구분 — billingType 없으면 세금계산서 유무로 판별.
+      // 단, 취소된(CANCELED) 계산서는 "발행됨"으로 치지 않는다 — 안 그러면 발행 취소 후에도
+      // billingType이 비어있는 과제는 계속 "정발행"으로 표시되어 버린다.
+      const billingType = project?.billingType ?? (invoice && invoice.status !== "CANCELED" ? "정발행" : "");
       const appliedFeeTotal = fees.reduce((s, f) => s + f.appliedFee, 0);
 
       // 과제구분(연차상시/정산)과 당해시작일/종료일은 과제 전체 기간이 아니라 "이 행이 나타내는 연차"
@@ -1562,6 +1560,7 @@ function useFeeRows(): FeeRow[] {
         fees,
         termYear:            f0.termYear,
         termNumber:          f0.termNumber,
+        totalTerms:          project?.totalTerms ?? f0.termNumber,
         effectivePolicy,
         projectStatus:       project?.status ?? "",
         unclaimedFeeId:      ucRecord?.id ?? "",
@@ -1747,6 +1746,8 @@ export default function FeesPage() {
   const [filterProjectName,     setFilterProjectName]     = useState("");
   const [filterLeadInstitution, setFilterLeadInstitution] = useState("");
   const [filterResearchLead,    setFilterResearchLead]    = useState("");
+  const [filterAssignedManager, setFilterAssignedManager] = useState("");
+  const [filterMinUnclaimedAmount, setFilterMinUnclaimedAmount] = useState(0);
   // 완료/종료된 과제는 더 이상 확인할 필요가 없어 기본값은 '진행중'
   const [filterProjectStatus,   setFilterProjectStatus]   = useState(() => searchParams.get("status") ?? "ACTIVE");
   const [filterAgency,          setFilterAgency]          = useState("ALL");
@@ -1794,6 +1795,8 @@ export default function FeesPage() {
         const matchProjectName      = filterProjectName      === "" || r.projectName.includes(filterProjectName);
         const matchLeadInstitution  = filterLeadInstitution  === "" || r.leadInstitutionName.includes(filterLeadInstitution);
         const matchResearchLead     = filterResearchLead     === "" || r.researchLead.includes(filterResearchLead);
+        const matchAssignedManager  = filterAssignedManager  === "" || r.assignedManager.includes(filterAssignedManager);
+        const matchMinUnclaimed     = filterMinUnclaimedAmount <= 0 || r.unclaimedAmount >= filterMinUnclaimedAmount;
         const matchStatus           = filterProjectStatus    === "ALL" || r.projectStatus === filterProjectStatus;
         const matchAgency           = filterAgency           === "ALL" || r.agencyShortName === filterAgency;
         const matchBillingType      = filterBillingType      === "ALL" || r.billingType === filterBillingType;
@@ -1813,11 +1816,13 @@ export default function FeesPage() {
         const matchAssignedTo   = agencyAssignedTo   === "" || (assignedDt !== "" && assignedDt <= agencyAssignedTo);
 
         return matchProjectNumber && matchProjectName && matchLeadInstitution && matchResearchLead
+          && matchAssignedManager && matchMinUnclaimed
           && matchStatus && matchAgency && matchBillingType && matchCollectionStatus
           && matchOnlyReceivable && matchFrom && matchTo && matchEndFrom && matchEndTo
           && matchAssignedFrom && matchAssignedTo;
       }),
     [allRows, filterProjectNumber, filterProjectName, filterLeadInstitution, filterResearchLead,
+     filterAssignedManager, filterMinUnclaimedAmount,
      filterProjectStatus, filterAgency, filterBillingType, filterCollectionStatus, filterOnlyReceivable,
      invoiceDateFrom, invoiceDateTo, termEndDateFrom, termEndDateTo, agencyAssignedFrom, agencyAssignedTo]
   );
@@ -1908,7 +1913,7 @@ export default function FeesPage() {
         ) : <span className="text-slate-300">—</span>;
 
       case "term":
-        return <span className="text-xs font-semibold text-slate-700 whitespace-nowrap">{row.termYear}년 {row.termNumber}연차</span>;
+        return <span className="text-xs font-semibold text-slate-700 whitespace-nowrap">{row.termNumber}/{row.totalTerms}</span>;
 
       case "projectCategory":
         return (
@@ -2022,7 +2027,7 @@ export default function FeesPage() {
       "과제명": r.projectName,
       "주관기관": r.leadInstitutionName,
       "연구책임자": r.researchLead,
-      "연차": `${r.termYear}년 ${r.termNumber}연차`,
+      "연차": `${r.termNumber}/${r.totalTerms}`,
       "과제구분": r.projectCategory,
       "당해시작일": r.startDate,
       "당해종료일": r.endDate,
@@ -2093,12 +2098,13 @@ export default function FeesPage() {
       {/* 검색 + 날짜 필터 */}
       <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100">
         {/* 텍스트 필터 */}
-        <div className="px-4 py-3 grid grid-cols-4 gap-3">
+        <div className="px-4 py-3 grid grid-cols-3 gap-3">
           {[
             { label: "과제번호",   value: filterProjectNumber,   onChange: setFilterProjectNumber   },
             { label: "과제명",     value: filterProjectName,     onChange: setFilterProjectName     },
             { label: "주관기관",   value: filterLeadInstitution, onChange: setFilterLeadInstitution },
             { label: "연구책임자", value: filterResearchLead,    onChange: setFilterResearchLead    },
+            { label: "삼화 담당자", value: filterAssignedManager, onChange: setFilterAssignedManager },
           ].map(({ label, value, onChange }) => (
             <div key={label}>
               <p className="text-[10px] font-medium text-slate-400 mb-1">{label}</p>
@@ -2111,6 +2117,15 @@ export default function FeesPage() {
               />
             </div>
           ))}
+          <div>
+            <p className="text-[10px] font-medium text-slate-400 mb-1">손실금액 (이상)</p>
+            <MoneyInput
+              value={filterMinUnclaimedAmount}
+              onChange={setFilterMinUnclaimedAmount}
+              placeholder="손실금액 검색..."
+              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+            />
+          </div>
         </div>
 
         {/* 상태 · 구분 필터 */}

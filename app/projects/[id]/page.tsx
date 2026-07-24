@@ -7,13 +7,13 @@ import {
   FiEdit2, FiCheck, FiX, FiPlus, FiSend, FiChevronDown, FiChevronUp, FiTrash2, FiFileText,
 } from "react-icons/fi";
 import {
-  useStore, updateProject, addProjectIssue, updateProjectIssue, deleteProjectIssue, addTaxInvoice,
+  useStore, updateProject, addProjectIssue, updateProjectIssue, deleteProjectIssue, addTaxInvoice, updateTaxInvoice,
   addReceivable, updateReceivable, addEmailDispatch, updateTermFee, updateUnclaimedFee,
   updateProjectMember, autoGenerateTermFees, addProjectMember, deleteProjectMember, deleteProject,
 } from "@/lib/store";
-import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type SystemUser, EMPTY_NOTICE_TEMPLATE, COMPANY_INFO } from "@/lib/mock";
+import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type SystemUser, type EmailDispatch, EMPTY_NOTICE_TEMPLATE, COMPANY_INFO } from "@/lib/mock";
 import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isNonProfitInstitution, resolveRdaAgencyId, type CalcMember } from "@/lib/fee-calculator";
-import { fmtWonFull, fmtDate, splitVatInclusive, addMonths } from "@/lib/utils";
+import { fmtWonFull, fmtDate, splitVatInclusive, addMonths, termDateRange } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
 import MoneyInput from "@/components/common/MoneyInput";
@@ -56,6 +56,7 @@ const FEE_STATUS: Record<string, { label: string; color: "green" | "blue" | "sla
   BILLED: { label: "청구완료", color: "green" },
   CONFIRMED: { label: "확정", color: "blue" },
   DRAFT: { label: "초안", color: "slate" },
+  SCHEDULED: { label: "연차 미시작", color: "slate" },
 };
 const PRIORITY_STYLE: Record<string, string> = {
   HIGH: "bg-red-100 text-red-700",
@@ -101,6 +102,22 @@ interface TermGroup {
   termStatus: TermFee["status"];
 }
 
+// ─── 세금계산서/공문발송/수금 "청구 단위" ──────────────────────
+// 기본은 연차 전체를 하나로 묶어 청구하지만(institutionId: null), RDA2처럼 기관마다 발행일·
+// 공문발송일·수금일이 따로 관리돼야 하는 과제는 기관별로 하나씩(institutionId 있음) 만든다.
+interface BillingUnit {
+  key: string;
+  institutionId: string | null;
+  billingInstitutionId: string;   // TaxInvoice/Receivable.leadInstitutionId에 저장할 값
+  billingLabel: string;           // 화면 표시 + leadInstitutionName에 저장할 값
+  recipients: { institutionName: string; email: string }[]; // 공문 발송 대상
+  amount: number;
+  billedFees: { id: string; status: TermFee["status"] }[];      // 발행 시 BILLED로 갱신
+  confirmedFees: { id: string; status: TermFee["status"] }[];   // 발행 시 (초안/예정이면) CONFIRMED로 갱신
+  invoice: TaxInvoice | null;
+  receivable: Receivable | null;
+}
+
 // ─── Tab 1: 과제 정보 ────────────────────────────────────────
 function ProjectInfoTab({ projectId }: { projectId: string }) {
   const canEditProjects = useCanWrite('projects');
@@ -118,6 +135,25 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
     totalBudget: 0, startDate: "", endDate: "",
     totalTerms: 1, currentTerm: 1, status: "ACTIVE",
   });
+  // "현재연차/총연차"(예: 2/3)를 하나의 입력란으로 받는다 — 매 입력마다 draft로 되돌리면
+  // "2/" 처럼 아직 완성되지 않은 중간 입력 상태에서 커서가 튀므로, 표시값이 draft와 다를 때만 동기화한다.
+  const [termText, setTermText] = useState(() => `${draft.currentTerm}/${draft.totalTerms}`);
+  useEffect(() => {
+    setTermText((prev) => {
+      const m = prev.match(/^(\d+)\/(\d+)$/);
+      const inSync = m && Number(m[1]) === draft.currentTerm && Number(m[2]) === draft.totalTerms;
+      return inSync ? prev : `${draft.currentTerm}/${draft.totalTerms}`;
+    });
+  }, [draft.currentTerm, draft.totalTerms]);
+  function handleTermTextChange(raw: string) {
+    setTermText(raw);
+    const m = raw.match(/^\s*(\d+)\s*\/\s*(\d+)\s*$/);
+    if (!m) return;
+    const cur = Number(m[1]);
+    const tot = Number(m[2]);
+    if (cur < 1 || tot < 1) return;
+    setDraft((p) => ({ ...p, currentTerm: cur, totalTerms: tot }));
+  }
   const [savedMsg, setSavedMsg] = useState(false);
   const [editingMembers, setEditingMembers] = useState(false);
   const [memberDrafts, setMemberDrafts] = useState<Record<string, Partial<ProjectMember>>>({});
@@ -152,6 +188,9 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
 
   // KEIT 수수료 산정 (현재 연차 기준)
   const currentTerm = project.currentTerm ?? 1;
+  // 당해시작일/당해종료일은 [수수료 청구 관리] 목록과 동일하게 "과제 시작일(1연차 기준일) + 현재 연차"로
+  // 파생 계산한다 — 과거에는 이 값을 draft.startDate/endDate로 직접 입력받아 목록의 계산값과 어긋났었다.
+  const draftTermRange = termDateRange(draft.startDate, draft.currentTerm ?? 1);
 
   function getCurrentTermBudget(m: ProjectMember): { cashBudget: number; inKindBudget: number } {
     const ab = m.annualBudgets?.find((a) => a.termNumber === currentTerm);
@@ -345,8 +384,13 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
           </div>
         </div>
         <div className="px-5 py-5 space-y-4">
-          {/* 과제명 + 상태 */}
-          <div className="grid grid-cols-3 gap-4">
+          {/* 과제번호 + 과제명 + 상태 */}
+          <div className="grid grid-cols-4 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">과제번호</label>
+              <input className={`${inp} w-full font-mono`} value={draft.projectNumber}
+                onChange={(e) => setDraft((p) => ({ ...p, projectNumber: e.target.value }))} />
+            </div>
             <div className="col-span-2">
               <label className="block text-xs font-medium text-slate-500 mb-1">과제명</label>
               <input className={`${inp} w-full`} value={draft.projectName}
@@ -474,14 +518,16 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
           {/* 당해 기간 + 연차 + 과제구분 + 자율성트랙 */}
           <div className="grid grid-cols-3 gap-4">
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">당해시작일</label>
-              <DateInput className="w-full" value={draft.startDate}
-                onChange={(v) => setDraft((p) => ({ ...p, startDate: v }))} />
+              <label className="block text-xs font-medium text-slate-500 mb-1">당해시작일 (자동계산)</label>
+              <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-white font-bold text-slate-700">
+                {fmtDate(draftTermRange.start)}
+              </div>
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">당해종료일</label>
-              <DateInput className="w-full" value={draft.endDate}
-                onChange={(v) => setDraft((p) => ({ ...p, endDate: v }))} />
+              <label className="block text-xs font-medium text-slate-500 mb-1">당해종료일 (자동계산)</label>
+              <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-white font-bold text-slate-700">
+                {fmtDate(draftTermRange.end)}
+              </div>
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">과제 구분</label>
@@ -492,14 +538,9 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">총연차</label>
-              <input className={`${inp} w-full`} type="number" min={1} value={draft.totalTerms}
-                onChange={(e) => setDraft((p) => ({ ...p, totalTerms: Number(e.target.value) }))} />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">현재연차</label>
-              <input className={`${inp} w-full`} type="number" min={1} value={draft.currentTerm}
-                onChange={(e) => setDraft((p) => ({ ...p, currentTerm: Number(e.target.value) }))} />
+              <label className="block text-xs font-medium text-slate-500 mb-1">연차 (현재/총)</label>
+              <input className={`${inp} w-full`} placeholder="예: 2/3" value={termText}
+                onChange={(e) => handleTermTextChange(e.target.value)} />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">자율성트랙 여부</label>
@@ -1307,8 +1348,393 @@ function AddMemberForm({
   );
 }
 
+// ─── 수수료(적용) 금액 직접 수정 셀 ───────────────────────────
+// 자동산정된 값을 그대로 청구하기 어려운 협의 건이 있어, 담당자가 최종 청구액을 직접 조정할 수
+// 있게 한다. 한번 직접 수정하면(manualOverride) "수수료 재계산"을 눌러도 이 값은 보존된다.
+function AppliedFeeCell({ fee, canEdit, projectId }: { fee: TermFee; canEdit: boolean; projectId: string }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(fee.appliedFee);
+
+  function startEdit() {
+    setDraft(fee.appliedFee);
+    setEditing(true);
+  }
+  function save() {
+    updateTermFee(fee.id, { appliedFee: draft, manualOverride: true });
+    setEditing(false);
+  }
+  function revert() {
+    updateTermFee(fee.id, { manualOverride: false });
+    autoGenerateTermFees(projectId);
+  }
+
+  const canEditThis = canEdit && fee.status !== "BILLED";
+
+  if (editing) {
+    return (
+      <div className="flex items-center justify-end gap-1">
+        <MoneyInput
+          value={draft}
+          onChange={setDraft}
+          autoFocus
+          className="w-28 text-right text-xs border border-blue-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+        />
+        <button type="button" onClick={save} className="text-green-600 hover:text-green-700" title="저장">
+          <FiCheck size={13} />
+        </button>
+        <button type="button" onClick={() => setEditing(false)} className="text-slate-400 hover:text-slate-600" title="취소">
+          <FiX size={13} />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center justify-end gap-1.5 group">
+      {fee.manualOverride && (
+        <button type="button" onClick={revert} title="자동 재계산 값으로 되돌리기"
+          className="text-[9px] text-purple-500 hover:text-purple-700 hover:underline whitespace-nowrap">
+          직접수정됨 · 되돌리기
+        </button>
+      )}
+      <span className={fee.appliedFee === 0 ? "text-amber-500 font-normal" : "text-slate-800"}>
+        {fee.appliedFee === 0 ? "미적용" : fmtWonFull(fee.appliedFee)}
+      </span>
+      {canEditThis && (
+        <button type="button" onClick={startEdit} title="금액 직접 수정"
+          className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-blue-600 transition-opacity">
+          <FiEdit2 size={11} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ─── 세금계산서 + 공문발송 + 수금 (BillingUnit 단위로 렌더링) ─────
+function BillingBlock({
+  unit, projectNumber, project, termYear, termNumber, termLabel,
+  canEditInvoices, canEditReceivables, canEditEmails, emailDispatches,
+}: {
+  unit: BillingUnit;
+  projectNumber: string;
+  project: Project;
+  termYear: number;
+  termNumber: number;
+  termLabel: string;
+  canEditInvoices: boolean;
+  canEditReceivables: boolean;
+  canEditEmails: boolean;
+  emailDispatches: EmailDispatch[];
+}) {
+  const [issuingInvoice, setIssuingInvoice] = useState(false);
+  const [invForm, setInvForm] = useState({
+    issuedAt: new Date().toISOString().slice(0, 10),
+    ...splitVatInclusive(unit.amount),
+    totalAmount: unit.amount,
+  });
+  const [editingRv, setEditingRv] = useState(false);
+  const [rvForm, setRvForm] = useState({
+    paidAmount: unit.receivable?.paidAmount ?? 0,
+  });
+
+  function openInvoiceForm() {
+    // 기존 발행 건을 "수정"하는 경우엔 그 값을 그대로 불러오고, 새로 발행하는 경우에만 기본값을 채운다.
+    setInvForm(
+      unit.invoice
+        ? {
+            issuedAt: unit.invoice.issuedAt || new Date().toISOString().slice(0, 10),
+            supplyAmount: unit.invoice.supplyAmount,
+            taxAmount: unit.invoice.taxAmount,
+            totalAmount: unit.invoice.totalAmount,
+          }
+        : {
+            issuedAt: new Date().toISOString().slice(0, 10),
+            ...splitVatInclusive(unit.amount),
+            totalAmount: unit.amount,
+          }
+    );
+    setIssuingInvoice(true);
+  }
+
+  // 합계(=산정된 수수료)는 고정, 공급가액을 조정하면 부가세가 차액만큼 재계산된다
+  function handleSupplyChange(v: number) {
+    const tax = unit.amount - v;
+    setInvForm((p) => ({ ...p, supplyAmount: v, taxAmount: tax, totalAmount: unit.amount }));
+  }
+
+  function saveInvoice() {
+    // 이미 발행된 계산서가 있으면 새로 만들지 않고 그 레코드를 갱신한다 — 여기서 매번 addTaxInvoice로
+    // 새 레코드를 만들면 같은 연차에 계산서가 여러 건 쌓이고, 다른 화면의 taxInvoices.find()는 가장
+    // 먼저 생성된(오래된) 레코드를 집어오기 때문에 재발행해도 취소된 옛 건이 계속 보이는 문제가 있었다.
+    if (unit.invoice) {
+      updateTaxInvoice(unit.invoice.id, {
+        issuedAt: invForm.issuedAt,
+        supplyAmount: invForm.supplyAmount,
+        taxAmount: invForm.taxAmount,
+        totalAmount: invForm.totalAmount,
+        status: "ISSUED",
+      });
+    } else {
+      const now = new Date();
+      addTaxInvoice({
+        invoiceNumber: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(Date.now()).slice(-5)}`,
+        projectNumber,
+        projectName: project.projectName,
+        termYear,
+        termNumber,
+        leadInstitutionId: unit.billingInstitutionId,
+        leadInstitutionName: unit.billingLabel,
+        institutionId: unit.institutionId ?? undefined,
+        issuedAt: invForm.issuedAt,
+        supplyAmount: invForm.supplyAmount,
+        taxAmount: invForm.taxAmount,
+        totalAmount: invForm.totalAmount,
+        status: "ISSUED",
+      });
+    }
+    // 실제로 청구서를 받는 기관만 청구완료(BILLED) 처리하고, 나머지(연차 통합 케이스에서 참여기관처럼
+    // 개별 청구되지 않은 쪽)는 확정(CONFIRMED)까지만 반영한다.
+    unit.billedFees.forEach((f) => { if (f.status !== "BILLED") updateTermFee(f.id, { status: "BILLED" }); });
+    unit.confirmedFees.forEach((f) => { if (f.status === "DRAFT" || f.status === "SCHEDULED") updateTermFee(f.id, { status: "CONFIRMED" }); });
+    setIssuingInvoice(false);
+  }
+
+  function cancelInvoice() {
+    if (!unit.invoice) return;
+    if (!window.confirm("세금계산서 발행을 취소할까요? 발행일이 삭제되고 상태가 '취소'로 변경됩니다.")) return;
+    updateTaxInvoice(unit.invoice.id, { issuedAt: "", status: "CANCELED" });
+    // billingType이 "정발행"으로 저장되어 있으면 취소 후에도 과제목록에서 계속 그 표시가 남으므로 초기화한다.
+    // (기관별 개별 청구 단위는 project 전체 필드인 billingType과 1:1 대응이 안 되므로 건드리지 않는다.)
+    if (unit.institutionId === null && project.billingType === "정발행") {
+      updateProject(project.id, { billingType: undefined });
+    }
+  }
+
+  function openRvForm() {
+    setRvForm({ paidAmount: unit.receivable?.paidAmount ?? 0 });
+    setEditingRv(true);
+  }
+
+  function saveReceivable() {
+    const inv = unit.invoice;
+    if (!inv) return;
+    const remaining = Math.max(0, inv.totalAmount - rvForm.paidAmount);
+    // 미입금 상태의 기본값은 "미수"(OVERDUE) — 만기일(청구일+3개월)이 지나기 전까진 isOverdueByRule이
+    // 화면에 "미수"로만 보여주고, 만기일이 지나면 자동으로 "연체"로 승격된다.
+    const status: Receivable["status"] = rvForm.paidAmount >= inv.totalAmount
+      ? "PAID" : rvForm.paidAmount > 0 ? "PARTIAL" : "OVERDUE";
+    const dueDate = addMonths(inv.issuedAt, 3);
+    if (unit.receivable) {
+      updateReceivable(unit.receivable.id, {
+        paidAmount: rvForm.paidAmount,
+        receivableAmount: remaining,
+        dueDate: unit.receivable.dueDate || dueDate,
+        status,
+      });
+    } else {
+      addReceivable({
+        invoiceNumber: inv.invoiceNumber,
+        projectNumber,
+        projectName: project.projectName,
+        termYear,
+        termNumber,
+        leadInstitutionId: unit.billingInstitutionId,
+        leadInstitutionName: unit.billingLabel,
+        institutionId: unit.institutionId ?? undefined,
+        billedAt: inv.issuedAt,
+        billedAmount: inv.totalAmount,
+        paidAmount: rvForm.paidAmount,
+        receivableAmount: remaining,
+        dueDate,
+        status,
+      });
+    }
+    setEditingRv(false);
+  }
+
+  // 공문 발송 — 기관별 개별 청구 단위는 그 기관 앞으로 간 발송 이력만(recipientEmail 기준) "마지막 발송"으로 잡는다.
+  const sentEmails = emailDispatches.filter((e) =>
+    e.subject.includes(projectNumber) && e.subject.includes(termLabel) &&
+    (unit.institutionId ? unit.recipients.some((r) => !!r.email && r.email === e.recipientEmail) : true)
+  );
+  const lastSent = [...sentEmails].sort((a, b) => b.sentAt.localeCompare(a.sentAt))[0];
+
+  function sendLetter() {
+    const batchId = `BATCH-${Date.now()}`;
+    const sentAt = new Date().toISOString().replace("T", " ").slice(0, 16);
+    unit.recipients.forEach((r) => {
+      addEmailDispatch({
+        batchId,
+        sentAt,
+        senderName: getCurrentUser()?.name ?? "시스템",
+        recipientInstitution: r.institutionName,
+        recipientEmail: r.email,
+        subject: `[${projectNumber}] ${termLabel} 수수료 청구서${unit.institutionId ? ` (${unit.billingLabel})` : ""}`,
+        emailType: "TAX_INVOICE",
+        feeCategory: "ANNUAL",
+        attachments: [`청구서_${projectNumber}_${termLabel}.pdf`],
+        status: "SUCCESS",
+      });
+    });
+  }
+
+  return (
+    <div className="border-t border-slate-100 px-5 py-4 space-y-4">
+      {unit.institutionId && (
+        <p className="text-xs font-semibold text-slate-500">{unit.billingLabel}</p>
+      )}
+      <div className="flex items-start gap-3">
+        <span className="text-xs font-semibold text-slate-600 w-24 shrink-0 pt-1">세금계산서</span>
+        {unit.invoice ? (
+          <div className="flex-1 flex flex-wrap items-center gap-3">
+            <span className="font-mono text-xs text-slate-700">{unit.invoice.invoiceNumber}</span>
+            <span className="text-xs text-slate-500">{fmtDate(unit.invoice.issuedAt)}</span>
+            <span className="text-xs text-slate-500">공급가 {fmtWonFull(unit.invoice.supplyAmount)}</span>
+            <span className="text-xs text-slate-500">부가세 {fmtWonFull(unit.invoice.taxAmount)}</span>
+            <span className="text-sm font-bold text-slate-800">{fmtWonFull(unit.invoice.totalAmount)}</span>
+            <StatusBadge label={INVOICE_STATUS[unit.invoice.status].label} color={INVOICE_STATUS[unit.invoice.status].color} />
+            {/* 공문 발송 - 세금계산서와 동일 행 */}
+            <div className="ml-auto flex items-center gap-2">
+              {lastSent && (
+                <span className="text-xs text-slate-400">마지막 발송 {lastSent.sentAt}</span>
+              )}
+              {canEditEmails && (
+                <button onClick={sendLetter}
+                  title={unit.recipients.length > 1 ? `${unit.recipients.length}곳으로 발송됩니다` : "발송됩니다"}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 transition-colors">
+                  <FiSend size={12} /> 공문 발송{unit.recipients.length > 1 ? ` (${unit.recipients.length}곳)` : ""}
+                </button>
+              )}
+              {canEditInvoices && (
+                <button onClick={() => { openInvoiceForm(); setIssuingInvoice(true); }}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                  <FiEdit2 size={12} /> 수정
+                </button>
+              )}
+              {canEditInvoices && unit.invoice.status !== "CANCELED" && (
+                <button onClick={cancelInvoice}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors">
+                  <FiX size={12} /> 발행 취소
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-slate-400">발행 전</span>
+            {canEditInvoices && !issuingInvoice && (
+              <button onClick={openInvoiceForm}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
+                <FiPlus size={12} /> 세금계산서 발행
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* 세금계산서 발행 인라인 폼 */}
+      {issuingInvoice && (
+        <div className="rounded-xl border border-blue-200 bg-blue-50/30 px-4 py-4 space-y-3">
+          <div className="grid grid-cols-4 gap-3 items-end">
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">세금계산서일자</label>
+              <DateInput className="w-full" value={invForm.issuedAt}
+                onChange={(v) => setInvForm((p) => ({ ...p, issuedAt: v }))} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">공급가액 (원)</label>
+              <MoneyInput className={`${inp} w-full`} value={invForm.supplyAmount}
+                onChange={(v) => handleSupplyChange(v)} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">부가세 (자동)</label>
+              <div className="text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-600">{fmtWonFull(invForm.taxAmount)}</div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">합계</label>
+              <div className="text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 font-bold text-slate-700">{fmtWonFull(invForm.totalAmount)}</div>
+            </div>
+          </div>
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-slate-400">발행 후 <strong>공문 발송</strong> 버튼으로 즉시 발송할 수 있습니다</p>
+            <div className="flex gap-2">
+              <button onClick={() => setIssuingInvoice(false)}
+                className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
+              <button onClick={saveInvoice}
+                className="flex items-center gap-1 px-4 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
+                <FiCheck size={12} /> 저장 &amp; 발행
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 수금 정보 ── */}
+      <div className="flex items-start gap-3">
+        <span className="text-xs font-semibold text-slate-600 w-24 shrink-0 pt-1">수금 정보</span>
+        {unit.receivable ? (
+          <div className="flex-1 flex flex-wrap items-center gap-4">
+            <span className="text-xs text-slate-500">청구 {fmtWonFull(unit.receivable.billedAmount)}</span>
+            <span className="text-xs text-green-700 font-medium">납부 {fmtWonFull(unit.receivable.paidAmount)}</span>
+            <span className={`text-sm font-bold ${unit.receivable.receivableAmount > 0 ? "text-red-600" : "text-slate-400"}`}>
+              미수금 {fmtWonFull(unit.receivable.receivableAmount)}
+            </span>
+            <StatusBadge label={RECEIVABLE_STATUS[unit.receivable.status].label} color={RECEIVABLE_STATUS[unit.receivable.status].color} />
+            {canEditReceivables && (
+              <button onClick={openRvForm}
+                className="ml-auto flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                <FiEdit2 size={12} /> 수금 입력
+              </button>
+            )}
+          </div>
+        ) : unit.invoice ? (
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-slate-400">수금 내역 없음</span>
+            {canEditReceivables && (
+              <button onClick={openRvForm}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors">
+                <FiPlus size={12} /> 수금 등록
+              </button>
+            )}
+          </div>
+        ) : (
+          <span className="text-xs text-slate-300 italic">세금계산서 발행 후 등록 가능</span>
+        )}
+      </div>
+
+      {/* 수금 인라인 폼 */}
+      {editingRv && (
+        <div className="rounded-xl border border-green-200 bg-green-50/30 px-4 py-4">
+          <div className="flex items-end gap-4">
+            <div className="w-52">
+              <label className="block text-xs font-medium text-slate-600 mb-1">입금액 (원)</label>
+              <MoneyInput className={`${inp} w-full`} value={rvForm.paidAmount}
+                autoFocus
+                onChange={(v) => setRvForm({ paidAmount: v })} />
+            </div>
+            <div className="pb-0.5">
+              <p className="text-xs text-slate-400 mb-1">미수금 (자동)</p>
+              <p className={`text-sm font-bold ${Math.max(0, (unit.invoice?.totalAmount ?? 0) - rvForm.paidAmount) > 0 ? "text-red-600" : "text-slate-400"}`}>
+                {fmtWonFull(Math.max(0, (unit.invoice?.totalAmount ?? 0) - rvForm.paidAmount))}
+              </p>
+            </div>
+            <div className="flex gap-2 ml-auto">
+              <button onClick={() => setEditingRv(false)}
+                className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
+              <button onClick={saveReceivable}
+                className="flex items-center gap-1 px-4 py-1.5 text-xs font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors">
+                <FiCheck size={12} /> 저장
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Term section (per-연차 card in Tab 2) ───────────────────
-function TermSection({ group, allFees, project, projectNumber, agencyId, leadInstitutionId, leadInstitutionName, members, isSettlement }: {
+function TermSection({ group, allFees, project, projectNumber, agencyId, leadInstitutionId, leadInstitutionName, members, isSettlement, taxInvoices, receivables }: {
   group: TermGroup;
   allFees: TermFee[];
   project: Project;
@@ -1318,11 +1744,14 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
   leadInstitutionName: string;
   members: ProjectMember[];
   isSettlement: boolean;
+  taxInvoices: TaxInvoice[];
+  receivables: Receivable[];
 }) {
   const canEditInvoices = useCanWrite('tax-invoices');
   const canEditReceivables = useCanWrite('receivables');
   const canEditEmails = useCanWrite('emails');
   const canEditUnclaimed = useCanWrite('unclaimed');
+  const canEditFees = useCanWrite('fees');
   const { institutions, emailDispatches, fundingAgencies } = useStore();
   const leadInst = institutions.find((i) => i.id === leadInstitutionId);
   // 전담기관 설정에 따라 공문을 주관기관만 받을지, 참여기관까지 다 받을지 결정
@@ -1347,133 +1776,53 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
     }
     return running;
   }
-  const [issuingInvoice, setIssuingInvoice] = useState(false);
-  const [invForm, setInvForm] = useState({
-    issuedAt: new Date().toISOString().slice(0, 10),
-    ...splitVatInclusive(group.totalApplied),
-    totalAmount: group.totalApplied,
-  });
-  const [editingRv, setEditingRv] = useState(false);
-  const [rvForm, setRvForm] = useState({
-    paidAmount: group.receivable?.paidAmount ?? 0,
-  });
-
-  function openInvoiceForm() {
-    setInvForm({
-      issuedAt: new Date().toISOString().slice(0, 10),
-      ...splitVatInclusive(group.totalApplied),
-      totalAmount: group.totalApplied,
-    });
-    setIssuingInvoice(true);
-  }
-
-  // 합계(=산정된 수수료)는 고정, 공급가액을 조정하면 부가세가 차액만큼 재계산된다
-  function handleSupplyChange(v: number) {
-    const tax = group.totalApplied - v;
-    setInvForm((p) => ({ ...p, supplyAmount: v, taxAmount: tax, totalAmount: group.totalApplied }));
-  }
-
-  function saveInvoice() {
-    const now = new Date();
-    addTaxInvoice({
-      invoiceNumber: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(Date.now()).slice(-5)}`,
-      projectNumber,
-      projectName: group.fees[0]?.projectName ?? "",
-      termYear: group.termYear,
-      termNumber: group.termNumber,
-      leadInstitutionId,
-      leadInstitutionName,
-      issuedAt: invForm.issuedAt,
-      supplyAmount: invForm.supplyAmount,
-      taxAmount: invForm.taxAmount,
-      totalAmount: invForm.totalAmount,
-      status: "ISSUED",
-    });
-    // 주관기관만 발송 대상인 전담기관은 실제로 청구서를 받는 주관기관만 청구완료 처리하고,
-    // 참여기관은 개별 청구된 게 아니므로 확정(CONFIRMED)까지만 반영한다.
-    group.fees.forEach((f) => {
-      if (sendToAllInstitutions || f.institutionId === leadInstitutionId) {
-        if (f.status !== "BILLED") updateTermFee(f.id, { status: "BILLED" });
-      } else if (f.status === "DRAFT" || f.status === "SCHEDULED") {
-        updateTermFee(f.id, { status: "CONFIRMED" });
-      }
-    });
-    setIssuingInvoice(false);
-  }
-
-  function openRvForm() {
-    setRvForm({ paidAmount: group.receivable?.paidAmount ?? 0 });
-    setEditingRv(true);
-  }
-
-  function saveReceivable() {
-    const inv = group.invoice;
-    if (!inv) return;
-    const remaining = Math.max(0, inv.totalAmount - rvForm.paidAmount);
-    // 미입금 상태의 기본값은 "미수"(OVERDUE) — 만기일(청구일+3개월)이 지나기 전까진 isOverdueByRule이
-    // 화면에 "미수"로만 보여주고, 만기일이 지나면 자동으로 "연체"로 승격된다.
-    const status: Receivable["status"] = rvForm.paidAmount >= inv.totalAmount
-      ? "PAID" : rvForm.paidAmount > 0 ? "PARTIAL" : "OVERDUE";
-    const dueDate = addMonths(inv.issuedAt, 3);
-    if (group.receivable) {
-      updateReceivable(group.receivable.id, {
-        paidAmount: rvForm.paidAmount,
-        receivableAmount: remaining,
-        dueDate: group.receivable.dueDate || dueDate,
-        status,
-      });
-    } else {
-      addReceivable({
-        invoiceNumber: inv.invoiceNumber,
-        projectNumber,
-        projectName: group.fees[0]?.projectName ?? "",
-        termYear: group.termYear,
-        termNumber: group.termNumber,
-        leadInstitutionId,
-        leadInstitutionName,
-        billedAt: inv.issuedAt,
-        billedAmount: inv.totalAmount,
-        paidAmount: rvForm.paidAmount,
-        receivableAmount: remaining,
-        dueDate,
-        status,
-      });
-    }
-    setEditingRv(false);
-  }
-
-  // 공문 발송
   const termLabel = `${group.termYear}년 ${group.termNumber}연차`;
-  const sentEmails = emailDispatches.filter(
-    (e) => e.subject.includes(projectNumber) && e.subject.includes(termLabel)
-  );
-  const lastSent = [...sentEmails].sort((a, b) => b.sentAt.localeCompare(a.sentAt))[0];
 
-  function sendLetter() {
-    const batchId = `BATCH-${Date.now()}`;
-    const sentAt = new Date().toISOString().replace("T", " ").slice(0, 16);
-    const recipients = sendToAllInstitutions
-      ? group.fees.map((f) => ({
+  // RDA2는 참여기관마다 세금계산서/공문발송/수금을 따로 관리해야 하므로, 연차 전체를 하나로
+  // 묶는 대신 실제 수수료가 발생하는(appliedFee > 0) 기관마다 별도의 BillingUnit을 만든다.
+  // 그 외 전담기관은 지금까지와 동일하게 연차 전체를 통합 1건으로 처리한다.
+  const isRda2 = project.agencyId === "fa-006";
+  const feeRef = (f: TermFee) => ({ id: f.id, status: f.status });
+
+  const billingUnits: BillingUnit[] = isRda2
+    ? group.fees.filter((f) => f.appliedFee > 0).map((f) => ({
+        key: `${group.key}|${f.institutionId}`,
+        institutionId: f.institutionId,
+        billingInstitutionId: f.institutionId,
+        billingLabel: f.institutionName,
+        recipients: [{
           institutionName: f.institutionName,
           email: institutions.find((i) => i.id === f.institutionId)?.contactEmail ?? "",
-        }))
-      : [{ institutionName: leadInstitutionName, email: leadInst?.contactEmail ?? "" }];
-
-    recipients.forEach((r) => {
-      addEmailDispatch({
-        batchId,
-        sentAt,
-        senderName: getCurrentUser()?.name ?? "시스템",
-        recipientInstitution: r.institutionName,
-        recipientEmail: r.email,
-        subject: `[${projectNumber}] ${termLabel} 수수료 청구서`,
-        emailType: "TAX_INVOICE",
-        feeCategory: "ANNUAL",
-        attachments: [`청구서_${projectNumber}_${termLabel}.pdf`],
-        status: "SUCCESS",
-      });
-    });
-  }
+        }],
+        amount: f.appliedFee,
+        billedFees: [feeRef(f)],
+        confirmedFees: [],
+        invoice: taxInvoices.find((t) =>
+          t.projectNumber === projectNumber && t.termYear === group.termYear && t.termNumber === group.termNumber && t.institutionId === f.institutionId
+        ) ?? null,
+        receivable: receivables.find((r) =>
+          r.projectNumber === projectNumber && r.termYear === group.termYear && r.termNumber === group.termNumber && r.institutionId === f.institutionId
+        ) ?? null,
+      }))
+    : [{
+        key: `${group.key}|combined`,
+        institutionId: null,
+        billingInstitutionId: leadInstitutionId,
+        billingLabel: leadInstitutionName,
+        // 주관기관만 발송 대상인 전담기관은 주관기관 앞으로만 공문을 보내고, 아니면 참여기관까지 전부 보낸다.
+        recipients: sendToAllInstitutions
+          ? group.fees.map((f) => ({
+              institutionName: f.institutionName,
+              email: institutions.find((i) => i.id === f.institutionId)?.contactEmail ?? "",
+            }))
+          : [{ institutionName: leadInstitutionName, email: leadInst?.contactEmail ?? "" }],
+        amount: group.totalApplied,
+        // 실제로 청구서를 받는 기관(주관, 혹은 전체)만 BILLED, 나머지는 CONFIRMED까지만.
+        billedFees: (sendToAllInstitutions ? group.fees : group.fees.filter((f) => f.institutionId === leadInstitutionId)).map(feeRef),
+        confirmedFees: (sendToAllInstitutions ? [] : group.fees.filter((f) => f.institutionId !== leadInstitutionId)).map(feeRef),
+        invoice: group.invoice,
+        receivable: group.receivable,
+      }];
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -1565,9 +1914,7 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                             </span>}
                       </td>
                       <td className="px-4 py-2.5 text-right font-semibold whitespace-nowrap">
-                        <span className={f.appliedFee === 0 ? "text-amber-500 font-normal" : "text-slate-800"}>
-                          {f.appliedFee === 0 ? "미적용" : fmtWonFull(f.appliedFee)}
-                        </span>
+                        <AppliedFeeCell fee={f} canEdit={canEditFees} projectId={project.id} />
                       </td>
                       {showFeeDetail && (
                         <td className="px-4 py-2.5 text-right whitespace-nowrap">
@@ -1592,7 +1939,11 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
               </tbody>
               <tfoot>
                 <tr className="bg-slate-50 border-t border-slate-100">
-                  <td colSpan={4} className="px-4 py-2 text-right text-xs text-slate-400">합계</td>
+                  <td colSpan={2} className="px-4 py-2 text-right text-xs text-slate-400">합계</td>
+                  <td className="px-4 py-2 text-right text-xs font-semibold text-slate-600 whitespace-nowrap">
+                    {fmtWonFull(group.fees.reduce((s, f) => s + f.budget, 0))}
+                  </td>
+                  <td />
                   {showFeeDetail && (
                     <td className="px-4 py-2 text-right text-xs text-slate-500">
                       {fmtWonFull(group.fees.reduce((s, f) => s + (f.standardFee ?? f.calculatedFee), 0))}
@@ -1646,149 +1997,22 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
             );
           })()}
 
-          {/* ── 세금계산서 + 공문 발송 (같은 줄) ── */}
-          <div className="border-t border-slate-100 px-5 py-4 space-y-4">
-            <div className="flex items-start gap-3">
-              <span className="text-xs font-semibold text-slate-600 w-24 shrink-0 pt-1">세금계산서</span>
-              {group.invoice ? (
-                <div className="flex-1 flex flex-wrap items-center gap-3">
-                  <span className="font-mono text-xs text-slate-700">{group.invoice.invoiceNumber}</span>
-                  <span className="text-xs text-slate-500">{fmtDate(group.invoice.issuedAt)}</span>
-                  <span className="text-xs text-slate-500">공급가 {fmtWonFull(group.invoice.supplyAmount)}</span>
-                  <span className="text-xs text-slate-500">부가세 {fmtWonFull(group.invoice.taxAmount)}</span>
-                  <span className="text-sm font-bold text-slate-800">{fmtWonFull(group.invoice.totalAmount)}</span>
-                  <StatusBadge label={INVOICE_STATUS[group.invoice.status].label} color={INVOICE_STATUS[group.invoice.status].color} />
-                  {/* 공문 발송 - 세금계산서와 동일 행 */}
-                  <div className="ml-auto flex items-center gap-2">
-                    {lastSent && (
-                      <span className="text-xs text-slate-400">마지막 발송 {lastSent.sentAt}</span>
-                    )}
-                    {canEditEmails && (
-                      <button onClick={sendLetter}
-                        title={sendToAllInstitutions ? `주관+참여기관 ${group.fees.length}곳으로 발송됩니다` : "주관기관으로 발송됩니다"}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 transition-colors">
-                        <FiSend size={12} /> 공문 발송{sendToAllInstitutions ? ` (${group.fees.length}곳)` : ""}
-                      </button>
-                    )}
-                    {canEditInvoices && (
-                      <button onClick={() => { openInvoiceForm(); setIssuingInvoice(true); }}
-                        className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
-                        <FiEdit2 size={12} /> 수정
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <div className="flex items-center gap-3">
-                  <span className="text-xs text-slate-400">발행 전</span>
-                  {canEditInvoices && !issuingInvoice && (
-                    <button onClick={openInvoiceForm}
-                      className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
-                      <FiPlus size={12} /> 세금계산서 발행
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* 세금계산서 발행 인라인 폼 */}
-            {issuingInvoice && (
-              <div className="rounded-xl border border-blue-200 bg-blue-50/30 px-4 py-4 space-y-3">
-                <div className="grid grid-cols-4 gap-3 items-end">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-600 mb-1">세금계산서일자</label>
-                    <DateInput className="w-full" value={invForm.issuedAt}
-                      onChange={(v) => setInvForm((p) => ({ ...p, issuedAt: v }))} />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-600 mb-1">공급가액 (원)</label>
-                    <MoneyInput className={`${inp} w-full`} value={invForm.supplyAmount}
-                      onChange={(v) => handleSupplyChange(v)} />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-600 mb-1">부가세 (자동)</label>
-                    <div className="text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-600">{fmtWonFull(invForm.taxAmount)}</div>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-600 mb-1">합계</label>
-                    <div className="text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 font-bold text-slate-700">{fmtWonFull(invForm.totalAmount)}</div>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between">
-                  <p className="text-xs text-slate-400">발행 후 <strong>공문 발송</strong> 버튼으로 주관기관에 즉시 발송할 수 있습니다</p>
-                  <div className="flex gap-2">
-                    <button onClick={() => setIssuingInvoice(false)}
-                      className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
-                    <button onClick={saveInvoice}
-                      className="flex items-center gap-1 px-4 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
-                      <FiCheck size={12} /> 저장 &amp; 발행
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* ── 수금 정보 ── */}
-            <div className="flex items-start gap-3">
-              <span className="text-xs font-semibold text-slate-600 w-24 shrink-0 pt-1">수금 정보</span>
-              {group.receivable ? (
-                <div className="flex-1 flex flex-wrap items-center gap-4">
-                  <span className="text-xs text-slate-500">청구 {fmtWonFull(group.receivable.billedAmount)}</span>
-                  <span className="text-xs text-green-700 font-medium">납부 {fmtWonFull(group.receivable.paidAmount)}</span>
-                  <span className={`text-sm font-bold ${group.receivable.receivableAmount > 0 ? "text-red-600" : "text-slate-400"}`}>
-                    미수금 {fmtWonFull(group.receivable.receivableAmount)}
-                  </span>
-                  <StatusBadge label={RECEIVABLE_STATUS[group.receivable.status].label} color={RECEIVABLE_STATUS[group.receivable.status].color} />
-                  {canEditReceivables && (
-                    <button onClick={openRvForm}
-                      className="ml-auto flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
-                      <FiEdit2 size={12} /> 수금 입력
-                    </button>
-                  )}
-                </div>
-              ) : group.invoice ? (
-                <div className="flex items-center gap-3">
-                  <span className="text-xs text-slate-400">수금 내역 없음</span>
-                  {canEditReceivables && (
-                    <button onClick={openRvForm}
-                      className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors">
-                      <FiPlus size={12} /> 수금 등록
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <span className="text-xs text-slate-300 italic">세금계산서 발행 후 등록 가능</span>
-              )}
-            </div>
-
-            {/* 수금 인라인 폼 */}
-            {editingRv && (
-              <div className="rounded-xl border border-green-200 bg-green-50/30 px-4 py-4">
-                <div className="flex items-end gap-4">
-                  <div className="w-52">
-                    <label className="block text-xs font-medium text-slate-600 mb-1">입금액 (원)</label>
-                    <MoneyInput className={`${inp} w-full`} value={rvForm.paidAmount}
-                      autoFocus
-                      onChange={(v) => setRvForm({ paidAmount: v })} />
-                  </div>
-                  <div className="pb-0.5">
-                    <p className="text-xs text-slate-400 mb-1">미수금 (자동)</p>
-                    <p className={`text-sm font-bold ${Math.max(0, (group.invoice?.totalAmount ?? 0) - rvForm.paidAmount) > 0 ? "text-red-600" : "text-slate-400"}`}>
-                      {fmtWonFull(Math.max(0, (group.invoice?.totalAmount ?? 0) - rvForm.paidAmount))}
-                    </p>
-                  </div>
-                  <div className="flex gap-2 ml-auto">
-                    <button onClick={() => setEditingRv(false)}
-                      className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
-                    <button onClick={saveReceivable}
-                      className="flex items-center gap-1 px-4 py-1.5 text-xs font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors">
-                      <FiCheck size={12} /> 저장
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
+          {/* ── 세금계산서 + 공문발송 + 수금 (RDA2는 기관별로 여러 블록, 그 외엔 통합 1블록) ── */}
+          {billingUnits.map((unit) => (
+            <BillingBlock
+              key={unit.key}
+              unit={unit}
+              projectNumber={projectNumber}
+              project={project}
+              termYear={group.termYear}
+              termNumber={group.termNumber}
+              termLabel={termLabel}
+              canEditInvoices={canEditInvoices}
+              canEditReceivables={canEditReceivables}
+              canEditEmails={canEditEmails}
+              emailDispatches={emailDispatches}
+            />
+          ))}
 
           {/* ── 미청구액 ── */}
           {group.unclaimed && (
@@ -1915,6 +2139,8 @@ function FeeManagementTab({ projectId }: { projectId: string }) {
           leadInstitutionName={project.leadInstitutionName}
           members={members}
           isSettlement={isSettlementTerm(project, group.termNumber)}
+          taxInvoices={taxInvoices}
+          receivables={receivables}
         />
       ))}
     </div>

@@ -96,7 +96,8 @@ const annualColumns: ColumnDef[] = [
     field: "cashBudget",
     label: "현금사업비총액",
     aliases: ["현금사업비총액", "현금사업비 총액", "현금총액", "사업비(현금)"],
-    required: false,
+    required: true,
+    description: "참여기관별 사업비 — 연차 수수료 자동 산정에 사용",
   },
   {
     field: "inKindBudget",
@@ -200,7 +201,8 @@ const stageColumns: ColumnDef[] = [
     field: "totalCashBudget",
     label: "기관_총사업비(현금)",
     aliases: ["기관_총사업비(현금)", "총사업비(현금)", "현금사업비"],
-    required: false,
+    required: true,
+    description: "참여기관별 사업비 — 연차 수수료 자동 산정에 사용",
   },
   {
     field: "auditFirm",

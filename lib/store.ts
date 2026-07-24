@@ -405,6 +405,23 @@ export function updateProject(id: string, data: Partial<Project>): void {
   if (!before) return;
   const after = { ...before, ...data };
   _state = { ..._state, projects: _state.projects.map((p) => (p.id === id ? after : p)) };
+  // 과제번호는 참여기관·연차수수료·미청구·미수금·세금계산서·이슈에 참조키(projectNumber)로
+  // 그대로 복사돼 있으므로, 확정 전 오타 등을 바로잡아 과제번호를 바꾸는 경우 함께 갱신하지
+  // 않으면 이 레코드들이 옛 과제번호를 참조한 채로 고아가 된다.
+  if (data.projectNumber && data.projectNumber !== before.projectNumber) {
+    const oldNum = before.projectNumber;
+    const newNum = data.projectNumber;
+    _state = {
+      ..._state,
+      projectMembers: _state.projectMembers.map((m) => m.projectNumber === oldNum ? { ...m, projectNumber: newNum } : m),
+      termFees: _state.termFees.map((f) => f.projectNumber === oldNum ? { ...f, projectNumber: newNum } : f),
+      termFeeCalcs: _state.termFeeCalcs.map((c) => c.projectNumber === oldNum ? { ...c, projectNumber: newNum } : c),
+      unclaimedFees: _state.unclaimedFees.map((u) => u.projectNumber === oldNum ? { ...u, projectNumber: newNum } : u),
+      receivables: _state.receivables.map((r) => r.projectNumber === oldNum ? { ...r, projectNumber: newNum } : r),
+      taxInvoices: _state.taxInvoices.map((t) => t.projectNumber === oldNum ? { ...t, projectNumber: newNum } : t),
+      projectIssues: _state.projectIssues.map((i) => i.projectNumber === oldNum ? { ...i, projectNumber: newNum } : i),
+    };
+  }
   record("project", id, after.projectName, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   if (PROJECT_FEE_AFFECTING_FIELDS.some((f) => f in data)) {
     autoGenerateTermFees(id);
@@ -960,10 +977,11 @@ export function autoGenerateTermFees(projectId: string): void {
     return stage?.stageNumber ?? 1;
   }
 
-  // CONFIRMED/BILLED로 확정된 연차별 항목은 자동/수동 생성 여부와 무관하게 보존한다.
+  // CONFIRMED/BILLED로 확정된 연차별 항목과, 담당자가 금액을 직접 수정(manualOverride)한 항목은
+  // 자동/수동 생성 여부와 무관하게 보존한다.
   const keptFees = _state.termFees.filter(
     (tf) => tf.projectNumber !== project.projectNumber ||
-      tf.status === "CONFIRMED" || tf.status === "BILLED"
+      tf.status === "CONFIRMED" || tf.status === "BILLED" || tf.manualOverride
   );
   // 이미 확정되어 보존되는 기관×연차 조합 — 아래 생성 루프에서 덮어쓰지 않도록 건너뛴다.
   const lockedKeys = new Set(
