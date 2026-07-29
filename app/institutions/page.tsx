@@ -356,11 +356,6 @@ export default function InstitutionsPage() {
                     <Link href={`/institutions/${inst.id}`} className="font-semibold text-blue-600 hover:underline">
                       {inst.name}
                     </Link>
-                    {inst.referenceGrade && (
-                      <span className="ml-1.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 align-middle" title="정산면제리스트 기준 참고 등급">
-                        {inst.referenceGrade}
-                      </span>
-                    )}
                     <p className="text-xs text-slate-400 mt-0.5">{inst.representativeName} 대표</p>
                   </td>
                   <td className="px-4 py-4">
