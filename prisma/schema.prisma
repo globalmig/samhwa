@@ -1,0 +1,788 @@
+// Samhwa 수수료 관리 시스템 — Prisma 스키마
+// 원본 설계: DB_SCHEMA.md (35개 테이블, Postgres 문법 기준)
+// 대상 DB: SQL Server (기존 서버의 SQL Server Express 인스턴스, 신규 DB "SamhwaFee")
+//
+// SQL Server 관련 변환 메모:
+// - Postgres ENUM 타입은 SQL Server/Prisma에서 네이티브 enum을 지원하지 않아
+//   String(@db.NVarChar) 컬럼 + 아래 주석의 허용값 목록으로 대체했다.
+//   (애플리케이션 레이어에서 TypeScript union 타입으로 검증 필요)
+// - UUID PK는 String @db.UniqueIdentifier + @default(uuid())로 매핑 (Prisma Client가 값 생성).
+// - JSONB는 String(@db.NVarChar(Max))으로 매핑했다 — SQL Server 커넥터는 Prisma의
+//   Json 스칼라 타입 자체를 지원하지 않는다 (prisma generate 시 검증 오류 발생 확인).
+//   애플리케이션에서 JSON.stringify()/JSON.parse()로 직렬화·역직렬화해서 사용한다.
+// - 금액 컬럼은 원본 설계대로 BigInt 유지 (BIGINT, 원 단위 — Int32 범위를 넘는 사업비 존재).
+// - 관계에는 전부 onDelete/onUpdate: NoAction을 명시했다. SQL Server는 하나의 테이블에
+//   여러 CASCADE 경로가 겹치는 것을 허용하지 않는데, 이 스키마는 project → project_term →
+//   project_term_institution 하위로 체인이 깊어 CASCADE를 쓰면 마이그레이션이 실패한다.
+//   삭제는 애플리케이션 레벨에서 처리한다.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider          = "sqlserver"
+  url               = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+}
+
+// ============================================================
+// ENUM 값 정의 (Prisma enum 미사용 — String 컬럼 + 허용값 주석)
+// ============================================================
+// user_role: SYSTEM_ADMIN | ACCOUNTING | SETTLEMENT | GENERAL
+// permission_resource: MENU | FEATURE | DATA
+// permission_action: READ | WRITE | DELETE | EXPORT | APPROVE
+// institution_role: MAIN | PARTICIPATING
+// project_status: ACTIVE | COMPLETED | SUSPENDED | CANCELLED
+// policy_status: DRAFT | ACTIVE | ARCHIVED
+// fee_status: DRAFT | CONFIRMED | BILLED
+// claim_status: DRAFT | SENT | PAID | PARTIAL | OVERDUE
+// receivable_status: OUTSTANDING | PARTIAL | SETTLED | WRITTEN_OFF
+// tax_invoice_status: DRAFT | ISSUED | CANCELLED | AMENDED
+// settlement_status: SCHEDULED | IN_PROGRESS | COMPLETED | CANCELLED
+// email_status: PENDING | SENT | FAILED
+// unclaimed_status: UNCLAIMED | CARRIED_OVER | SETTLED
+
+// ============================================================
+// 그룹 1. 사용자 및 권한
+// ============================================================
+
+model User {
+  id           String    @id @default(uuid()) @db.UniqueIdentifier
+  email        String    @unique @db.NVarChar(255)
+  passwordHash String    @map("password_hash") @db.NVarChar(255)
+  name         String    @db.NVarChar(100)
+  role         String    @db.NVarChar(20) // user_role
+  isActive     Boolean   @default(true) @map("is_active")
+  lastLoginAt  DateTime? @map("last_login_at") @db.DateTime2
+  createdAt    DateTime  @default(now()) @map("created_at") @db.DateTime2
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.DateTime2
+
+  auditLogs                     AuditLog[]
+  createdCompanyClassifications CompanyClassification[]
+  companyClassificationChanges  CompanyClassificationHistory[]
+  createdProjects               Project[]
+  createdFeePolicies            FeePolicy[]                    @relation("FeePolicyCreatedBy")
+  approvedFeePolicies           FeePolicy[]                    @relation("FeePolicyApprovedBy")
+  policyChangeHistories         PolicyChangeHistory[]
+  confirmedTermFees             TermFee[]
+  createdClaims                 Claim[]
+  createdPaymentHistories       PaymentHistory[]
+  createdTaxInvoiceTemplates    TaxInvoiceTemplate[]
+  issuedTaxInvoices             TaxInvoice[]
+  taxInvoiceHistories           TaxInvoiceHistory[]
+  createdSettlements            Settlement[]
+  settlementHistories           SettlementHistory[]
+  createdEmailBatches           EmailBatch[]
+  sentEmailLogs                 EmailLog[]
+
+  @@map("users")
+}
+
+model RolePermission {
+  id           String   @id @default(uuid()) @db.UniqueIdentifier
+  role         String   @map("role") @db.NVarChar(20) // user_role
+  resourceType String   @map("resource_type") @db.NVarChar(20) // permission_resource
+  resourceKey  String   @map("resource_key") @db.NVarChar(200)
+  action       String   @map("action") @db.NVarChar(20) // permission_action
+  isAllowed    Boolean  @default(true) @map("is_allowed")
+  createdAt    DateTime @default(now()) @map("created_at") @db.DateTime2
+
+  @@unique([role, resourceType, resourceKey, action])
+  @@index([role, resourceType], name: "idx_role_permissions_role")
+  @@map("role_permissions")
+}
+
+model AuditLog {
+  id           String   @id @default(uuid()) @db.UniqueIdentifier
+  userId       String?  @map("user_id") @db.UniqueIdentifier
+  action       String   @db.NVarChar(50)
+  resourceType String   @map("resource_type") @db.NVarChar(100)
+  resourceId   String?  @map("resource_id") @db.UniqueIdentifier
+  oldValues    String?  @map("old_values") @db.NVarChar(Max) // JSON.stringify
+  newValues    String?  @map("new_values") @db.NVarChar(Max) // JSON.stringify
+  ipAddress    String?  @map("ip_address") @db.NVarChar(45)
+  userAgent    String?  @map("user_agent") @db.NVarChar(Max)
+  createdAt    DateTime @default(now()) @map("created_at") @db.DateTime2
+
+  user User? @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId], name: "idx_audit_logs_user_id")
+  @@index([resourceType, resourceId], name: "idx_audit_logs_resource")
+  @@index([createdAt], name: "idx_audit_logs_created_at")
+  @@map("audit_logs")
+}
+
+// ============================================================
+// 그룹 2. 기업
+// ============================================================
+
+model Company {
+  id              String   @id @default(uuid()) @db.UniqueIdentifier
+  companyName     String   @map("company_name") @db.NVarChar(200)
+  businessNumber  String   @unique @map("business_number") @db.NVarChar(20)
+  ceoName         String?  @map("ceo_name") @db.NVarChar(100)
+  address         String?  @db.NVarChar(Max)
+  phone           String?  @db.NVarChar(30)
+  email           String?  @db.NVarChar(255)
+  isActive        Boolean  @default(true) @map("is_active")
+  notes           String?  @db.NVarChar(Max)
+  createdAt       DateTime @default(now()) @map("created_at") @db.DateTime2
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.DateTime2
+
+  contacts        CompanyContact[]
+  classifications CompanyClassification[]
+  institutions    Institution[]
+
+  @@map("companies")
+}
+
+model CompanyContact {
+  id         String   @id @default(uuid()) @db.UniqueIdentifier
+  companyId  String   @map("company_id") @db.UniqueIdentifier
+  name       String   @db.NVarChar(100)
+  department String?  @db.NVarChar(100)
+  position   String?  @db.NVarChar(100)
+  phone      String?  @db.NVarChar(30)
+  email      String?  @db.NVarChar(255)
+  isPrimary  Boolean  @default(false) @map("is_primary")
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at") @db.DateTime2
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.DateTime2
+
+  company   Company    @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  emailLogs EmailLog[]
+
+  @@map("company_contacts")
+}
+
+model CompanyClassification {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  companyId      String   @map("company_id") @db.UniqueIdentifier
+  projectTermId  String   @map("project_term_id") @db.UniqueIdentifier
+  classification String   @db.NVarChar(100)
+  effectiveFrom  DateTime @map("effective_from") @db.Date
+  notes          String?  @db.NVarChar(Max)
+  createdBy      String?  @map("created_by") @db.UniqueIdentifier
+  createdAt      DateTime @default(now()) @map("created_at") @db.DateTime2
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.DateTime2
+
+  company     Company     @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  projectTerm ProjectTerm @relation(fields: [projectTermId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdByUser User?     @relation(fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([companyId, projectTermId])
+  @@map("company_classifications")
+}
+
+model CompanyClassificationHistory {
+  id                 String   @id @default(uuid()) @db.UniqueIdentifier
+  companyId          String   @map("company_id") @db.UniqueIdentifier
+  projectTermId      String   @map("project_term_id") @db.UniqueIdentifier
+  oldClassification  String?  @map("old_classification") @db.NVarChar(100)
+  newClassification  String   @map("new_classification") @db.NVarChar(100)
+  changeReason       String?  @map("change_reason") @db.NVarChar(Max)
+  changedBy          String   @map("changed_by") @db.UniqueIdentifier
+  changedAt          DateTime @default(now()) @map("changed_at") @db.DateTime2
+
+  changedByUser User @relation(fields: [changedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("company_classification_histories")
+}
+
+// ============================================================
+// 그룹 3. 기관
+// ============================================================
+
+model Institution {
+  id                 String   @id @default(uuid()) @db.UniqueIdentifier
+  companyId          String?  @map("company_id") @db.UniqueIdentifier
+  institutionName    String   @map("institution_name") @db.NVarChar(200)
+  businessNumber     String?  @unique @map("business_number") @db.NVarChar(20)
+  institutionType    String?  @map("institution_type") @db.NVarChar(50)
+  address            String?  @db.NVarChar(Max)
+  phone              String?  @db.NVarChar(30)
+  email              String?  @db.NVarChar(255)
+  representativeName String?  @map("representative_name") @db.NVarChar(100)
+  isActive           Boolean  @default(true) @map("is_active")
+  notes              String?  @db.NVarChar(Max)
+  createdAt          DateTime @default(now()) @map("created_at") @db.DateTime2
+  updatedAt          DateTime @updatedAt @map("updated_at") @db.DateTime2
+
+  company              Company?                  @relation(fields: [companyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  contacts             InstitutionContact[]
+  projectTermLinks     ProjectTermInstitution[]
+  feePolicyExceptions  FeePolicyExceptionRule[]
+  emailLogs            EmailLog[]
+
+  @@map("institutions")
+}
+
+model InstitutionContact {
+  id            String   @id @default(uuid()) @db.UniqueIdentifier
+  institutionId String   @map("institution_id") @db.UniqueIdentifier
+  name          String   @db.NVarChar(100)
+  department    String?  @db.NVarChar(100)
+  position      String?  @db.NVarChar(100)
+  phone         String?  @db.NVarChar(30)
+  email         String?  @db.NVarChar(255)
+  isPrimary     Boolean  @default(false) @map("is_primary")
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at") @db.DateTime2
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.DateTime2
+
+  institution Institution @relation(fields: [institutionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  emailLogs   EmailLog[]
+
+  @@map("institution_contacts")
+}
+
+// ============================================================
+// 그룹 4. 과제 및 연차
+// ============================================================
+
+model Project {
+  id             String   @id @default(uuid()) @db.UniqueIdentifier
+  projectNumber  String   @unique @map("project_number") @db.NVarChar(100)
+  projectName    String   @map("project_name") @db.NVarChar(500)
+  projectType    String   @map("project_type") @db.NVarChar(100)
+  agency         String?  @db.NVarChar(200)
+  settlementType String   @map("settlement_type") @db.NVarChar(50)
+  startYear      Int      @map("start_year")
+  endYear        Int      @map("end_year")
+  totalTerms     Int      @map("total_terms")
+  status         String   @default("ACTIVE") @db.NVarChar(20) // project_status
+  notes          String?  @db.NVarChar(Max)
+  createdBy      String?  @map("created_by") @db.UniqueIdentifier
+  createdAt      DateTime @default(now()) @map("created_at") @db.DateTime2
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.DateTime2
+
+  createdByUser       User?                     @relation(fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  terms               ProjectTerm[]
+  feePolicyExceptions FeePolicyExceptionRule[]
+
+  @@map("projects")
+}
+
+model ProjectTerm {
+  id          String   @id @default(uuid()) @db.UniqueIdentifier
+  projectId   String   @map("project_id") @db.UniqueIdentifier
+  termYear    Int      @map("term_year")
+  termNumber  Int      @map("term_number")
+  totalBudget BigInt   @map("total_budget")
+  status      String   @default("ACTIVE") @db.NVarChar(20)
+  notes       String?  @db.NVarChar(Max)
+  createdAt   DateTime @default(now()) @map("created_at") @db.DateTime2
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.DateTime2
+
+  project                 Project                  @relation(fields: [projectId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  institutionLinks        ProjectTermInstitution[]
+  companyClassifications  CompanyClassification[]
+  emailBatches            EmailBatch[]
+  emailLogs               EmailLog[]
+
+  @@unique([projectId, termYear])
+  @@unique([projectId, termNumber])
+  @@index([projectId], name: "idx_project_terms_project_id")
+  @@index([termYear, projectId], name: "idx_project_terms_year")
+  @@map("project_terms")
+}
+
+// 수수료/미청구/채권/정산/세금계산서가 모두 이 테이블을 기준으로 연결되는 중심 테이블
+model ProjectTermInstitution {
+  id              String   @id @default(uuid()) @db.UniqueIdentifier
+  projectTermId   String   @map("project_term_id") @db.UniqueIdentifier
+  institutionId   String   @map("institution_id") @db.UniqueIdentifier
+  role            String   @db.NVarChar(20) // institution_role: MAIN | PARTICIPATING
+  projectBudget   BigInt   @map("project_budget")
+  status          String   @default("ACTIVE") @db.NVarChar(20)
+  notes           String?  @db.NVarChar(Max)
+  createdAt       DateTime @default(now()) @map("created_at") @db.DateTime2
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.DateTime2
+
+  projectTerm  ProjectTerm   @relation(fields: [projectTermId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  institution  Institution   @relation(fields: [institutionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  termFee       TermFee?
+  unclaimedFees UnclaimedFee[]
+  claims        Claim[]
+  receivables   Receivable[]
+  taxInvoices   TaxInvoice[]
+  settlements   Settlement[]
+
+  @@unique([projectTermId, institutionId])
+  @@index([projectTermId], name: "idx_pti_project_term_id")
+  @@index([institutionId], name: "idx_pti_institution_id")
+  @@index([projectTermId, institutionId, role], name: "idx_pti_term_institution")
+  @@map("project_term_institutions")
+}
+
+// ============================================================
+// 그룹 5. 수수료 정책 엔진
+// ============================================================
+
+model FeePolicy {
+  id             String    @id @default(uuid()) @db.UniqueIdentifier
+  policyName     String    @map("policy_name") @db.NVarChar(200)
+  policyVersion  Int       @map("policy_version")
+  description    String?   @db.NVarChar(Max)
+  status         String    @default("DRAFT") @db.NVarChar(20) // policy_status
+  effectiveFrom  DateTime? @map("effective_from") @db.Date
+  effectiveTo    DateTime? @map("effective_to") @db.Date
+  createdBy      String?   @map("created_by") @db.UniqueIdentifier
+  approvedBy     String?   @map("approved_by") @db.UniqueIdentifier
+  approvedAt     DateTime? @map("approved_at") @db.DateTime2
+  createdAt      DateTime  @default(now()) @map("created_at") @db.DateTime2
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.DateTime2
+
+  createdByUser  User? @relation("FeePolicyCreatedBy", fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  approvedByUser User? @relation("FeePolicyApprovedBy", fields: [approvedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  budgetRules           FeePolicyBudgetRule[]
+  institutionCountRules FeePolicyInstitutionCountRule[]
+  projectTypeRules      FeePolicyProjectTypeRule[]
+  settlementTypeRules   FeePolicySettlementTypeRule[]
+  companyClassRules     FeePolicyCompanyClassRule[]
+  billingRatioRules     FeePolicyBillingRatioRule[]
+  exemptionRules        FeePolicyExemptionRule[]
+  exceptionRules        FeePolicyExceptionRule[]
+  changeHistories       PolicyChangeHistory[]
+  termFees              TermFee[]
+
+  @@index([status, effectiveFrom, effectiveTo], name: "idx_fee_policies_status")
+  @@map("fee_policies")
+}
+
+model FeePolicyBudgetRule {
+  id         String   @id @default(uuid()) @db.UniqueIdentifier
+  policyId   String   @map("policy_id") @db.UniqueIdentifier
+  budgetMin  BigInt   @map("budget_min")
+  budgetMax  BigInt?  @map("budget_max")
+  baseRate   Decimal? @map("base_rate") @db.Decimal(7, 5)
+  baseAmount BigInt?  @map("base_amount")
+  priority   Int      @default(0)
+  createdAt  DateTime @default(now()) @map("created_at") @db.DateTime2
+
+  policy FeePolicy @relation(fields: [policyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("fee_policy_budget_rules")
+}
+
+model FeePolicyInstitutionCountRule {
+  id                String   @id @default(uuid()) @db.UniqueIdentifier
+  policyId          String   @map("policy_id") @db.UniqueIdentifier
+  countMin          Int      @map("count_min")
+  countMax          Int?     @map("count_max")
+  additionalRate    Decimal? @map("additional_rate") @db.Decimal(7, 5)
+  additionalAmount  BigInt?  @map("additional_amount")
+  priority          Int      @default(0)
+  createdAt         DateTime @default(now()) @map("created_at") @db.DateTime2
+
+  policy FeePolicy @relation(fields: [policyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("fee_policy_institution_count_rules")
+}
+
+model FeePolicyProjectTypeRule {
+  id          String   @id @default(uuid()) @db.UniqueIdentifier
+  policyId    String   @map("policy_id") @db.UniqueIdentifier
+  projectType String   @map("project_type") @db.NVarChar(100)
+  multiplier  Decimal  @default(1.0) @db.Decimal(6, 4)
+  createdAt   DateTime @default(now()) @map("created_at") @db.DateTime2
+
+  policy FeePolicy @relation(fields: [policyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([policyId, projectType])
+  @@map("fee_policy_project_type_rules")
+}
+
+model FeePolicySettlementTypeRule {
+  id              String   @id @default(uuid()) @db.UniqueIdentifier
+  policyId        String   @map("policy_id") @db.UniqueIdentifier
+  settlementType  String   @map("settlement_type") @db.NVarChar(50)
+  multiplier      Decimal  @default(1.0) @db.Decimal(6, 4)
+  createdAt       DateTime @default(now()) @map("created_at") @db.DateTime2
+
+  policy FeePolicy @relation(fields: [policyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([policyId, settlementType])
+  @@map("fee_policy_settlement_type_rules")
+}
+
+model FeePolicyCompanyClassRule {
+  id                     String   @id @default(uuid()) @db.UniqueIdentifier
+  policyId               String   @map("policy_id") @db.UniqueIdentifier
+  companyClassification  String   @map("company_classification") @db.NVarChar(100)
+  multiplier             Decimal  @default(1.0) @db.Decimal(6, 4)
+  createdAt              DateTime @default(now()) @map("created_at") @db.DateTime2
+
+  policy FeePolicy @relation(fields: [policyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([policyId, companyClassification])
+  @@map("fee_policy_company_class_rules")
+}
+
+model FeePolicyBillingRatioRule {
+  id           String   @id @default(uuid()) @db.UniqueIdentifier
+  policyId     String   @map("policy_id") @db.UniqueIdentifier
+  termNumber   Int      @map("term_number")
+  billingRatio Decimal  @map("billing_ratio") @db.Decimal(6, 4)
+  createdAt    DateTime @default(now()) @map("created_at") @db.DateTime2
+
+  policy FeePolicy @relation(fields: [policyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([policyId, termNumber])
+  @@map("fee_policy_billing_ratio_rules")
+}
+
+model FeePolicyExemptionRule {
+  id         String   @id @default(uuid()) @db.UniqueIdentifier
+  policyId   String   @map("policy_id") @db.UniqueIdentifier
+  ruleName   String   @map("rule_name") @db.NVarChar(200)
+  conditions String   @db.NVarChar(Max) // JSON.stringify
+  priority   Int      @default(0)
+  createdAt  DateTime @default(now()) @map("created_at") @db.DateTime2
+
+  policy FeePolicy @relation(fields: [policyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("fee_policy_exemption_rules")
+}
+
+model FeePolicyExceptionRule {
+  id                   String   @id @default(uuid()) @db.UniqueIdentifier
+  policyId             String   @map("policy_id") @db.UniqueIdentifier
+  ruleName             String   @map("rule_name") @db.NVarChar(200)
+  targetProjectId      String?  @map("target_project_id") @db.UniqueIdentifier
+  targetInstitutionId  String?  @map("target_institution_id") @db.UniqueIdentifier
+  conditions           String?  @db.NVarChar(Max) // JSON.stringify
+  overrideRate         Decimal? @map("override_rate") @db.Decimal(7, 5)
+  overrideAmount       BigInt?  @map("override_amount")
+  priority             Int      @default(0)
+  createdAt            DateTime @default(now()) @map("created_at") @db.DateTime2
+
+  policy            FeePolicy    @relation(fields: [policyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  targetProject     Project?     @relation(fields: [targetProjectId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  targetInstitution Institution? @relation(fields: [targetInstitutionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("fee_policy_exception_rules")
+}
+
+model PolicyChangeHistory {
+  id                 String   @id @default(uuid()) @db.UniqueIdentifier
+  feePolicyId        String   @map("fee_policy_id") @db.UniqueIdentifier
+  changeType         String   @map("change_type") @db.NVarChar(50)
+  changeDescription  String?  @map("change_description") @db.NVarChar(Max)
+  oldPolicySnapshot  String?  @map("old_policy_snapshot") @db.NVarChar(Max) // JSON.stringify
+  newPolicySnapshot  String?  @map("new_policy_snapshot") @db.NVarChar(Max) // JSON.stringify
+  changedBy          String   @map("changed_by") @db.UniqueIdentifier
+  changedAt          DateTime @default(now()) @map("changed_at") @db.DateTime2
+
+  feePolicy     FeePolicy @relation(fields: [feePolicyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  changedByUser User      @relation(fields: [changedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("policy_change_histories")
+}
+
+// ============================================================
+// 그룹 6. 수수료 관리
+// ============================================================
+
+// 수수료 계산의 최종 결과 테이블
+model TermFee {
+  id                        String    @id @default(uuid()) @db.UniqueIdentifier
+  projectTermInstitutionId  String    @unique @map("project_term_institution_id") @db.UniqueIdentifier
+  feePolicyId               String    @map("fee_policy_id") @db.UniqueIdentifier
+  projectBudget              BigInt    @map("project_budget")
+  standardFee                BigInt    @map("standard_fee")
+  appliedFee                 BigInt?   @map("applied_fee")
+  billedFee                  BigInt?   @map("billed_fee")
+  cumulativeFee               BigInt?   @map("cumulative_fee")
+  isFeeExempt                 Boolean   @default(false) @map("is_fee_exempt")
+  exemptionReason              String?   @map("exemption_reason") @db.NVarChar(Max)
+  status                       String    @default("DRAFT") @db.NVarChar(20) // fee_status
+  confirmedBy                  String?   @map("confirmed_by") @db.UniqueIdentifier
+  confirmedAt                  DateTime? @map("confirmed_at") @db.DateTime2
+  notes                        String?   @db.NVarChar(Max)
+  createdAt                    DateTime  @default(now()) @map("created_at") @db.DateTime2
+  updatedAt                    DateTime  @updatedAt @map("updated_at") @db.DateTime2
+
+  projectTermInstitution ProjectTermInstitution @relation(fields: [projectTermInstitutionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  feePolicy               FeePolicy              @relation(fields: [feePolicyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  confirmedByUser          User?                  @relation(fields: [confirmedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  claims                   Claim[]
+
+  @@index([projectTermInstitutionId], name: "idx_term_fees_pti_id")
+  @@index([feePolicyId], name: "idx_term_fees_policy_id")
+  @@map("term_fees")
+}
+
+// 연도 간 이월 로직의 핵심 테이블. carriedOverFromId 자기참조로 이월 체인 구성
+model UnclaimedFee {
+  id                        String   @id @default(uuid()) @db.UniqueIdentifier
+  projectTermInstitutionId  String   @map("project_term_institution_id") @db.UniqueIdentifier
+  fiscalYear                 Int      @map("fiscal_year")
+  billedFee                   BigInt   @map("billed_fee")
+  actuallyBilled               BigInt   @default(0) @map("actually_billed")
+  unclaimedAmount               BigInt   @map("unclaimed_amount")
+  carriedOverFromId              String?  @map("carried_over_from_id") @db.UniqueIdentifier
+  carriedOverAmount               BigInt   @default(0) @map("carried_over_amount")
+  cumulativeUnclaimed              BigInt   @map("cumulative_unclaimed")
+  finalClaimAmount                  BigInt?  @map("final_claim_amount")
+  status                             String   @default("UNCLAIMED") @db.NVarChar(20) // unclaimed_status
+  createdAt                          DateTime @default(now()) @map("created_at") @db.DateTime2
+  updatedAt                          DateTime @updatedAt @map("updated_at") @db.DateTime2
+
+  projectTermInstitution ProjectTermInstitution @relation(fields: [projectTermInstitutionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  carriedOverFrom          UnclaimedFee?          @relation("UnclaimedCarryOver", fields: [carriedOverFromId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  carriedOverTo            UnclaimedFee[]         @relation("UnclaimedCarryOver")
+
+  @@unique([projectTermInstitutionId, fiscalYear])
+  @@index([projectTermInstitutionId], name: "idx_unclaimed_fees_pti_id")
+  @@index([fiscalYear], name: "idx_unclaimed_fees_fiscal_year")
+  @@map("unclaimed_fees")
+}
+
+// ============================================================
+// 그룹 7. 청구 및 채권
+// ============================================================
+
+model Claim {
+  id                        String   @id @default(uuid()) @db.UniqueIdentifier
+  projectTermInstitutionId  String   @map("project_term_institution_id") @db.UniqueIdentifier
+  termFeeId                  String?  @map("term_fee_id") @db.UniqueIdentifier
+  claimDate                   DateTime @map("claim_date") @db.Date
+  claimAmount                  BigInt   @map("claim_amount")
+  claimType                     String?  @map("claim_type") @db.NVarChar(50)
+  status                        String   @default("DRAFT") @db.NVarChar(20) // claim_status
+  notes                         String?  @db.NVarChar(Max)
+  createdBy                     String?  @map("created_by") @db.UniqueIdentifier
+  createdAt                     DateTime @default(now()) @map("created_at") @db.DateTime2
+  updatedAt                     DateTime @updatedAt @map("updated_at") @db.DateTime2
+
+  projectTermInstitution ProjectTermInstitution @relation(fields: [projectTermInstitutionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  termFee                  TermFee?               @relation(fields: [termFeeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdByUser             User?                  @relation(fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  receivables               Receivable[]
+  taxInvoices                TaxInvoice[]
+
+  @@index([projectTermInstitutionId], name: "idx_claims_pti_id")
+  @@index([termFeeId], name: "idx_claims_term_fee_id")
+  @@map("claims")
+}
+
+model Receivable {
+  id                        String   @id @default(uuid()) @db.UniqueIdentifier
+  claimId                    String   @map("claim_id") @db.UniqueIdentifier
+  projectTermInstitutionId  String   @map("project_term_institution_id") @db.UniqueIdentifier
+  billedAmount                BigInt   @map("billed_amount")
+  collectedAmount              BigInt   @default(0) @map("collected_amount")
+  outstandingAmount             BigInt   @map("outstanding_amount")
+  dueDate                        DateTime? @map("due_date") @db.Date
+  isLongOverdue                   Boolean  @default(false) @map("is_long_overdue")
+  overdueDays                      Int      @default(0) @map("overdue_days")
+  status                            String   @default("OUTSTANDING") @db.NVarChar(20) // receivable_status
+  notes                             String?  @db.NVarChar(Max)
+  createdAt                         DateTime @default(now()) @map("created_at") @db.DateTime2
+  updatedAt                         DateTime @updatedAt @map("updated_at") @db.DateTime2
+
+  claim              Claim                  @relation(fields: [claimId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  projectTermInstitution ProjectTermInstitution @relation(fields: [projectTermInstitutionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  paymentHistories        PaymentHistory[]
+
+  @@index([claimId], name: "idx_receivables_claim_id")
+  @@index([status], name: "idx_receivables_status")
+  @@map("receivables")
+}
+
+model PaymentHistory {
+  id              String   @id @default(uuid()) @db.UniqueIdentifier
+  receivableId    String   @map("receivable_id") @db.UniqueIdentifier
+  paymentDate     DateTime @map("payment_date") @db.Date
+  paymentAmount   BigInt   @map("payment_amount")
+  paymentMethod   String?  @map("payment_method") @db.NVarChar(50)
+  referenceNumber String?  @map("reference_number") @db.NVarChar(100)
+  memo            String?  @db.NVarChar(Max)
+  createdBy       String?  @map("created_by") @db.UniqueIdentifier
+  createdAt       DateTime @default(now()) @map("created_at") @db.DateTime2
+
+  receivable    Receivable @relation(fields: [receivableId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdByUser User?      @relation(fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([receivableId], name: "idx_payment_histories_receivable_id")
+  @@map("payment_histories")
+}
+
+// ============================================================
+// 그룹 8. 세금계산서
+// ============================================================
+
+model TaxInvoiceTemplate {
+  id              String   @id @default(uuid()) @db.UniqueIdentifier
+  templateName    String   @map("template_name") @db.NVarChar(200)
+  templateContent String   @map("template_content") @db.NVarChar(Max) // JSON.stringify
+  isDefault       Boolean  @default(false) @map("is_default")
+  createdBy       String?  @map("created_by") @db.UniqueIdentifier
+  createdAt       DateTime @default(now()) @map("created_at") @db.DateTime2
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.DateTime2
+
+  createdByUser User?        @relation(fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  taxInvoices   TaxInvoice[]
+
+  @@map("tax_invoice_templates")
+}
+
+// 발행 당시 공급받는자(기관) 정보를 스냅샷으로 저장
+model TaxInvoice {
+  id                        String    @id @default(uuid()) @db.UniqueIdentifier
+  projectTermInstitutionId  String    @map("project_term_institution_id") @db.UniqueIdentifier
+  claimId                    String?   @map("claim_id") @db.UniqueIdentifier
+  templateId                  String?   @map("template_id") @db.UniqueIdentifier
+  invoiceNumber                 String    @unique @map("invoice_number") @db.NVarChar(100)
+  issueDate                      DateTime  @map("issue_date") @db.Date
+  supplyAmount                    BigInt    @map("supply_amount")
+  taxAmount                        BigInt    @map("tax_amount")
+  totalAmount                       BigInt    @map("total_amount")
+  buyerName                          String    @map("buyer_name") @db.NVarChar(200)
+  buyerBusinessNumber                 String    @map("buyer_business_number") @db.NVarChar(20)
+  buyerAddress                         String?   @map("buyer_address") @db.NVarChar(Max)
+  status                                 String    @default("DRAFT") @db.NVarChar(20) // tax_invoice_status
+  pdfPath                                 String?   @map("pdf_path") @db.NVarChar(Max)
+  issuedBy                                 String?   @map("issued_by") @db.UniqueIdentifier
+  cancelledAt                               DateTime? @map("cancelled_at") @db.DateTime2
+  cancelReason                               String?   @map("cancel_reason") @db.NVarChar(Max)
+  originalInvoiceId                           String?   @map("original_invoice_id") @db.UniqueIdentifier
+  notes                                        String?   @db.NVarChar(Max)
+  createdAt                                    DateTime  @default(now()) @map("created_at") @db.DateTime2
+  updatedAt                                    DateTime  @updatedAt @map("updated_at") @db.DateTime2
+
+  projectTermInstitution ProjectTermInstitution @relation(fields: [projectTermInstitutionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  claim                    Claim?                 @relation(fields: [claimId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  template                  TaxInvoiceTemplate?    @relation(fields: [templateId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  issuedByUser               User?                  @relation(fields: [issuedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  originalInvoice             TaxInvoice?            @relation("TaxInvoiceAmendment", fields: [originalInvoiceId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  amendments                   TaxInvoice[]           @relation("TaxInvoiceAmendment")
+  histories                     TaxInvoiceHistory[]
+
+  @@index([projectTermInstitutionId], name: "idx_tax_invoices_pti_id")
+  @@index([status], name: "idx_tax_invoices_status")
+  @@map("tax_invoices")
+}
+
+model TaxInvoiceHistory {
+  id            String    @id @default(uuid()) @db.UniqueIdentifier
+  taxInvoiceId  String    @map("tax_invoice_id") @db.UniqueIdentifier
+  action        String    @db.NVarChar(50)
+  oldStatus     String?   @map("old_status") @db.NVarChar(20)
+  newStatus     String?   @map("new_status") @db.NVarChar(20)
+  oldValues     String?   @map("old_values") @db.NVarChar(Max) // JSON.stringify
+  reason        String?   @db.NVarChar(Max)
+  changedBy     String    @map("changed_by") @db.UniqueIdentifier
+  changedAt     DateTime  @default(now()) @map("changed_at") @db.DateTime2
+
+  taxInvoice    TaxInvoice @relation(fields: [taxInvoiceId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  changedByUser User       @relation(fields: [changedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([taxInvoiceId], name: "idx_tax_invoice_histories_invoice_id")
+  @@map("tax_invoice_histories")
+}
+
+// ============================================================
+// 그룹 9. 기관 정산
+// ============================================================
+
+model Settlement {
+  id                        String    @id @default(uuid()) @db.UniqueIdentifier
+  projectTermInstitutionId  String    @map("project_term_institution_id") @db.UniqueIdentifier
+  settlementAmount            BigInt    @map("settlement_amount")
+  additionalAmount              BigInt    @default(0) @map("additional_amount")
+  feeAmount                       BigInt    @map("fee_amount")
+  scheduledAmount                  BigInt?   @map("scheduled_amount")
+  paidAmount                        BigInt    @default(0) @map("paid_amount")
+  outstandingAmount                  BigInt    @map("outstanding_amount")
+  settlementDate                      DateTime? @map("settlement_date") @db.Date
+  paymentDueDate                       DateTime? @map("payment_due_date") @db.Date
+  status                                 String    @default("SCHEDULED") @db.NVarChar(20) // settlement_status
+  notes                                   String?   @db.NVarChar(Max)
+  createdBy                               String?   @map("created_by") @db.UniqueIdentifier
+  createdAt                               DateTime  @default(now()) @map("created_at") @db.DateTime2
+  updatedAt                               DateTime  @updatedAt @map("updated_at") @db.DateTime2
+
+  projectTermInstitution ProjectTermInstitution @relation(fields: [projectTermInstitutionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdByUser            User?                  @relation(fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  histories                 SettlementHistory[]
+
+  @@index([projectTermInstitutionId], name: "idx_settlements_pti_id")
+  @@index([status], name: "idx_settlements_status")
+  @@map("settlements")
+}
+
+model SettlementHistory {
+  id            String   @id @default(uuid()) @db.UniqueIdentifier
+  settlementId  String   @map("settlement_id") @db.UniqueIdentifier
+  action        String   @db.NVarChar(100)
+  oldValues     String?  @map("old_values") @db.NVarChar(Max) // JSON.stringify
+  newValues     String?  @map("new_values") @db.NVarChar(Max) // JSON.stringify
+  changedBy     String   @map("changed_by") @db.UniqueIdentifier
+  changedAt     DateTime @default(now()) @map("changed_at") @db.DateTime2
+  notes         String?  @db.NVarChar(Max)
+
+  settlement    Settlement @relation(fields: [settlementId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  changedByUser User       @relation(fields: [changedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("settlement_histories")
+}
+
+// ============================================================
+// 그룹 10. 이메일
+// ============================================================
+
+model EmailBatch {
+  id            String    @id @default(uuid()) @db.UniqueIdentifier
+  batchName     String    @map("batch_name") @db.NVarChar(200)
+  emailType     String    @map("email_type") @db.NVarChar(100)
+  projectTermId String?   @map("project_term_id") @db.UniqueIdentifier
+  totalCount    Int       @default(0) @map("total_count")
+  sentCount     Int       @default(0) @map("sent_count")
+  failedCount   Int       @default(0) @map("failed_count")
+  status        String    @default("PENDING") @db.NVarChar(20) // email_status
+  startedAt     DateTime? @map("started_at") @db.DateTime2
+  completedAt   DateTime? @map("completed_at") @db.DateTime2
+  createdBy     String?   @map("created_by") @db.UniqueIdentifier
+  createdAt     DateTime  @default(now()) @map("created_at") @db.DateTime2
+
+  projectTerm   ProjectTerm? @relation(fields: [projectTermId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdByUser User?        @relation(fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  logs          EmailLog[]
+
+  @@map("email_batches")
+}
+
+model EmailLog {
+  id                     String    @id @default(uuid()) @db.UniqueIdentifier
+  batchId                String?   @map("batch_id") @db.UniqueIdentifier
+  emailType              String    @map("email_type") @db.NVarChar(100)
+  projectTermId          String?   @map("project_term_id") @db.UniqueIdentifier
+  institutionId          String?   @map("institution_id") @db.UniqueIdentifier
+  companyContactId       String?   @map("company_contact_id") @db.UniqueIdentifier
+  institutionContactId   String?   @map("institution_contact_id") @db.UniqueIdentifier
+  toEmail                String    @map("to_email") @db.NVarChar(255)
+  subject                String    @db.NVarChar(500)
+  body                   String    @db.NVarChar(Max)
+  status                 String    @default("PENDING") @db.NVarChar(20) // email_status
+  sentAt                 DateTime? @map("sent_at") @db.DateTime2
+  errorMessage           String?   @map("error_message") @db.NVarChar(Max)
+  sentBy                 String?   @map("sent_by") @db.UniqueIdentifier
+  createdAt              DateTime  @default(now()) @map("created_at") @db.DateTime2
+
+  batch                EmailBatch?          @relation(fields: [batchId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  projectTerm          ProjectTerm?         @relation(fields: [projectTermId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  institution          Institution?         @relation(fields: [institutionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  companyContact       CompanyContact?      @relation(fields: [companyContactId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  institutionContact   InstitutionContact?  @relation(fields: [institutionContactId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sentByUser           User?                @relation(fields: [sentBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([batchId], name: "idx_email_logs_batch_id")
+  @@index([institutionId], name: "idx_email_logs_institution_id")
+  @@index([status], name: "idx_email_logs_status")
+  @@map("email_logs")
+}

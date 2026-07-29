@@ -30,12 +30,15 @@ const WRITE_ACCESS: Record<string, Role[]> = {
   fees:           ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   // 매출발행·매출취소·수금관리: 전담기관담당자·조회전용은 입력 불가
   "fees-sales":   ["ADMIN", "ACCOUNTANT"],
+  // 타회계법인 진행 여부 체크: 시스템관리자·회계담당자만 설정 가능
+  "fees-other-firm": ["ADMIN", "ACCOUNTANT"],
   "company-class":["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   unclaimed:      ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   receivables:    ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   settlements:    ["ADMIN", "SETTLEMENT"],
   "tax-invoices": ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  emails:         ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  // 공문 발송(세금계산서·정산절차 안내 등): 회계담당자만 발송 가능 — 전담기관담당자(SETTLEMENT)는 발송 불가
+  emails:         ["ADMIN", "ACCOUNTANT"],
   projects:            ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   "funding-agencies":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   "notice-templates":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],

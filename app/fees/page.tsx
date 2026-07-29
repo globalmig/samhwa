@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useMemo, useRef, useEffect } from "react";
+import { useState, useMemo, useRef, useEffect, type CSSProperties } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import * as XLSX from "xlsx";
 import { FiPlus, FiChevronDown, FiChevronUp, FiChevronRight, FiMail, FiDownload, FiX } from "react-icons/fi";
+import ExcelUploadModal, { downloadExcelTemplate } from "@/components/common/ExcelUploadModal";
 import {
   useStore,
   addReceivable,
@@ -1632,13 +1633,13 @@ function UnclaimedAmountCell({ row, canEdit }: { row: FeeRow; canEdit: boolean }
 
 // ── 열 헤더 정의 ──────────────────────────────────────────────
 const COLUMNS = [
-  { key: "agencyShortName",    label: "약칭",        width: "w-16",  align: "text-center" },
+  { key: "agencyShortName",    label: "약칭",        width: "w-20",  align: "text-center" },
   { key: "projectNumber",      label: "과제번호",    width: "w-36",  align: "text-left"   },
-  { key: "projectName",        label: "과제명",      width: "w-52",  align: "text-left"   },
+  { key: "projectName",        label: "과제명",      width: "w-44",  align: "text-left"   },
   { key: "leadInstitutionName",label: "주관기관",    width: "w-32",  align: "text-left"   },
   { key: "researchLead",       label: "연구책임자",  width: "w-20",  align: "text-center" },
   { key: "term",                label: "연차",        width: "w-16",  align: "text-center" },
-  { key: "projectCategory",    label: "과제구분",    width: "w-20",  align: "text-center" },
+  { key: "projectCategory",    label: "과제구분",    width: "w-24",  align: "text-center" },
   { key: "startDate",          label: "당해시작일",  width: "w-24",  align: "text-center" },
   { key: "endDate",            label: "당해종료일",  width: "w-24",  align: "text-center" },
   { key: "billingType",        label: "발행구분",    width: "w-20",  align: "text-center" },
@@ -1656,9 +1657,33 @@ const COLUMNS = [
   { key: "docReplyDate",       label: "서류회신",    width: "w-24",  align: "text-center" },
   { key: "recipientName",      label: "수신자",      width: "w-20",  align: "text-center" },
   { key: "recipientEmail",     label: "수신자이메일",width: "w-44",  align: "text-left"   },
-  { key: "projectDivision",    label: "구분",        width: "w-14",  align: "text-center" },
+  { key: "projectDivision",    label: "구분",        width: "w-16",  align: "text-center" },
   { key: "assignedManager",    label: "삼화담당자",  width: "w-20",  align: "text-center" },
 ] as const;
+
+// ── 좌측 고정(freeze) 열 — 체크박스/펼치기 버튼 + 약칭~연구책임자는 가로로 스크롤해도 계속 보이게 고정한다.
+// Tailwind의 w-* 유틸은 빌드 타임에 고정된 px값이라(w-20=80px 등) 여기서도 같은 값을 그대로 사용해
+// sticky left 오프셋을 누적 계산한다 — 폭이 바뀌면 이 표도 같이 맞춰야 한다.
+const STICKY_LEFT_KEYS = ["agencyShortName", "projectNumber", "projectName", "leadInstitutionName", "researchLead"] as const;
+const STICKY_COL_PX: Record<string, number> = { agencyShortName: 80, projectNumber: 144, projectName: 176, leadInstitutionName: 128, researchLead: 80 };
+const STICKY_CHECKBOX_PX = 32;
+const STICKY_CHEVRON_PX = 32;
+
+function stickyLeftOffset(key: string, canEdit: boolean): number {
+  let left = (canEdit ? STICKY_CHECKBOX_PX : 0) + STICKY_CHEVRON_PX;
+  for (const k of STICKY_LEFT_KEYS) {
+    if (k === key) return left;
+    left += STICKY_COL_PX[k];
+  }
+  return left;
+}
+
+// 고정열의 실제 렌더링 너비는 반드시 sticky left 계산에 쓴 값과 정확히 같아야 한다 — 하나라도 어긋나면
+// (Tailwind width 클래스가 실제로 그 px값대로 안 먹는 경우 등) 처음부터(스크롤 전에도) 고정열끼리
+// 서로 겹쳐 보인다. 그래서 Tailwind width 클래스 대신 인라인 style로 width/min/max를 못박아 확실히 맞춘다.
+function fixedColStyle(px: number): CSSProperties {
+  return { width: px, minWidth: px, maxWidth: px };
+}
 
 // ── FeeRowDetail (이슈/메모) ─────────────────────────────────────
 const ISSUE_PRIORITY_STYLE: Record<string, string> = {
@@ -1738,6 +1763,7 @@ function govFiscalQuarterRange(q: 1 | 2 | 3 | 4): [string, string] {
 export default function FeesPage() {
   const canEdit     = useCanWrite("fees");
   const canEditSales = useCanWrite("fees-sales");
+  const canEditEmails = useCanWrite("emails");
   const allRows     = useFeeRows();
   const { fundingAgencies } = useStore();
   const searchParams = useSearchParams();
@@ -1747,7 +1773,6 @@ export default function FeesPage() {
   const [filterLeadInstitution, setFilterLeadInstitution] = useState("");
   const [filterResearchLead,    setFilterResearchLead]    = useState("");
   const [filterAssignedManager, setFilterAssignedManager] = useState("");
-  const [filterMinUnclaimedAmount, setFilterMinUnclaimedAmount] = useState(0);
   // 완료/종료된 과제는 더 이상 확인할 필요가 없어 기본값은 '진행중'
   const [filterProjectStatus,   setFilterProjectStatus]   = useState(() => searchParams.get("status") ?? "ACTIVE");
   const [filterAgency,          setFilterAgency]          = useState("ALL");
@@ -1763,6 +1788,40 @@ export default function FeesPage() {
   const [expandedKey, setExpandedKey]     = useState<string | null>(null);
   const [modal, setModal]                 = useState<ModalState | null>(null);
   const [selectedKeys, setSelectedKeys]   = useState<Set<string>>(new Set());
+  const [showRcmsUpload, setShowRcmsUpload] = useState(false);
+
+  // 표 영역을 스크롤바 드래그 없이 아무 빈 공간이나 잡고 좌우로 끌어서 스크롤할 수 있게 한다.
+  // 버튼·체크박스 등 클릭 가능한 요소 위에서 시작한 경우는 드래그로 취급하지 않아 기존 클릭 동작을 해치지 않는다.
+  const tableScrollRef = useRef<HTMLDivElement>(null);
+  const dragStateRef = useRef({ isDown: false, startX: 0, startScrollLeft: 0 });
+
+  function handleTableDragStart(e: React.MouseEvent<HTMLDivElement>) {
+    const target = e.target as HTMLElement;
+    if (target.closest("button, a, input, textarea, select, label")) return;
+    const el = tableScrollRef.current;
+    if (!el) return;
+    dragStateRef.current = { isDown: true, startX: e.pageX, startScrollLeft: el.scrollLeft };
+    el.style.cursor = "grabbing";
+    el.style.userSelect = "none";
+  }
+
+  function handleTableDragMove(e: React.MouseEvent<HTMLDivElement>) {
+    const state = dragStateRef.current;
+    if (!state.isDown) return;
+    const el = tableScrollRef.current;
+    if (!el) return;
+    e.preventDefault();
+    el.scrollLeft = state.startScrollLeft - (e.pageX - state.startX);
+  }
+
+  function handleTableDragEnd() {
+    dragStateRef.current.isDown = false;
+    const el = tableScrollRef.current;
+    if (el) {
+      el.style.cursor = "grab";
+      el.style.userSelect = "";
+    }
+  }
 
   function applyDateRange(from: string, to: string) {
     setInvoiceDateFrom(from);
@@ -1796,11 +1855,11 @@ export default function FeesPage() {
         const matchLeadInstitution  = filterLeadInstitution  === "" || r.leadInstitutionName.includes(filterLeadInstitution);
         const matchResearchLead     = filterResearchLead     === "" || r.researchLead.includes(filterResearchLead);
         const matchAssignedManager  = filterAssignedManager  === "" || r.assignedManager.includes(filterAssignedManager);
-        const matchMinUnclaimed     = filterMinUnclaimedAmount <= 0 || r.unclaimedAmount >= filterMinUnclaimedAmount;
         const matchStatus           = filterProjectStatus    === "ALL" || r.projectStatus === filterProjectStatus;
         const matchAgency           = filterAgency           === "ALL" || r.agencyShortName === filterAgency;
         const matchBillingType      = filterBillingType      === "ALL" || r.billingType === filterBillingType;
-        const matchCollectionStatus = filterCollectionStatus === "ALL" || r.collectionStatus === filterCollectionStatus;
+        const matchCollectionStatus = filterCollectionStatus === "ALL"
+          || (filterCollectionStatus === "HAS_LOSS" ? r.unclaimedAmount > 0 : r.collectionStatus === filterCollectionStatus);
         const matchOnlyReceivable   = !filterOnlyReceivable  || r.receivableAmount > 0;
 
         const dt = r.invoiceIssuedAt;
@@ -1816,13 +1875,13 @@ export default function FeesPage() {
         const matchAssignedTo   = agencyAssignedTo   === "" || (assignedDt !== "" && assignedDt <= agencyAssignedTo);
 
         return matchProjectNumber && matchProjectName && matchLeadInstitution && matchResearchLead
-          && matchAssignedManager && matchMinUnclaimed
+          && matchAssignedManager
           && matchStatus && matchAgency && matchBillingType && matchCollectionStatus
           && matchOnlyReceivable && matchFrom && matchTo && matchEndFrom && matchEndTo
           && matchAssignedFrom && matchAssignedTo;
       }),
     [allRows, filterProjectNumber, filterProjectName, filterLeadInstitution, filterResearchLead,
-     filterAssignedManager, filterMinUnclaimedAmount,
+     filterAssignedManager,
      filterProjectStatus, filterAgency, filterBillingType, filterCollectionStatus, filterOnlyReceivable,
      invoiceDateFrom, invoiceDateTo, termEndDateFrom, termEndDateTo, agencyAssignedFrom, agencyAssignedTo]
   );
@@ -1887,29 +1946,29 @@ export default function FeesPage() {
     switch (colKey) {
       case "agencyShortName":
         return row.agencyShortName ? (
-          <Link href={`/projects/${row.projectId}`} className="font-mono text-[11px] font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded hover:bg-indigo-100 transition-colors">
+          <Link href={`/projects/${row.projectId}`} className="inline-block max-w-full truncate font-mono text-sm font-bold text-indigo-700 bg-indigo-50 px-2 py-1 rounded hover:bg-indigo-100 transition-colors">
             {row.agencyShortName}
           </Link>
         ) : <span className="text-slate-300">—</span>;
 
       case "projectNumber":
-        return <Link href={`/projects/${row.projectId}`} className="font-mono text-[11px] text-slate-500 hover:text-blue-600 hover:underline transition-colors">{row.projectNumber}</Link>;
+        return <Link href={`/projects/${row.projectId}`} className="block truncate font-mono text-[11px] text-slate-500 hover:text-blue-600 hover:underline transition-colors" title={row.projectNumber}>{row.projectNumber}</Link>;
 
       case "projectName":
         return (
-          <Link href={`/projects/${row.projectId}`} className="font-medium text-blue-600 hover:underline hover:text-blue-800 text-xs line-clamp-2 max-w-50" title={row.projectName}>
+          <Link href={`/projects/${row.projectId}`} className="block w-full font-medium text-blue-600 hover:underline hover:text-blue-800 text-xs line-clamp-2" title={row.projectName}>
             {row.projectName}
           </Link>
         );
 
       case "leadInstitutionName":
         return row.leadInstitutionName ? (
-          <Link href={`/institutions/${row.leadInstitutionId}`} className="text-xs text-slate-700 hover:text-blue-600 hover:underline transition-colors">{row.leadInstitutionName}</Link>
+          <Link href={`/institutions/${row.leadInstitutionId}`} className="block truncate text-xs text-slate-700 hover:text-blue-600 hover:underline transition-colors" title={row.leadInstitutionName}>{row.leadInstitutionName}</Link>
         ) : <span className="text-slate-300">—</span>;
 
       case "researchLead":
         return row.researchLead ? (
-          <Link href={`/researchers/${encodeURIComponent(row.researchLead)}`} className="text-xs text-slate-700 hover:text-blue-600 hover:underline transition-colors">{row.researchLead}</Link>
+          <Link href={`/researchers/${encodeURIComponent(row.researchLead)}`} className="block truncate text-xs text-slate-700 hover:text-blue-600 hover:underline transition-colors" title={row.researchLead}>{row.researchLead}</Link>
         ) : <span className="text-slate-300">—</span>;
 
       case "term":
@@ -1917,7 +1976,7 @@ export default function FeesPage() {
 
       case "projectCategory":
         return (
-          <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
+          <span className={`inline-block whitespace-nowrap text-[10px] font-medium px-1.5 py-0.5 rounded ${
             row.projectCategory === "정산" ? "bg-orange-100 text-orange-700" : "bg-indigo-100 text-indigo-700"
           }`}>
             {row.projectCategory}
@@ -2005,7 +2064,7 @@ export default function FeesPage() {
 
       case "projectDivision":
         return row.projectDivision ? (
-          <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
+          <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded whitespace-nowrap ${
             row.projectDivision === "위탁" ? "bg-sky-100 text-sky-700" : "bg-teal-100 text-teal-700"
           }`}>
             {row.projectDivision}
@@ -2070,13 +2129,29 @@ export default function FeesPage() {
             엑셀 다운로드
           </button>
           {canEdit && (
-            <button
-              onClick={() => setModal({ mode: "project-add" })}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
-            >
-              <FiPlus size={12} />
-              새 과제 추가
-            </button>
+            <>
+              <button
+                onClick={downloadExcelTemplate}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors"
+              >
+                <svg viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5"><path fillRule="evenodd" d="M3 17a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1zM6.293 9.293a1 1 0 0 1 1.414 0L9 10.586V3a1 1 0 1 1 2 0v7.586l1.293-1.293a1 1 0 1 1 1.414 1.414l-3 3a1 1 0 0 1-1.414 0l-3-3a1 1 0 0 1 0-1.414z" clipRule="evenodd" /></svg>
+                RCMS 양식 다운로드
+              </button>
+              <button
+                onClick={() => setShowRcmsUpload(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors"
+              >
+                <svg viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5"><path fillRule="evenodd" d="M3 17a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1zM6.293 6.707a1 1 0 0 1 0-1.414l3-3a1 1 0 0 1 1.414 0l3 3a1 1 0 0 1-1.414 1.414L11 5.414V13a1 1 0 1 1-2 0V5.414L7.707 6.707a1 1 0 0 1-1.414 0z" clipRule="evenodd" /></svg>
+                RCMS 엑셀 업로드
+              </button>
+              <button
+                onClick={() => setModal({ mode: "project-add" })}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
+              >
+                <FiPlus size={12} />
+                새 과제 추가
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -2117,15 +2192,6 @@ export default function FeesPage() {
               />
             </div>
           ))}
-          <div>
-            <p className="text-[10px] font-medium text-slate-400 mb-1">손실금액 (이상)</p>
-            <MoneyInput
-              value={filterMinUnclaimedAmount}
-              onChange={setFilterMinUnclaimedAmount}
-              placeholder="손실금액 검색..."
-              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-            />
-          </div>
         </div>
 
         {/* 상태 · 구분 필터 */}
@@ -2162,6 +2228,8 @@ export default function FeesPage() {
             <option value="PARTIAL">일부납부</option>
             <option value="PENDING">대기</option>
             <option value="OVERDUE">연체</option>
+            {/* 금액 자체가 아니라 손실금액이 등록돼 있는지 여부만 확인하는 용도 */}
+            <option value="HAS_LOSS">손실금액 있음</option>
           </select>
           <label className="flex items-center gap-1.5 cursor-pointer ml-1 shrink-0">
             <input type="checkbox" checked={filterOnlyReceivable}
@@ -2288,12 +2356,33 @@ export default function FeesPage() {
 
       {/* 메인 테이블 */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="text-xs" style={{ minWidth: "2400px" }}>
+        {/* max-h + overflow-y-auto: 이 div 자체가 세로 스크롤 컨테이너가 되어야 안의 sticky
+            top-0 헤더가 실제로 고정된다 — 바깥 래퍼의 overflow-hidden(모서리 둥글게 처리용)에
+            기대면, 그쪽엔 실제로 스크롤이 없어서(내용에 맞춰 늘어나기만 함) sticky가 무효화된다. */}
+        <div
+          ref={tableScrollRef}
+          className="overflow-x-auto overflow-y-auto max-h-[70vh] cursor-grab"
+          onMouseDown={handleTableDragStart}
+          onMouseMove={handleTableDragMove}
+          onMouseUp={handleTableDragEnd}
+          onMouseLeave={handleTableDragEnd}
+        >
+          {/* table-fixed: 열 너비를 각 셀의 width 클래스대로 고정한다. 이게 없으면 내용이 긴 셀이
+              자기 열을 넘어 자동으로 넓어질 수 있는데, 그러면 아래에서 px로 계산해둔 고정열 sticky
+              left 오프셋이 실제 렌더링 너비와 어긋나 고정열끼리 겹쳐 보이는 문제가 생긴다.
+              border-separate + spacing-0: 브라우저 기본(Tailwind preflight)인 border-collapse: collapse는
+              position: sticky인 td/th의 배경이 셀 경계 픽셀까지 완전히 칠해지지 않는 버그가 있어(셀 테두리가
+              합쳐지는 순간 배경도 같이 끊김), 그 경계 틈으로 스크롤되는 내용이 비쳐 보인다. separate로 바꿔야
+              고정열 배경이 셀 전체를 빈틈없이 덮는다. */}
+          <table className="text-xs table-fixed border-separate border-spacing-0" style={{ minWidth: "2400px" }}>
             <thead>
-              <tr className="border-b border-slate-200 bg-slate-50">
+              {/* border-separate에서는 <tr> border가 안 그려지므로 각 <th>에 border-b를 직접 넣는다. */}
+              <tr className="bg-slate-50">
                 {canEdit && (
-                  <th className="w-8 px-2 py-3 shrink-0">
+                  <th
+                    className="px-2 py-3 sticky top-0 z-30 bg-slate-50 border-b border-slate-200"
+                    style={{ ...fixedColStyle(STICKY_CHECKBOX_PX), left: 0 }}
+                  >
                     <input
                       type="checkbox"
                       checked={allVisibleSelected}
@@ -2302,19 +2391,29 @@ export default function FeesPage() {
                     />
                   </th>
                 )}
-                <th className="w-8 px-2 py-3 shrink-0" />
-                {COLUMNS.map((col) => (
-                  <th
-                    key={col.key}
-                    className={`px-3 py-3 font-medium text-slate-500 whitespace-nowrap ${col.align} ${col.width}`}
-                  >
-                    {col.label}
-                  </th>
-                ))}
-                <th className="px-3 py-3 text-center font-medium text-slate-500 whitespace-nowrap w-24">공문발송</th>
-                <th className="px-3 py-3 text-center font-medium text-slate-500 whitespace-nowrap w-32">매출관리</th>
-                <th className="px-3 py-3 text-center font-medium text-slate-500 whitespace-nowrap w-20">수금관리</th>
-                <th className="px-3 py-3 text-center font-medium text-slate-500 whitespace-nowrap w-20">정보수정</th>
+                <th
+                  className="px-2 py-3 sticky top-0 z-30 bg-slate-50 border-b border-slate-200"
+                  style={{ ...fixedColStyle(STICKY_CHEVRON_PX), left: canEdit ? STICKY_CHECKBOX_PX : 0 }}
+                />
+                {COLUMNS.map((col) => {
+                  const isSticky = (STICKY_LEFT_KEYS as readonly string[]).includes(col.key);
+                  const isLastSticky = col.key === STICKY_LEFT_KEYS[STICKY_LEFT_KEYS.length - 1];
+                  return (
+                    <th
+                      key={col.key}
+                      className={`px-3 py-3 font-medium text-slate-500 whitespace-nowrap ${col.align} ${isSticky ? "" : col.width} sticky top-0 border-b border-slate-200 ${
+                        isSticky ? `z-30 bg-slate-50 ${isLastSticky ? "border-r border-r-slate-200" : ""}` : "z-20 bg-slate-50"
+                      }`}
+                      style={isSticky ? { ...fixedColStyle(STICKY_COL_PX[col.key]), left: stickyLeftOffset(col.key, canEdit) } : undefined}
+                    >
+                      {col.label}
+                    </th>
+                  );
+                })}
+                <th className="px-3 py-3 text-center font-medium text-slate-500 whitespace-nowrap w-24 sticky top-0 z-20 bg-slate-50 border-b border-slate-200">공문발송</th>
+                <th className="px-3 py-3 text-center font-medium text-slate-500 whitespace-nowrap w-32 sticky top-0 z-20 bg-slate-50 border-b border-slate-200">매출관리</th>
+                <th className="px-3 py-3 text-center font-medium text-slate-500 whitespace-nowrap w-20 sticky top-0 z-20 bg-slate-50 border-b border-slate-200">수금관리</th>
+                <th className="px-3 py-3 text-center font-medium text-slate-500 whitespace-nowrap w-20 sticky top-0 z-20 bg-slate-50 border-b border-slate-200">정보수정</th>
               </tr>
             </thead>
             <tbody>
@@ -2332,16 +2431,31 @@ export default function FeesPage() {
                   // 같은 과제(연차별 여러 행)를 옅은 배경색으로 묶어 보여주고, 다른 과제로 넘어가는
                   // 경계엔 굵은 구분선을 넣어 어디까지가 한 과제인지 한눈에 보이게 한다.
                   const isGroupStart = idx === 0 || filtered[idx - 1].projectNumber !== row.projectNumber;
-                  const groupBg = (rowGroupIndex.get(row.key) ?? 0) % 2 === 1 ? "bg-slate-50/50" : "bg-white";
+                  // 고정(sticky) 열이 스크롤되는 다른 열 위에 완전히 덮여야 하므로, 배경은 반투명이 아닌
+                  // 불투명 색상만 써야 한다 — 반투명이면 그 밑으로 스크롤되는 내용이 비쳐서 겹쳐 보인다.
+                  const groupBg = (rowGroupIndex.get(row.key) ?? 0) % 2 === 1 ? "bg-slate-50" : "bg-white";
+                  const isSelected = selectedKeys.has(row.key);
+                  // hover: 는 마우스가 "그 셀 자신" 위에 있을 때만 켜진다 — 고정열은 각자 자기 배경을 따로
+                  // 들고 있어서 hover:만 쓰면 행의 다른 칸(비고정 칸 등)에 마우스를 올려도 고정열은 안 따라 바뀐다.
+                  // group-hover:는 <tr className="group">를 조상으로 잡아 행 어디에 마우스가 있어도 같이 바뀌게 한다.
+                  const rowBg = isSelected
+                    ? "bg-cyan-50 hover:bg-cyan-100 group-hover:bg-cyan-100"
+                    : isExpanded
+                      ? "bg-blue-50"
+                      : `${groupBg} hover:bg-slate-100 group-hover:bg-slate-100`;
+                  // border-separate에서는 <tr>에 준 border가 렌더링되지 않으므로(분리 모드에선 셀 테두리만
+                  // 그려진다), 행 구분선을 각 <td>에 직접 넣는다.
+                  const rowBorder = `${isGroupStart ? "border-t-2 border-t-slate-200" : "border-t border-t-slate-50"} border-b border-b-slate-50`;
                   return [
                     <tr
                       key={row.key}
-                      className={`transition-colors ${isExpanded ? "bg-blue-50/30" : `${groupBg} hover:bg-slate-100/70`} ${
-                        isGroupStart ? "border-t-2 border-t-slate-200" : "border-t border-t-slate-50"
-                      } border-b border-b-slate-50`}
+                      className={`group transition-colors ${rowBg}`}
                     >
                       {canEdit && (
-                        <td className="px-2 py-2.5 text-center shrink-0">
+                        <td
+                          className={`px-2 py-2.5 text-center sticky z-10 ${rowBg} ${rowBorder}`}
+                          style={{ ...fixedColStyle(STICKY_CHECKBOX_PX), left: 0 }}
+                        >
                           <input
                             type="checkbox"
                             checked={selectedKeys.has(row.key)}
@@ -2350,7 +2464,10 @@ export default function FeesPage() {
                           />
                         </td>
                       )}
-                      <td className="px-2 py-2.5 text-center shrink-0">
+                      <td
+                        className={`px-2 py-2.5 text-center sticky z-10 ${rowBg} ${rowBorder}`}
+                        style={{ ...fixedColStyle(STICKY_CHEVRON_PX), left: canEdit ? STICKY_CHECKBOX_PX : 0 }}
+                      >
                         <button
                           onClick={() => toggleExpand(row.key)}
                           className={`p-1 rounded transition-colors ${isExpanded ? "text-blue-600 bg-blue-100" : "text-slate-300 hover:text-slate-500 hover:bg-slate-100"}`}
@@ -2358,17 +2475,24 @@ export default function FeesPage() {
                           {isExpanded ? <FiChevronUp size={13} /> : <FiChevronDown size={13} />}
                         </button>
                       </td>
-                      {COLUMNS.map((col) => (
-                        <td
-                          key={col.key}
-                          className={`px-3 py-2.5 ${col.align} ${col.width} align-middle`}
-                        >
-                          {cell(row, col.key)}
-                        </td>
-                      ))}
-                      {/* 공문발송 드롭다운 */}
-                      <td className="px-3 py-2.5 text-center align-middle w-24">
-                        {row.taxInvoiceId && row.taxInvoiceStatus !== "CANCELED" ? (
+                      {COLUMNS.map((col) => {
+                        const isSticky = (STICKY_LEFT_KEYS as readonly string[]).includes(col.key);
+                        const isLastSticky = col.key === STICKY_LEFT_KEYS[STICKY_LEFT_KEYS.length - 1];
+                        return (
+                          <td
+                            key={col.key}
+                            className={`px-3 py-2.5 ${col.align} ${isSticky ? "" : col.width} align-middle ${rowBorder} ${
+                              isSticky ? `sticky z-10 ${rowBg} ${isLastSticky ? "border-r border-r-slate-200" : ""}` : ""
+                            }`}
+                            style={isSticky ? { ...fixedColStyle(STICKY_COL_PX[col.key]), left: stickyLeftOffset(col.key, canEdit) } : undefined}
+                          >
+                            {cell(row, col.key)}
+                          </td>
+                        );
+                      })}
+                      {/* 공문발송 드롭다운 — 회계담당자만 발송 가능 */}
+                      <td className={`px-3 py-2.5 text-center align-middle w-24 ${rowBorder}`}>
+                        {canEditEmails && row.taxInvoiceId && row.taxInvoiceStatus !== "CANCELED" ? (
                           <DispatchDropdown
                             onSelect={(choice) =>
                               setModal({
@@ -2400,7 +2524,7 @@ export default function FeesPage() {
                         )}
                       </td>
                       {/* 매출관리 버튼 */}
-                      <td className="px-3 py-2.5 text-center align-middle w-32">
+                      <td className={`px-3 py-2.5 text-center align-middle w-32 ${rowBorder}`}>
                         {canEditSales ? (
                           <div className="flex items-center justify-center gap-1">
                             <button
@@ -2461,7 +2585,7 @@ export default function FeesPage() {
                         )}
                       </td>
                       {/* 수금관리 버튼 */}
-                      <td className="px-3 py-2.5 text-center align-middle w-20">
+                      <td className={`px-3 py-2.5 text-center align-middle w-20 ${rowBorder}`}>
                         {canEditSales && hasReceivable ? (
                           <button
                             onClick={() =>
@@ -2492,7 +2616,7 @@ export default function FeesPage() {
                         )}
                       </td>
                       {/* 정보수정 버튼 */}
-                      <td className="px-3 py-2.5 text-center align-middle w-20">
+                      <td className={`px-3 py-2.5 text-center align-middle w-20 ${rowBorder}`}>
                         {canEdit && (
                           <button
                             onClick={() =>
@@ -2542,6 +2666,7 @@ export default function FeesPage() {
           />
         </Modal>
       )}
+      {showRcmsUpload && <ExcelUploadModal onClose={() => setShowRcmsUpload(false)} />}
       {modal?.mode === "collection" && (
         <Modal
           title={

@@ -10,9 +10,10 @@ import {
   useStore, updateProject, addProjectIssue, updateProjectIssue, deleteProjectIssue, addTaxInvoice, updateTaxInvoice,
   addReceivable, updateReceivable, addEmailDispatch, updateTermFee, updateUnclaimedFee,
   updateProjectMember, autoGenerateTermFees, addProjectMember, deleteProjectMember, deleteProject,
+  setTermOtherFirmHandled,
 } from "@/lib/store";
 import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type SystemUser, type EmailDispatch, EMPTY_NOTICE_TEMPLATE, COMPANY_INFO } from "@/lib/mock";
-import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isNonProfitInstitution, resolveRdaAgencyId, type CalcMember } from "@/lib/fee-calculator";
+import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isNonProfitInstitution, resolveRdaAgencyId, resolveMemberGradeForTerm, type CalcMember } from "@/lib/fee-calculator";
 import { fmtWonFull, fmtDate, splitVatInclusive, addMonths, termDateRange } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
@@ -81,6 +82,22 @@ const GRADE_COLOR: Record<string, string> = {
 };
 const GRADE_LABEL: Record<string, string> = { S: "최우수(S)", "A~C": "우수(A~C)", 일반: "일반" };
 
+// ─── 발행구분 (수수료 청구관리 목록과 동일한 옵션 — project.billingType 필드 공유) ──
+const BILLING_TYPE_COLOR: Record<string, string> = {
+  "정발행":     "bg-blue-100 text-blue-700",
+  "역발행요청": "bg-violet-100 text-violet-700",
+  "역발행":     "bg-purple-100 text-purple-700",
+  "대상아님":   "bg-slate-100 text-slate-500",
+  "면제":       "bg-amber-100 text-amber-700",
+};
+const BILLING_OPTIONS = [
+  { value: "정발행",     label: "정발행",     desc: "일반적인 세금계산서 발행 (삼화→기관)" },
+  { value: "역발행요청", label: "역발행 요청", desc: "기관이 계산서를 발행하도록 요청한 상태" },
+  { value: "역발행",     label: "역발행",     desc: "기관이 삼화 앞으로 세금계산서를 발행" },
+  { value: "대상아님",   label: "대상아님",   desc: "수수료 발행 대상이 아닌 과제 (국토부 공동기관, 농진청 소속기관이 주관 아닌 공동기관 등)" },
+  { value: "면제",       label: "면제",       desc: "IITP·KAIA 주관이 최우수기관이고 공동 없는 경우" },
+] as const;
+
 // ─── 연차번호 → 연도 변환 (당해시작일 기준) ───────────────────
 function termNumberToYear(startDate: string, termNumber: number): number {
   const d = new Date(startDate);
@@ -123,7 +140,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   const canEditProjects = useCanWrite('projects');
   const canEditIssues = useCanWrite('issues');
   const canManageIssues = useCanWrite('issues-manage');
-  const { projects, projectMembers, institutions, projectIssues, auditLog, fundingAgencies, feePolicies, termFeeCalcs, users } = useStore();
+  const { projects, projectMembers, institutions, projectIssues, auditLog, fundingAgencies, feePolicies, termFeeCalcs, termFees, users } = useStore();
   const selectableUsers = users.filter((u) => u.status === "ACTIVE");
 
   const project = projects.find((p) => p.id === projectId) ?? null;
@@ -161,6 +178,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   const [budgetMismatchError, setBudgetMismatchError] = useState("");
   const [showAddMember, setShowAddMember] = useState(false);
   const [editingBudgetMember, setEditingBudgetMember] = useState<ProjectMember | null>(null);
+  const [editingGradeMember, setEditingGradeMember] = useState<ProjectMember | null>(null);
   const [showIssueForm, setShowIssueForm] = useState(false);
   const [issueContent, setIssueContent] = useState("");
   const [issuePriority, setIssuePriority] = useState<"HIGH" | "MEDIUM" | "LOW">("MEDIUM");
@@ -176,6 +194,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
     institutionName: "", noInstitution: false,
   });
   const [deletingIssueId, setDeletingIssueId] = useState<string | null>(null);
+  const [showProjectTypeConfirm, setShowProjectTypeConfirm] = useState(false);
 
   if (!project) return null;
 
@@ -220,7 +239,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       institutionId: m.institutionId,
       institutionName: m.institutionName,
       role: m.role as "LEAD" | "PARTICIPANT",
-      grade: normalizeGrade(m.institutionGrade ?? "일반"),
+      grade: normalizeGrade(resolveMemberGradeForTerm(m, currentTerm)),
       institutionType: m.institutionType,
       settlementType: (m.settlementType ?? defaultSettlementType) as "위탁정산" | "자체정산",
       cashBudget,
@@ -268,7 +287,17 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
 
   const totalCalcFee = feeResult?.calculatedFee ?? members.reduce((s, m) => s + m.calculatedFee, 0);
 
-  function saveEdit() {
+  // 확정(CONFIRMED/BILLED)되지 않았고 수동조정(manualOverride)도 안 된 연차 수 — projectType을
+  // 바꾸면 autoGenerateTermFees가 이 연차들을 새 유형 기준으로 소급 재계산한다(과거 연차 포함).
+  function countUnlockedTerms(): number {
+    const relevant = termFees.filter(
+      (tf) => tf.projectNumber === project!.projectNumber &&
+        tf.status !== "CONFIRMED" && tf.status !== "BILLED" && !tf.manualOverride
+    );
+    return new Set(relevant.map((tf) => tf.termNumber)).size;
+  }
+
+  function doSaveEdit() {
     const inst = institutions.find((i) => i.id === draft.leadInstitutionId);
     const leadInstitutionName = inst?.name ?? project!.leadInstitutionName;
     const annualBudget = (draft.govGrant ?? 0) + (draft.privateCash ?? 0) + (draft.privateInKind ?? 0);
@@ -286,6 +315,15 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
     });
     setSavedMsg(true);
     setTimeout(() => setSavedMsg(false), 2000);
+  }
+
+  function saveEdit() {
+    const projectTypeChanged = (draft.projectType ?? "GENERAL") !== (project!.projectType ?? "GENERAL");
+    if (projectTypeChanged && countUnlockedTerms() > 0) {
+      setShowProjectTypeConfirm(true);
+      return;
+    }
+    doSaveEdit();
   }
 
   const annualBudget = (draft.govGrant ?? 0) + (draft.privateCash ?? 0) + (draft.privateInKind ?? 0);
@@ -672,6 +710,8 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               {members.map((m) => {
                 const rawGrade = (getMemberVal(m, "institutionGrade") ?? "일반") as string;
                 const grade = normalizeGrade(rawGrade);
+                // 배지 표시는 편집 중인 기본값이 아니라 "이번 연차에 실제로 적용되는" 등급(연차별 오버라이드 반영)을 보여준다.
+                const displayGrade = normalizeGrade(resolveMemberGradeForTerm(m, currentTerm));
                 const cashBudget = getMemberBudgetVal(m, "cashBudget");
                 const inKindBudget = getMemberBudgetVal(m, "inKindBudget");
                 return (
@@ -704,15 +744,27 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                           <option value="일반">일반</option>
                         </select>
                       ) : (
-                        <span className={`text-xs font-medium px-2 py-0.5 rounded ${GRADE_COLOR[grade] ?? GRADE_COLOR["일반"]}`}>
-                          {GRADE_LABEL[grade] ?? grade}
+                        <span className={`text-xs font-medium px-2 py-0.5 rounded ${GRADE_COLOR[displayGrade] ?? GRADE_COLOR["일반"]}`} title={`${currentTerm}연차 적용 등급`}>
+                          {GRADE_LABEL[displayGrade] ?? displayGrade}
                         </span>
                       )}
-                      {grade !== "일반" && !isNonProfitInstitution(m.institutionType) && (
+                      {displayGrade !== "일반" && !isNonProfitInstitution(m.institutionType) && (
                         <p className="text-[10px] text-amber-600 mt-1 leading-tight" title="정산면제는 비영리기관(대학·정부출연연구소·공공기관)만 해당하여, 영리기업은 등급이 있어도 정산면제가 적용되지 않습니다.">
                           ⚠ 영리기관·면제불가
                         </p>
                       )}
+                      <button
+                        onClick={() => setEditingGradeMember(m)}
+                        className="mt-1 inline-flex items-center gap-1 text-slate-400 hover:text-blue-600 transition-colors"
+                        title={(m.gradeOverrides?.length ?? 0) > 0
+                          ? `연차별 등급 ${m.gradeOverrides!.length}건 설정됨 — 클릭하여 수정`
+                          : "등급평가는 연차마다 갱신될 수 있습니다 — 연차별로 다른 등급을 지정하려면 클릭"}
+                      >
+                        <FiEdit2 size={11} />
+                        {(m.gradeOverrides?.length ?? 0) > 0 && (
+                          <span className="text-[10px] font-medium">{m.gradeOverrides!.length}</span>
+                        )}
+                      </button>
                     </td>
                     <td className="px-4 py-3 text-center">
                       {editingMembers ? (
@@ -1097,6 +1149,32 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
         </div>
       )}
 
+      {showProjectTypeConfirm && (
+        <Modal title="과제 유형 변경 확인" onClose={() => setShowProjectTypeConfirm(false)}>
+          <div className="p-6 space-y-4">
+            <p className="text-sm text-slate-700 leading-relaxed">
+              과제 유형을 <span className="font-semibold">{draft.projectType === "AUTONOMY_TRACK" ? "자율성트랙" : "일반 R&D"}</span>(으)로 변경하면,
+              아직 확정(청구완료)되지 않은 <span className="font-semibold text-blue-700">{countUnlockedTerms()}개 연차</span>의 수수료가
+              새 유형 기준으로 다시 계산됩니다. 과거 연차라도 확정 전이면 함께 재계산 대상에 포함됩니다.
+            </p>
+            <p className="text-xs text-slate-400">
+              이미 확정되었거나 금액을 직접 수정(수동조정)해 둔 연차는 영향을 받지 않습니다.
+            </p>
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+              <button onClick={() => setShowProjectTypeConfirm(false)} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
+                취소
+              </button>
+              <button
+                onClick={() => { setShowProjectTypeConfirm(false); doSaveEdit(); }}
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                재계산하고 저장
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {editingBudgetMember && (
         <Modal title={`${editingBudgetMember.institutionName} · 연차별 사업비`} onClose={() => setEditingBudgetMember(null)}>
           <AnnualBudgetEditor
@@ -1104,6 +1182,23 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             project={project}
             canEdit={canEditProjects}
             onClose={() => setEditingBudgetMember(null)}
+          />
+        </Modal>
+      )}
+
+      {editingGradeMember && (
+        <Modal title={`${editingGradeMember.institutionName} · 연차별 등급`} onClose={() => setEditingGradeMember(null)}>
+          <GradeOverrideEditor
+            member={editingGradeMember}
+            project={project}
+            lockedTermNumbers={new Set(
+              termFees
+                .filter((tf) => tf.projectNumber === project.projectNumber && tf.institutionId === editingGradeMember.institutionId &&
+                  (tf.status === "CONFIRMED" || tf.status === "BILLED" || tf.manualOverride))
+                .map((tf) => tf.termNumber)
+            )}
+            canEdit={canEditProjects}
+            onClose={() => setEditingGradeMember(null)}
           />
         </Modal>
       )}
@@ -1187,6 +1282,103 @@ function AnnualBudgetEditor({
                 </td>
               </tr>
             ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+        <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
+          {canEdit ? "취소" : "닫기"}
+        </button>
+        {canEdit && (
+          <button onClick={handleSave} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
+            저장
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── 참여기관별 연차별 등급 입력 ──────────────────────────────
+// 등급평가(정산면제리스트)는 연차마다 갱신될 수 있어, 특정 연차부터 등급이 바뀐 경우 여기서
+// 그 연차 이후만 다르게 지정한다. 이미 확정(청구완료)된 연차는 잠겨서 여기서 바꿔도 반영되지 않는다.
+function GradeOverrideEditor({
+  member,
+  project,
+  lockedTermNumbers,
+  canEdit,
+  onClose,
+}: {
+  member: ProjectMember;
+  project: Project;
+  lockedTermNumbers: Set<number>;
+  canEdit: boolean;
+  onClose: () => void;
+}) {
+  const totalTerms = project.totalTerms ?? 1;
+  const baseGrade = member.institutionGrade ?? "일반";
+  const [rows, setRows] = useState(() =>
+    Array.from({ length: totalTerms }, (_, i) => {
+      const termNumber = i + 1;
+      const override = member.gradeOverrides?.find((g) => g.termNumber === termNumber);
+      return { termNumber, grade: override?.grade ?? baseGrade };
+    })
+  );
+
+  function setRowGrade(termNumber: number, grade: NonNullable<ProjectMember["institutionGrade"]>) {
+    setRows((prev) => prev.map((r) => (r.termNumber === termNumber ? { ...r, grade } : r)));
+  }
+
+  function handleSave() {
+    // 기본값(institutionGrade)과 같은 연차는 굳이 오버라이드로 남기지 않는다.
+    const overrides = rows
+      .filter((r) => r.grade !== baseGrade)
+      .map((r) => ({ termNumber: r.termNumber, grade: r.grade }));
+    updateProjectMember(member.id, { gradeOverrides: overrides.length > 0 ? overrides : undefined });
+    onClose();
+  }
+
+  return (
+    <div className="p-6 space-y-4">
+      <p className="text-xs text-slate-400 -mt-1">
+        기본 등급은 <span className="font-medium text-slate-600">{baseGrade}</span>입니다. 특정 연차부터 등급이 바뀐 경우에만 그 연차를 다르게 지정하세요.
+        이미 확정(청구완료)되었거나 수동조정된 연차는 잠겨서 여기서 바꿔도 계산에 반영되지 않습니다.
+      </p>
+      <div className="border border-slate-300 rounded-lg overflow-hidden bg-white shadow-sm">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="bg-slate-100 border-b border-slate-300">
+              <th className="text-left px-3 py-2 font-semibold text-slate-600">연차</th>
+              <th className="text-left px-3 py-2 font-semibold text-slate-600">등급</th>
+              <th className="text-left px-3 py-2 font-semibold text-slate-600">상태</th>
+            </tr>
+          </thead>
+          <tbody className="bg-white">
+            {rows.map((r) => {
+              const locked = lockedTermNumbers.has(r.termNumber);
+              return (
+                <tr key={r.termNumber} className="border-b border-slate-100 last:border-0">
+                  <td className="px-3 py-2 font-medium text-slate-700 whitespace-nowrap">{r.termNumber}연차</td>
+                  <td className="px-3 py-2">
+                    <select
+                      disabled={!canEdit || locked}
+                      value={r.grade}
+                      onChange={(e) => setRowGrade(r.termNumber, e.target.value as NonNullable<ProjectMember["institutionGrade"]>)}
+                      className="text-xs border border-slate-300 rounded px-2 py-1.5 bg-white text-slate-700 disabled:bg-slate-50 disabled:text-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                    >
+                      <option value="최우수(S)">최우수 (S)</option>
+                      <option value="우수(A)">우수 (A)</option>
+                      <option value="우수(B)">우수 (B)</option>
+                      <option value="우수(C)">우수 (C)</option>
+                      <option value="일반">일반</option>
+                    </select>
+                  </td>
+                  <td className="px-3 py-2">
+                    {locked ? <span className="text-amber-600 font-medium">확정됨</span> : <span className="text-slate-300">-</span>}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -1437,6 +1629,13 @@ function BillingBlock({
     paidAmount: unit.receivable?.paidAmount ?? 0,
   });
 
+  // 발행구분 — 수수료 청구관리 목록(app/fees)과 같은 project.billingType 필드를 그대로 읽고 쓴다.
+  // RDA2처럼 연차를 기관별로 쪼개 발행하는 unit(institutionId 있음)은 project 단일 필드에
+  // 1:1 대응이 안 되므로(cancelInvoice의 기존 가드와 동일한 이유) 이 unit에서는 표시하지 않는다.
+  const showBillingType = unit.institutionId === null;
+  const billingType = project.billingType ?? "정발행";
+  const isNoBill = showBillingType && (billingType === "대상아님" || billingType === "면제");
+
   function openInvoiceForm() {
     // 기존 발행 건을 "수정"하는 경우엔 그 값을 그대로 불러오고, 새로 발행하는 경우에만 기본값을 채운다.
     setInvForm(
@@ -1583,6 +1782,27 @@ function BillingBlock({
       {unit.institutionId && (
         <p className="text-xs font-semibold text-slate-500">{unit.billingLabel}</p>
       )}
+
+      {/* 발행구분 — 수수료 청구관리 목록과 같은 project.billingType 필드를 공유·연동한다 */}
+      {showBillingType && (
+        <div className="flex items-center gap-3">
+          <span className="text-xs font-semibold text-slate-600 w-24 shrink-0">발행구분</span>
+          <select
+            value={billingType}
+            disabled={!canEditInvoices}
+            onChange={(e) => updateProject(project.id, { billingType: e.target.value as Project["billingType"] })}
+            className={`text-xs font-medium border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-50 disabled:cursor-not-allowed ${BILLING_TYPE_COLOR[billingType] ?? "bg-white text-slate-700"}`}
+          >
+            {BILLING_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+          <span className="text-[11px] text-slate-400">
+            {BILLING_OPTIONS.find((o) => o.value === billingType)?.desc}
+          </span>
+        </div>
+      )}
+
       <div className="flex items-start gap-3">
         <span className="text-xs font-semibold text-slate-600 w-24 shrink-0 pt-1">세금계산서</span>
         {unit.invoice ? (
@@ -1619,6 +1839,10 @@ function BillingBlock({
               )}
             </div>
           </div>
+        ) : isNoBill ? (
+          <span className="text-xs text-amber-600">
+            {BILLING_OPTIONS.find((o) => o.value === billingType)?.label} — 세금계산서 발행이 필요하지 않습니다
+          </span>
         ) : (
           <div className="flex items-center gap-3">
             <span className="text-xs text-slate-400">발행 전</span>
@@ -1752,7 +1976,13 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
   const canEditEmails = useCanWrite('emails');
   const canEditUnclaimed = useCanWrite('unclaimed');
   const canEditFees = useCanWrite('fees');
+  const canManageOtherFirm = useCanWrite('fees-other-firm');
   const { institutions, emailDispatches, fundingAgencies } = useStore();
+  // 이 연차를 타회계법인이 진행했는지 여부 — 연차 내 기관별 행 전체에 동일하게 반영되므로 첫 행 값을 대표로 사용
+  const otherFirmHandled = group.fees[0]?.otherFirmHandled ?? false;
+  function toggleOtherFirmHandled(checked: boolean) {
+    setTermOtherFirmHandled(projectNumber, group.termYear, group.termNumber, checked);
+  }
   const leadInst = institutions.find((i) => i.id === leadInstitutionId);
   // 전담기관 설정에 따라 공문을 주관기관만 받을지, 참여기관까지 다 받을지 결정
   const sendToAllInstitutions = fundingAgencies.find((a) => a.id === agencyId)?.noticeRecipientScope === "LEAD_AND_PARTICIPANTS";
@@ -1843,25 +2073,128 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
               {isSettlement ? "정산" : "연차상시"}
             </span>
             <StatusBadge label={FEE_STATUS[group.termStatus].label} color={FEE_STATUS[group.termStatus].color} />
+            {otherFirmHandled && (
+              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-orange-100 text-orange-700">
+                타회계법인 진행
+              </span>
+            )}
           </div>
           <p className="text-xs text-slate-400 mt-0.5">{group.fees.length}개 기관</p>
         </div>
+        <label
+          className={`flex items-center gap-1.5 text-xs shrink-0 ${canManageOtherFirm ? "cursor-pointer text-slate-600" : "text-slate-300 cursor-not-allowed"}`}
+          onClick={(e) => e.stopPropagation()}
+          title={canManageOtherFirm ? undefined : "시스템관리자·회계담당자만 설정할 수 있습니다"}
+        >
+          <input
+            type="checkbox"
+            checked={otherFirmHandled}
+            disabled={!canManageOtherFirm}
+            onChange={(e) => toggleOtherFirmHandled(e.target.checked)}
+            className="rounded border-slate-300 text-orange-600 focus:ring-orange-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+          />
+          타회계법인 진행
+        </label>
         <div className="flex items-center gap-6 text-xs text-slate-500 mr-2">
-          <span>산정 <strong className="text-slate-700 ml-1">{fmtWonFull(group.totalCalculated)}</strong></span>
-          <span>당해 청구액 <strong className="text-slate-700 ml-1">{fmtWonFull(group.totalApplied)}</strong></span>
-          {/* 연차상시만 해당 — 85% 청구 후 이번 연차에 걷지 않고 남겨두는 15% 몫. 발행 대상은 아니고
-              정산 연차에 함께 걷힐 금액을 미리 확인만 할 수 있게 표시한다. */}
-          {!isSettlement && (() => {
-            const termUnclaimed = group.fees.reduce((s, f) => s + (f.unclaimedFee ?? 0), 0);
-            return termUnclaimed > 0 ? (
-              <span className="text-amber-600 font-semibold">당해 미청구액 <strong className="ml-1">{fmtWonFull(termUnclaimed)}</strong></span>
-            ) : null;
-          })()}
+          {otherFirmHandled ? (
+            <>
+              <span className="text-orange-600 font-medium">85% 금액 비공개(타회계법인 진행)</span>
+              {/* 85%(당해 청구액)는 타회계법인 몫이라 숨기지만, 이후 정산 연차에 삼화가 걷어야 할
+                  15% 미청구 몫은 계속 추적해야 하므로 그대로 노출한다. */}
+              {!isSettlement && (() => {
+                const termUnclaimed = group.fees.reduce((s, f) => s + (f.unclaimedFee ?? 0), 0);
+                return termUnclaimed > 0 ? (
+                  <span className="text-amber-600 font-semibold">당해 미청구액(15%) <strong className="ml-1">{fmtWonFull(termUnclaimed)}</strong></span>
+                ) : null;
+              })()}
+            </>
+          ) : (
+            <>
+              <span>산정 <strong className="text-slate-700 ml-1">{fmtWonFull(group.totalCalculated)}</strong></span>
+              <span>당해 청구액 <strong className="text-slate-700 ml-1">{fmtWonFull(group.totalApplied)}</strong></span>
+              {/* 연차상시만 해당 — 85% 청구 후 이번 연차에 걷지 않고 남겨두는 15% 몫. 발행 대상은 아니고
+                  정산 연차에 함께 걷힐 금액을 미리 확인만 할 수 있게 표시한다. */}
+              {!isSettlement && (() => {
+                const termUnclaimed = group.fees.reduce((s, f) => s + (f.unclaimedFee ?? 0), 0);
+                return termUnclaimed > 0 ? (
+                  <span className="text-amber-600 font-semibold">당해 미청구액 <strong className="ml-1">{fmtWonFull(termUnclaimed)}</strong></span>
+                ) : null;
+              })()}
+            </>
+          )}
         </div>
       </div>
 
       {expanded && (
         <div className="border-t border-slate-100">
+          {otherFirmHandled && (
+            <div className="px-5 py-4 space-y-3">
+              <div className="rounded-lg border border-orange-200 bg-orange-50/60 px-4 py-3 text-xs text-orange-700 leading-relaxed">
+                이 연차({termLabel})는 <strong>타회계법인</strong>에서 진행하여 실제 수수료(85%)의 산정·청구·수금 금액은 본 시스템에 표시되지 않습니다.
+                다만 정산 연차에 삼화가 걷어야 할 <strong>미청구수수료(15%)</strong>는 계속 추적할 수 있도록 아래에 표시합니다.
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-100 text-slate-500 font-medium">
+                      <th className="text-left px-4 py-2.5">기관명</th>
+                      <th className="text-center px-4 py-2.5">구분</th>
+                      <th className="text-right px-4 py-2.5">사업비</th>
+                      <th className="text-right px-4 py-2.5">미청구수수료(15%)</th>
+                      <th className="text-right px-4 py-2.5">미청구수수료 누적</th>
+                      <th className="text-center px-4 py-2.5">비고</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {group.fees.map((f) => {
+                      const gradeMember = members.find((m) => m.institutionId === f.institutionId);
+                      const rawGrade = gradeMember ? resolveMemberGradeForTerm(gradeMember, f.termNumber) : "일반";
+                      const grade = normalizeGrade(rawGrade);
+                      const cumulativeUnclaimed = getCumulativeUnclaimed(f.institutionId);
+                      return (
+                        <tr key={f.id} className="border-b border-slate-50">
+                          <td className="px-4 py-2.5 font-medium text-slate-800">{f.institutionName}</td>
+                          <td className="px-4 py-2.5 text-center whitespace-nowrap">
+                            <span className={`text-xs font-medium px-2 py-0.5 rounded ${GRADE_COLOR[grade] ?? GRADE_COLOR["일반"]}`}>
+                              {GRADE_LABEL[grade] ?? grade}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5 text-right text-slate-600 whitespace-nowrap">{fmtWonFull(f.budget)}</td>
+                          <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                            {(f.unclaimedFee ?? 0) === 0
+                              ? <span className="text-slate-300">-</span>
+                              : <span className="text-amber-600 font-medium">{fmtWonFull(f.unclaimedFee ?? 0)}</span>}
+                          </td>
+                          <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                            {cumulativeUnclaimed === 0
+                              ? <span className="text-slate-300">-</span>
+                              : <span className="text-amber-700 font-medium">{fmtWonFull(cumulativeUnclaimed)}</span>}
+                          </td>
+                          <td className="px-4 py-2.5 text-center text-orange-600">타회계법인 진행</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-slate-50 border-t border-slate-100">
+                      <td colSpan={2} className="px-4 py-2 text-right text-xs text-slate-400">합계</td>
+                      <td className="px-4 py-2 text-right text-xs font-semibold text-slate-600 whitespace-nowrap">
+                        {fmtWonFull(group.fees.reduce((s, f) => s + f.budget, 0))}
+                      </td>
+                      <td className="px-4 py-2 text-right text-xs text-amber-600 font-medium">
+                        {fmtWonFull(group.fees.reduce((s, f) => s + (f.unclaimedFee ?? 0), 0))}
+                      </td>
+                      <td className="px-4 py-2 text-right text-xs text-amber-700 font-medium">
+                        {fmtWonFull(group.fees.reduce((s, f) => s + getCumulativeUnclaimed(f.institutionId), 0))}
+                      </td>
+                      <td />
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+          )}
+          {!otherFirmHandled && (<>
           <div className="px-4 pt-2.5 flex justify-end">
             <button onClick={() => setShowFeeDetail((v) => !v)}
               className="text-[11px] text-slate-500 hover:text-blue-600 transition-colors">
@@ -1889,7 +2222,8 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
               <tbody>
                 {group.fees.map((f) => {
                   const adj = f.appliedFee === 0 ? 0 : f.appliedFee - f.calculatedFee;
-                  const rawGrade = members.find((m) => m.institutionId === f.institutionId)?.institutionGrade ?? "일반";
+                  const gradeMember = members.find((m) => m.institutionId === f.institutionId);
+                  const rawGrade = gradeMember ? resolveMemberGradeForTerm(gradeMember, f.termNumber) : "일반";
                   const grade = normalizeGrade(rawGrade);
                   const cumulativeUnclaimed = getCumulativeUnclaimed(f.institutionId);
                   return (
@@ -2042,6 +2376,7 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
               </div>
             </div>
           )}
+          </>)}
         </div>
       )}
     </div>
@@ -2325,6 +2660,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const router = useRouter();
   const { projects, fundingAgencies, agencyNoticeTemplates, projectMembers, emailDispatches, users } = useStore();
   const canEditProjects = useCanWrite('projects');
+  const canSendNotice = useCanWrite('emails');
   const [activeTab, setActiveTab] = useState<"info" | "fees">("info");
   const [showNotice, setShowNotice] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -2381,7 +2717,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
             <p className="text-sm text-slate-500 mt-0.5">{project.leadInstitutionName} · {project.agency}</p>
           </div>
           <div className="flex items-center gap-2">
-            {noticeAgency && (
+            {noticeAgency && canSendNotice && (
               <button
                 onClick={() => setShowNotice(true)}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-lg hover:bg-purple-100 transition-colors"

@@ -144,7 +144,7 @@ export default function InstitutionDetailPage({ params }: { params: Promise<{ id
             <p className="text-sm font-mono text-slate-700 mt-0.5">{inst.bizNumber}</p>
           </div>
           <div>
-            <p className="text-xs text-slate-400">담당자</p>
+            <p className="text-xs text-slate-400">회계담당자</p>
             <p className="text-sm text-slate-700 mt-0.5">{inst.contactName}</p>
           </div>
           <div>

@@ -10,7 +10,7 @@ import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
 import DateInput from "@/components/common/DateInput";
 import { useCanWrite } from "@/lib/permissions";
-import ExcelUploadModal, { downloadExcelTemplate } from "@/components/common/ExcelUploadModal";
+import ExemptionListUploadModal, { downloadExemptionListTemplate } from "@/components/common/ExemptionListUploadModal";
 
 type ModalState = { mode: "add" } | { mode: "edit"; target: Institution };
 type ClassificationSummary = {
@@ -122,10 +122,13 @@ function InstitutionForm({
         <Field label="대표자명"><input className={inputCls} value={form.representativeName} onChange={(e) => s("representativeName", e.target.value)} /></Field>
       </div>
       <div className="grid grid-cols-2 gap-4">
-        <Field label="담당자명"><input className={inputCls} value={form.contactName} onChange={(e) => s("contactName", e.target.value)} /></Field>
-        <Field label="담당자 연락처"><input className={inputCls} value={form.contactPhone} onChange={(e) => s("contactPhone", e.target.value)} placeholder="02-0000-0000" /></Field>
+        <Field label="회계담당자명"><input className={inputCls} value={form.contactName} onChange={(e) => s("contactName", e.target.value)} /></Field>
+        <Field label="회계담당자 연락처"><input className={inputCls} value={form.contactPhone} onChange={(e) => s("contactPhone", e.target.value)} placeholder="02-0000-0000" /></Field>
       </div>
-      <Field label="담당자 이메일"><input className={inputCls} type="email" value={form.contactEmail} onChange={(e) => s("contactEmail", e.target.value)} placeholder="contact@institution.kr" /></Field>
+      <Field label="회계담당자 이메일">
+        <input className={inputCls} type="email" value={form.contactEmail} onChange={(e) => s("contactEmail", e.target.value)} placeholder="contact@institution.kr" />
+        <p className="text-[10px] text-slate-400 mt-1">세금계산서·공문 발송 시 이 이메일로 전송됩니다</p>
+      </Field>
       {!isEdit && (
         <div className="grid grid-cols-2 gap-4">
           <Field label="등록일"><DateInput className="w-full" value={form.registeredAt} onChange={(v) => s("registeredAt", v)} /></Field>
@@ -178,7 +181,7 @@ export default function InstitutionsPage() {
   const [classFilter, setClassFilter] = useState("ALL");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [modal, setModal] = useState<ModalState | null>(null);
-  const [showUpload, setShowUpload] = useState(false);
+  const [showExemptionUpload, setShowExemptionUpload] = useState(false);
 
   const classificationByInstitution = useMemo(() => {
     const projectsById = new Map(projects.map((project) => [project.id, project]));
@@ -263,13 +266,13 @@ export default function InstitutionsPage() {
         <p className="text-xs text-slate-500">전체 {institutions.length}개 기관 · 참여기관 구분은 과제별 전담기관 기준으로 표시</p>
         {canEdit && (
           <div className="flex items-center gap-2">
-            <button onClick={downloadExcelTemplate} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors">
+            <button onClick={downloadExemptionListTemplate} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors">
               <svg viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5"><path fillRule="evenodd" d="M3 17a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1zM6.293 9.293a1 1 0 0 1 1.414 0L9 10.586V3a1 1 0 1 1 2 0v7.586l1.293-1.293a1 1 0 1 1 1.414 1.414l-3 3a1 1 0 0 1-1.414 0l-3-3a1 1 0 0 1 0-1.414z" clipRule="evenodd" /></svg>
-              양식 다운로드
+              정산면제리스트 양식
             </button>
-            <button onClick={() => setShowUpload(true)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors">
+            <button onClick={() => setShowExemptionUpload(true)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 transition-colors">
               <svg viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5"><path fillRule="evenodd" d="M3 17a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1zM6.293 6.707a1 1 0 0 1 0-1.414l3-3a1 1 0 0 1 1.414 0l3 3a1 1 0 0 1-1.414 1.414L11 5.414V13a1 1 0 1 1-2 0V5.414L7.707 6.707a1 1 0 0 1-1.414 0z" clipRule="evenodd" /></svg>
-              엑셀 업로드
+              정산면제리스트 업로드
             </button>
             <button
               onClick={() => setModal({ mode: "add" })}
@@ -301,7 +304,7 @@ export default function InstitutionsPage() {
           {[
             { label: "기관명",    value: filterName,        onChange: setFilterName        },
             { label: "사업자번호", value: filterBizNumber,   onChange: setFilterBizNumber   },
-            { label: "담당자",    value: filterContactName, onChange: setFilterContactName  },
+            { label: "회계담당자", value: filterContactName, onChange: setFilterContactName  },
           ].map(({ label, value, onChange }) => (
             <div key={label}>
               <p className="text-[10px] font-medium text-slate-400 mb-1">{label}</p>
@@ -335,7 +338,7 @@ export default function InstitutionsPage() {
               <th className="text-left px-5 py-3 text-xs font-medium text-slate-500">기관명</th>
               <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">구분 내용</th>
               <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">사업자번호</th>
-              <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">담당자</th>
+              <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">회계담당자</th>
               <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">이메일</th>
               <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">과제 수</th>
               <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">등록일</th>
@@ -353,6 +356,11 @@ export default function InstitutionsPage() {
                     <Link href={`/institutions/${inst.id}`} className="font-semibold text-blue-600 hover:underline">
                       {inst.name}
                     </Link>
+                    {inst.referenceGrade && (
+                      <span className="ml-1.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 align-middle" title="정산면제리스트 기준 참고 등급">
+                        {inst.referenceGrade}
+                      </span>
+                    )}
                     <p className="text-xs text-slate-400 mt-0.5">{inst.representativeName} 대표</p>
                   </td>
                   <td className="px-4 py-4">
@@ -388,7 +396,7 @@ export default function InstitutionsPage() {
         </div>
       </div>
 
-      {showUpload && <ExcelUploadModal onClose={() => setShowUpload(false)} />}
+      {showExemptionUpload && <ExemptionListUploadModal onClose={() => setShowExemptionUpload(false)} />}
 
       {modal && (
         <Modal title={modal.mode === "add" ? "새 기관 추가" : "기관 정보 수정"} onClose={() => setModal(null)} size="lg">

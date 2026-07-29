@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { getCurrentUser } from "./auth";
-import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, allocateExact, type CalcMember } from "./fee-calculator";
+import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, allocateExact, resolveMemberGradeForTerm, type CalcMember } from "./fee-calculator";
 import {
   institutions as initialInstitutions,
   projects as initialProjects,
@@ -480,7 +480,7 @@ export function addProjectMember(data: Omit<ProjectMember, "id">): ProjectMember
 }
 
 // 수수료 산정에 영향을 주는 필드 — 변경 시 해당 과제의 연차별 수수료를 자동 재산정한다.
-const FEE_AFFECTING_FIELDS = ["budget", "cashBudget", "inKindBudget", "institutionGrade", "settlementType", "annualBudgets", "role"] as const;
+const FEE_AFFECTING_FIELDS = ["budget", "cashBudget", "inKindBudget", "institutionGrade", "gradeOverrides", "settlementType", "annualBudgets", "role"] as const;
 
 export function updateProjectMember(id: string, data: Partial<ProjectMember>): void {
   const before = _state.projectMembers.find((m) => m.id === id);
@@ -492,6 +492,75 @@ export function updateProjectMember(id: string, data: Partial<ProjectMember>): v
     autoGenerateTermFees(before.projectId);
   }
   notify();
+}
+
+export interface InstitutionGradeApplyResult {
+  updatedProjectCount: number;
+  updatedTermCount: number;
+  lockedTermCount: number;
+  // 실제로 어느 과제의 몇 연차가 바뀌었는지 — 업로드 화면에서 "이 과제들이 바뀌었다"고
+  // 구체적으로 보여줘야 사용자가 반영 결과를 확인·추적할 수 있다(건수만으로는 알 수 없음).
+  updatedProjects: { projectId: string; projectNumber: string; projectName: string; termNumbers: number[] }[];
+}
+
+// 정산면제리스트 업로드 등으로 기관의 등급이 새로 확인됐을 때, 그 기관이 참여 중인 모든 과제의
+// 해당 연차에 소급 반영한다. 단, 이미 CONFIRMED/BILLED로 확정됐거나 수동조정(manualOverride)된
+// 연차는 건드리지 않는다 — projectType/settlementType 변경 시 autoGenerateTermFees가 지키는 잠금과 동일한 규칙.
+// 완료된(COMPLETED) 과제도 대상에서 제외한다.
+export function applyInstitutionGradeToProjects(
+  institutionId: string,
+  newGrade: "최우수(S)" | "우수(A)" | "우수(B)" | "우수(C)" | "일반",
+): InstitutionGradeApplyResult {
+  const affectedProjects = new Map<string, { projectNumber: string; projectName: string; termNumbers: number[] }>();
+  let updatedTermCount = 0;
+  let lockedTermCount = 0;
+
+  const updatedMembers = _state.projectMembers.map((m) => {
+    if (m.institutionId !== institutionId) return m;
+    const project = _state.projects.find((p) => p.id === m.projectId);
+    if (!project || project.status === "COMPLETED") return m;
+
+    const overrides = [...(m.gradeOverrides ?? [])];
+    const changedTerms: number[] = [];
+    for (let termNumber = 1; termNumber <= project.totalTerms; termNumber++) {
+      const locked = _state.termFees.some(
+        (tf) => tf.projectNumber === project.projectNumber &&
+          tf.institutionId === institutionId &&
+          tf.termNumber === termNumber &&
+          (tf.status === "CONFIRMED" || tf.status === "BILLED" || tf.manualOverride)
+      );
+      if (locked) { lockedTermCount++; continue; }
+      const existingIdx = overrides.findIndex((g) => g.termNumber === termNumber);
+      const currentGrade = existingIdx >= 0 ? overrides[existingIdx].grade : (m.institutionGrade ?? "일반");
+      if (currentGrade === newGrade) continue;
+      if (existingIdx >= 0) overrides[existingIdx] = { termNumber, grade: newGrade };
+      else overrides.push({ termNumber, grade: newGrade });
+      changedTerms.push(termNumber);
+      updatedTermCount++;
+    }
+    if (changedTerms.length === 0) return m;
+    affectedProjects.set(project.id, {
+      projectNumber: project.projectNumber,
+      projectName: project.projectName,
+      termNumbers: [...(affectedProjects.get(project.id)?.termNumbers ?? []), ...changedTerms].sort((a, b) => a - b),
+    });
+    return { ...m, gradeOverrides: overrides.sort((a, b) => a.termNumber - b.termNumber) };
+  });
+
+  if (affectedProjects.size === 0) return { updatedProjectCount: 0, updatedTermCount: 0, lockedTermCount, updatedProjects: [] };
+
+  _state = { ..._state, projectMembers: updatedMembers };
+  for (const pid of affectedProjects.keys()) {
+    record("project", pid, `기관 등급 변경 반영 (${newGrade})`, "UPDATE");
+    autoGenerateTermFees(pid);
+  }
+  notify();
+  return {
+    updatedProjectCount: affectedProjects.size,
+    updatedTermCount,
+    lockedTermCount,
+    updatedProjects: [...affectedProjects.entries()].map(([projectId, info]) => ({ projectId, ...info })),
+  };
 }
 
 export function deleteProjectMember(id: string): void {
@@ -595,6 +664,33 @@ export function updateTermFee(id: string, data: Partial<TermFee>): void {
   const after = { ...before, ...data };
   _state = { ..._state, termFees: _state.termFees.map((f) => (f.id === id ? after : f)) };
   record("termFee", id, `${after.projectNumber} · ${after.institutionName}`, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
+  notify();
+}
+
+/** 한 연차(과제번호+연도+연차번호) 전체의 타회계법인 진행 여부를 일괄 변경한다.
+ *  TermFee가 기관별로 1행씩 있어 연차 단위 체크박스는 그 연차의 모든 행에 동일하게 반영해야 한다. */
+export function setTermOtherFirmHandled(
+  projectNumber: string,
+  termYear: number,
+  termNumber: number,
+  otherFirmHandled: boolean
+): void {
+  const targets = _state.termFees.filter(
+    (f) => f.projectNumber === projectNumber && f.termYear === termYear && f.termNumber === termNumber
+  );
+  if (targets.length === 0) return;
+  const targetIds = new Set(targets.map((f) => f.id));
+  _state = {
+    ..._state,
+    termFees: _state.termFees.map((f) => (targetIds.has(f.id) ? { ...f, otherFirmHandled } : f)),
+  };
+  record(
+    "termFee",
+    targets[0].id,
+    `${projectNumber} · ${termYear}년 ${termNumber}연차`,
+    "UPDATE",
+    { otherFirmHandled: { before: !otherFirmHandled, after: otherFirmHandled } }
+  );
   notify();
 }
 
@@ -1035,7 +1131,7 @@ export function autoGenerateTermFees(projectId: string): void {
         institutionId: m.institutionId,
         institutionName: m.institutionName,
         role: m.role,
-        grade: normalizeGrade(m.institutionGrade ?? "일반"),
+        grade: normalizeGrade(resolveMemberGradeForTerm(m, termNumber)),
         institutionType: m.institutionType,
         settlementType: m.settlementType ?? policy.defaultSettlementType ?? "자체정산",
         cashBudget: ab.cashBudget,
@@ -1119,7 +1215,7 @@ export function autoGenerateTermFees(projectId: string): void {
         // 전체 기관 합계가 항상 generalFee와 정확히 일치한다.
         const instCalcShare = generalCalcShareByInst.get(cm.institutionId) ?? 0;
         instCalcFee = instCalcShare;
-        // 일반기관은 산정 단계에서 할인이 없으므로 표준수수료 = 산정수수료.
+        // 일반기관은 산정 단계에서 85% 적용이 없으므로 표준수수료 = 산정수수료.
         instStandardFee = instCalcFee;
 
         if (workType === "SETTLEMENT") {

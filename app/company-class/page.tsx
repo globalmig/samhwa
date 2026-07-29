@@ -250,7 +250,7 @@ function AgencyFeeModelSummary({ agency, policy }: { agency: { shortName: string
     ? "없음 (모든 기관 일반 취급)"
     : policy.exemptionMode === "EXCLUDE"
     ? policy.exemptGrades.join("·") + " 등급 — 산정기준액에서 완전 제외(연차상시도 안함)"
-    : policy.exemptGrades.join("·") + " 등급 (자체정산 선택 시 85% 할인)";
+    : policy.exemptGrades.join("·") + " 등급 (자체정산 선택 시 85%만 적용)";
 
   const defaultSettlementLabel = (policy.defaultSettlementType ?? "자체정산") === "자체정산"
     ? "자체정산 — 정산 연차에도 85% 유지"
@@ -483,7 +483,7 @@ function PolicyForm({ initial, onSubmit, onClose }: { initial: PolicyFormData; o
             <label className="block text-xs font-medium text-slate-600 mb-1">면제기관 처리 방식</label>
             <select className={inputCls} value={form.exemptionMode ?? "DISCOUNT"}
               onChange={(e) => sf("exemptionMode", e.target.value as "DISCOUNT" | "EXCLUDE")}>
-              <option value="DISCOUNT">할인 — 산정기준액 포함 후 85% 할인 (KEIT/KETEP)</option>
+              <option value="DISCOUNT">85% 적용 — 산정기준액 포함 후 85%만 청구 (KEIT/KETEP)</option>
               <option value="EXCLUDE">완전 제외 — 연차상시도 안 함 (IITP/RDA)</option>
             </select>
           </div>
@@ -848,8 +848,14 @@ export default function CompanyClassPage() {
     () => [...feePolicies.filter((p) => p.agencyId === selectedAgencyId)].sort((a, b) => b.effectiveFrom.localeCompare(a.effectiveFrom)),
     [feePolicies, selectedAgencyId],
   );
+  // 전담기관 하나가 사업유형(programType)별로 별도 정책을 동시에 ACTIVE로 둘 수 있다
+  // (예: IITP는 "일반 R&D"와 "ICT 기금사업" 정책이 동시에 활성). find()로 하나만 고르면
+  // 배열 순서상 먼저 나온 정책만 항상 표시되고 나머지는 화면에서 영영 보이지 않으므로,
+  // ACTIVE 정책을 전부 모아 각각 카드로 보여준다.
   const activePolicy = agencyPolicies.find((p) => p.status === "ACTIVE");
+  const activePolicies = agencyPolicies.filter((p) => p.status === "ACTIVE");
   const commonActivePolicy = feePolicies.find((p) => p.status === "ACTIVE" && p.agencyId === null);
+  const summaryPolicies = activePolicies.length > 0 ? activePolicies : commonActivePolicy ? [commonActivePolicy] : [];
 
   function toggleExpand(id: string) {
     setExpandedIds((prev) => {
@@ -907,13 +913,14 @@ export default function CompanyClassPage() {
         </div>
       </div>
 
-      {/* 기관 수수료 산정 특성 요약 */}
-      {(activePolicy ?? commonActivePolicy) && (
+      {/* 기관 수수료 산정 특성 요약 — 사업유형별로 동시에 ACTIVE인 정책이 여러 개면 각각 카드로 표시 */}
+      {summaryPolicies.map((policy) => (
         <AgencyFeeModelSummary
+          key={policy.id}
           agency={selectedAgency ?? undefined}
-          policy={(activePolicy ?? commonActivePolicy)!}
+          policy={policy}
         />
-      )}
+      ))}
 
       {/* 수수료 기준 이력 카드 */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">

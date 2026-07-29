@@ -10,7 +10,6 @@ import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
 import DateInput from "@/components/common/DateInput";
 import { useCanWrite } from "@/lib/permissions";
-import ExcelUploadModal, { downloadExcelTemplate } from "@/components/common/ExcelUploadModal";
 
 // ─── 운용 안내 데이터 ────────────────────────────────────────
 const AGENCY_GUIDE: Record<string, GuideTab[]> = {
@@ -947,7 +946,6 @@ export default function FundingAgenciesPage() {
   const canEdit = useCanWrite("funding-agencies");
   const { fundingAgencies, projects, termFees, feePolicies } = useStore();
   const [modal, setModal] = useState<ModalState | null>(null);
-  const [showUpload, setShowUpload] = useState(false);
   const [filterName,      setFilterName]      = useState("");
   const [filterShortName, setFilterShortName] = useState("");
   const [filterCode,      setFilterCode]      = useState("");
@@ -993,14 +991,6 @@ export default function FundingAgenciesPage() {
         <p className="text-xs text-slate-500">전담기관 · 총 {fundingAgencies.length}개 기관</p>
         {canEdit && (
           <div className="flex items-center gap-2">
-            <button onClick={downloadExcelTemplate} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors">
-              <svg viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5"><path fillRule="evenodd" d="M3 17a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1zM6.293 9.293a1 1 0 0 1 1.414 0L9 10.586V3a1 1 0 1 1 2 0v7.586l1.293-1.293a1 1 0 1 1 1.414 1.414l-3 3a1 1 0 0 1-1.414 0l-3-3a1 1 0 0 1 0-1.414z" clipRule="evenodd" /></svg>
-              양식 다운로드
-            </button>
-            <button onClick={() => setShowUpload(true)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors">
-              <svg viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5"><path fillRule="evenodd" d="M3 17a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1zM6.293 6.707a1 1 0 0 1 0-1.414l3-3a1 1 0 0 1 1.414 0l3 3a1 1 0 0 1-1.414 1.414L11 5.414V13a1 1 0 1 1-2 0V5.414L7.707 6.707a1 1 0 0 1-1.414 0z" clipRule="evenodd" /></svg>
-              엑셀 업로드
-            </button>
             <button onClick={() => setModal({ mode: "add" })} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
               <svg viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5"><path d="M10.75 4.75a.75.75 0 0 0-1.5 0v4.5h-4.5a.75.75 0 0 0 0 1.5h4.5v4.5a.75.75 0 0 0 1.5 0v-4.5h4.5a.75.75 0 0 0 0-1.5h-4.5v-4.5z" /></svg>
               전담기관 추가
@@ -1138,8 +1128,6 @@ export default function FundingAgenciesPage() {
           />
         </Modal>
       )}
-
-      {showUpload && <ExcelUploadModal onClose={() => setShowUpload(false)} />}
 
       {modal?.mode === "guide" && (
         <Modal

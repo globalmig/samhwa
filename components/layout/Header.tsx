@@ -155,8 +155,9 @@ export default function Header() {
 
           {notifOpen && (
             <>
-              <div className="fixed inset-0 z-10" onClick={() => { setNotifOpen(false); setShowNoticeForm(false); }} />
-              <div className="absolute right-0 top-full mt-1 w-80 bg-white border border-slate-200 rounded-xl shadow-lg z-20 max-h-[70vh] overflow-y-auto">
+              <div className="fixed inset-0 z-40" onClick={() => { setNotifOpen(false); setShowNoticeForm(false); }} />
+              {/* z-50: 페이지 안쪽 sticky 표 헤더(z-30 이하) 위에 항상 떠 있어야 한다 */}
+              <div className="absolute right-0 top-full mt-1 w-80 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-[70vh] overflow-y-auto">
                 <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white gap-2">
                   <h3 className="text-sm font-semibold text-slate-800 shrink-0">알림</h3>
                   <div className="flex items-center gap-3">
@@ -312,8 +313,8 @@ export default function Header() {
 
           {menuOpen && (
             <>
-              <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-              <div className="absolute right-0 top-full mt-1 w-52 bg-white border border-slate-200 rounded-xl shadow-lg z-20 overflow-hidden">
+              <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
+              <div className="absolute right-0 top-full mt-1 w-52 bg-white border border-slate-200 rounded-xl shadow-lg z-50 overflow-hidden">
                 {user && (
                   <div className="px-4 py-3 border-b border-slate-100">
                     <p className="text-sm font-medium text-slate-800">{user.name}</p>

@@ -98,7 +98,7 @@ function ProjectListModal({
                         </Link>
                       </td>
                       <td className="px-4 py-3 text-center">
-                        <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${STATUS_COLOR[p.status] ?? "bg-slate-100 text-slate-500"}`}>
+                        <span className={`inline-block whitespace-nowrap text-[10px] font-medium px-1.5 py-0.5 rounded ${STATUS_COLOR[p.status] ?? "bg-slate-100 text-slate-500"}`}>
                           {STATUS_LABEL[p.status] ?? p.status}
                         </span>
                       </td>
@@ -249,7 +249,7 @@ export default function ResearcherPage({ params }: { params: Promise<{ name: str
               <col className="w-20" />
               <col />
               <col className="w-44" />
-              <col className="w-20" />
+              <col className="w-24" />
               <col className="w-28" />
               <col className="w-28" />
               <col className="w-32" />
@@ -291,7 +291,7 @@ export default function ResearcherPage({ params }: { params: Promise<{ name: str
                       </Link>
                     </td>
                     <td className="px-5 py-4 text-center">
-                      <span className={`text-[10px] font-semibold px-2 py-1 rounded-full ${STATUS_COLOR[p.status] ?? "bg-slate-100 text-slate-500"}`}>
+                      <span className={`inline-block whitespace-nowrap text-[10px] font-semibold px-2 py-1 rounded-full ${STATUS_COLOR[p.status] ?? "bg-slate-100 text-slate-500"}`}>
                         {STATUS_LABEL[p.status] ?? p.status}
                       </span>
                     </td>

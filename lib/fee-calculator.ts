@@ -1,4 +1,4 @@
-import type { FeePolicy, FeeRateBracket, ExemptInstDetail, TermFeeCalc, PolicyRule, Project, InstitutionType } from "./mock";
+import type { FeePolicy, FeeRateBracket, ExemptInstDetail, TermFeeCalc, PolicyRule, Project, InstitutionType, ProjectMember } from "./mock";
 
 // ─── 영리/비영리 판정 ───────────────────────────────────────────
 // 정산면제(등급 S·A~C 우수기관 혜택)는 과학기술정보통신부 연구비지원체계 평가를 받는
@@ -15,6 +15,17 @@ export function normalizeGrade(grade: string): string {
   if (grade === "S" || grade.startsWith("최우수")) return "S";
   if (grade === "A~C" || grade.startsWith("우수")) return "A~C";
   return "일반";
+}
+
+// ─── 연차별 등급 조회 ────────────────────────────────────────────
+// 등급평가(정산면제리스트)는 연차마다 갱신될 수 있어, 특정 연차부터 등급이 바뀐 경우
+// gradeOverrides에 그 연차 이후분만 따로 기록한다. 오버라이드가 없는 연차는 institutionGrade(기본값)를 쓴다.
+export function resolveMemberGradeForTerm(
+  member: Pick<ProjectMember, "institutionGrade" | "gradeOverrides">,
+  termNumber: number,
+): string {
+  const override = member.gradeOverrides?.find((g) => g.termNumber === termNumber);
+  return override?.grade ?? member.institutionGrade ?? "일반";
 }
 
 // ─── 정산(SETTLEMENT) 연차 판정 ───────────────────────────────────
@@ -306,29 +317,62 @@ export function calcTermFee(input: CalcInput): CalcResult {
   const addonFee = getAddonFee(baseFee, coInstCount, coInstAddonMethod);
   const standardFee = baseFee + addonFee;
 
-  // 자율성트랙 자체정산: 전 연도 billingRatio 균일, 정산 없음
-  if (
-    projectType === "AUTONOMY_TRACK" &&
-    hasAutonomyTrack &&
-    members.every((m) => m.settlementType === "자체정산")
-  ) {
-    const calculatedFee = Math.round(standardFee * billingRatio);
+  // 자율성트랙: 참여기관이 전원 자체정산이면 전 연도 billingRatio 균일 적용(정산 없음, 면제기관 미고려).
+  // 위탁정산 기관이 예외적으로 섞여 있으면, 위탁정산 기관 하나 때문에 과제 전체가 조용히 일반과제
+  // 계산식으로 넘어가지 않도록 — 자체정산 기관은 자율성트랙 방식대로, 위탁정산 기관은 일반과제와
+  // 동일한 방식(면제기관·정산연차 규칙 포함)으로 각각 계산해 합산한다.
+  if (projectType === "AUTONOMY_TRACK" && hasAutonomyTrack) {
+    const outsourcedMembers = members.filter((m) => m.settlementType !== "자체정산");
+
+    if (outsourcedMembers.length === 0) {
+      const calculatedFee = Math.round(standardFee * billingRatio);
+      return {
+        totalCashBudget, coInstCount, baseFee, addonFee, standardFee,
+        nonExemptCashBudget: totalCashBudget,
+        nonExemptCoInstCount: coInstCount,
+        nonExemptBaseFee: baseFee,
+        nonExemptAddonFee: addonFee,
+        generalFee: standardFee,
+        exemptFeeTotal: 0,
+        exemptBreakdown: [],
+        excludedInstitutionIds,
+        calculatedFee,
+        generalCalcFee: calculatedFee,
+        generalBillingFee: calculatedFee,
+        generalUnclaimedFee: 0,
+        carriedOverUnclaimed: 0,
+        totalBillingFee: calculatedFee + carriedOverUnclaimed,
+        billingRatio,
+      };
+    }
+
+    const selfSettleMembers = members.filter((m) => m.settlementType === "자체정산");
+    const outsourcedResult = calcTermFee({ members: outsourcedMembers, workType, policy, projectType: "GENERAL", carriedOverUnclaimed: 0 });
+    if (selfSettleMembers.length === 0) {
+      return { ...outsourcedResult, carriedOverUnclaimed, totalBillingFee: outsourcedResult.totalBillingFee + carriedOverUnclaimed };
+    }
+    const selfResult = calcTermFee({ members: selfSettleMembers, workType, policy, projectType: "AUTONOMY_TRACK", carriedOverUnclaimed: 0 });
+
     return {
-      totalCashBudget, coInstCount, baseFee, addonFee, standardFee,
-      nonExemptCashBudget: totalCashBudget,
-      nonExemptCoInstCount: coInstCount,
-      nonExemptBaseFee: baseFee,
-      nonExemptAddonFee: addonFee,
-      generalFee: standardFee,
-      exemptFeeTotal: 0,
-      exemptBreakdown: [],
-      excludedInstitutionIds,
-      calculatedFee,
-      generalCalcFee: calculatedFee,
-      generalBillingFee: calculatedFee,
-      generalUnclaimedFee: 0,
-      carriedOverUnclaimed: 0,
-      totalBillingFee: calculatedFee + carriedOverUnclaimed,
+      totalCashBudget:        selfResult.totalCashBudget + outsourcedResult.totalCashBudget,
+      coInstCount:            selfResult.coInstCount + outsourcedResult.coInstCount,
+      baseFee:                selfResult.baseFee + outsourcedResult.baseFee,
+      addonFee:               selfResult.addonFee + outsourcedResult.addonFee,
+      standardFee:            selfResult.standardFee + outsourcedResult.standardFee,
+      nonExemptCashBudget:    selfResult.nonExemptCashBudget + outsourcedResult.nonExemptCashBudget,
+      nonExemptCoInstCount:   selfResult.nonExemptCoInstCount + outsourcedResult.nonExemptCoInstCount,
+      nonExemptBaseFee:       selfResult.nonExemptBaseFee + outsourcedResult.nonExemptBaseFee,
+      nonExemptAddonFee:      selfResult.nonExemptAddonFee + outsourcedResult.nonExemptAddonFee,
+      generalFee:             selfResult.generalFee + outsourcedResult.generalFee,
+      exemptFeeTotal:         selfResult.exemptFeeTotal + outsourcedResult.exemptFeeTotal,
+      exemptBreakdown:        [...selfResult.exemptBreakdown, ...outsourcedResult.exemptBreakdown],
+      excludedInstitutionIds: [...selfResult.excludedInstitutionIds, ...outsourcedResult.excludedInstitutionIds],
+      calculatedFee:          selfResult.calculatedFee + outsourcedResult.calculatedFee,
+      generalCalcFee:         selfResult.generalCalcFee + outsourcedResult.generalCalcFee,
+      generalBillingFee:      selfResult.generalBillingFee + outsourcedResult.generalBillingFee,
+      generalUnclaimedFee:    selfResult.generalUnclaimedFee + outsourcedResult.generalUnclaimedFee,
+      carriedOverUnclaimed,
+      totalBillingFee:        selfResult.totalBillingFee + outsourcedResult.totalBillingFee + carriedOverUnclaimed,
       billingRatio,
     };
   }
