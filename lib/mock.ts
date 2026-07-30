@@ -703,12 +703,22 @@ export interface Project {
   projectCategory?: string;      // 과제 구분
   researchLead?: string;         // 연구책임자
   projectCode?: string;          // 전담기관 과제코드
+  // 과거에 쓰였던 과제코드 이력 — RCMS에서 과제코드가 재부여된 뒤에도 누군가 예전 코드가 적힌
+  // 엑셀을 다시 올리는 경우가 있어, 그때 같은 과제로 인식하기 위해 유지한다(엑셀 업로드 로직 참고).
+  // 코드가 실제로 갱신될 때 이전 값이 여기로 옮겨지고, 이력에 이미 있는 코드는 다시 현재값으로
+  // 되돌리지 않는다.
+  previousProjectCodes?: string[];
   projectDivision?: "위탁" | "공동"; // 과제 구분 (위탁/공동)
   billingType?: "정발행" | "역발행요청" | "역발행" | "대상아님" | "면제"; // 발행구분 (없으면 계산서 유무로 자동 판별)
   // 협약 구조
   agreementType?: "BATCH" | "STAGED"; // 일괄협약(0단계) | 단계협약
   stages?: { stageNumber: number; startTermNumber: number; endTermNumber: number }[];
   projectType?: "GENERAL" | "AUTONOMY_TRACK"; // 일반과제 | 자율성트랙과제
+  // 자율성트랙 과제 전체에 적용되는 정산구분 — 참여기관별 ProjectMember.settlementType과는 별개다.
+  // 자율성트랙은 일반과제와 수수료 계산 방식 자체가 달라서, 참여기관별로 나뉠 수 있는 값을 그대로
+  // 재사용하면 안 되므로 과제 단위로 다시 지정한다. projectType이 AUTONOMY_TRACK일 때만 의미가 있고,
+  // 미지정 시 "자체정산"으로 취급한다.
+  autonomySettlementType?: "위탁정산" | "자체정산";
   programType?: "GENERAL" | "ICT_FUND";        // 일반 R&D과제 | ICT 기금사업 (IITP 전용 별도 수수료체계)
   docRequestDate?: string;  // 서류 요청일
   docReplyDate?: string;    // 서류 회신일
@@ -1105,6 +1115,11 @@ export interface GradeOverride {
   grade: "최우수(S)" | "우수(A)" | "우수(B)" | "우수(C)" | "일반";
 }
 
+export interface SettlementTypeOverride {
+  termNumber: number;
+  settlementType: "위탁정산" | "자체정산";
+}
+
 export interface ProjectMember {
   id: string;
   projectId: string;
@@ -1112,7 +1127,7 @@ export interface ProjectMember {
   institutionId: string;
   institutionName: string;
   institutionType: InstitutionType;
-  role: "LEAD" | "PARTICIPANT"; // 주관 | 참여
+  role: "LEAD" | "PARTICIPANT" | "ENTRUSTED"; // 주관 | 참여(공동) | 위탁(공동 중 일부 연구를 위탁받아 참여) — 위탁도 넓은 의미의 참여기관에 포함
   budget: number; // 총 배정 연구비 (현금+현물)
   feeRate: number; // 적용 요율 (%) — 레거시, 신규 산정은 fee-calculator 사용
   calculatedFee: number; // 산정 수수료 — 레거시
@@ -1127,7 +1142,11 @@ export interface ProjectMember {
   // 수수료 산정 필드
   cashBudget?: number;         // 총 현금사업비
   inKindBudget?: number;       // 총 현물사업비
+  // 정산구분 기본값 — 연차별 오버라이드(settlementTypeOverrides)가 없는 연차에 쓰인다.
   settlementType?: "위탁정산" | "자체정산";
+  // 연차별 정산구분 — 참여기관의 위탁/자체 정산 여부가 연차 중간에 바뀔 수 있어(계약 변경 등)
+  // 특정 연차부터 달라진 경우 이걸로 그 연차 이후만 다르게 기록한다. 없는 연차는 settlementType을 그대로 쓴다.
+  settlementTypeOverrides?: SettlementTypeOverride[];
   annualBudgets?: AnnualBudget[]; // 연차별 현금/현물 분리 예산
 }
 

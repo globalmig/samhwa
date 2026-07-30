@@ -28,6 +28,19 @@ export function resolveMemberGradeForTerm(
   return override?.grade ?? member.institutionGrade ?? "일반";
 }
 
+// ─── 연차별 정산구분 조회 ───────────────────────────────────────────
+// 참여기관의 위탁/자체 정산 여부가 계약 변경 등으로 연차 중간에 바뀔 수 있어, 특정 연차부터 달라진
+// 경우 settlementTypeOverrides에 그 연차 이후분만 따로 기록한다. 오버라이드가 없는 연차는
+// settlementType(기본값), 그것도 없으면 정책의 defaultSettlementType을 쓴다.
+export function resolveMemberSettlementTypeForTerm(
+  member: Pick<ProjectMember, "settlementType" | "settlementTypeOverrides">,
+  termNumber: number,
+  defaultSettlementType: "위탁정산" | "자체정산" = "자체정산",
+): "위탁정산" | "자체정산" {
+  const override = member.settlementTypeOverrides?.find((g) => g.termNumber === termNumber);
+  return override?.settlementType ?? member.settlementType ?? defaultSettlementType;
+}
+
 // ─── 정산(SETTLEMENT) 연차 판정 ───────────────────────────────────
 // 일괄협약: 총연차의 마지막 연차만 정산. 단계협약: 각 단계의 마지막 연차가 정산.
 // autoGenerateTermFees(store.ts)와 과제 상세 화면(연차별 수수료 현황·참여기관 목록)이
@@ -173,19 +186,19 @@ export function getAddonFee(
 }
 
 // ─── 공동기관 수 산정 ────────────────────────────────────────────
-// 기본: 공동(PARTICIPANT) 역할 기관 수.
+// 기본: 주관을 제외한 모든 기관(PARTICIPANT+ENTRUSTED, 즉 공동+위탁) 수.
 // excludeLeadFromCalc(RDA2): 주관기관이 산정기준액에서 완전히 빠지므로, 남은 기관 중 1개를
 // 가상의 주관기관으로 보정하여 -1 한다 (문서 예시: 공동기관 3개 중 면제기관 제외 후 2개 남으면 1개로 보정).
 function getCoInstCount(list: CalcMember[], policy: FeePolicy): number {
   if (policy.excludeLeadFromCalc) return Math.max(0, list.length - 1);
-  return list.filter((m) => m.role === "PARTICIPANT").length;
+  return list.filter((m) => m.role !== "LEAD").length;
 }
 
 // ─── 입력 타입 ───────────────────────────────────────────────────
 export interface CalcMember {
   institutionId: string;
   institutionName: string;
-  role: "LEAD" | "PARTICIPANT";
+  role: "LEAD" | "PARTICIPANT" | "ENTRUSTED";
   grade: string;              // 해당 연도 등급
   institutionType: string;    // 영리/비영리 판정에 사용 (정산면제는 비영리기관만 해당)
   settlementType: "위탁정산" | "자체정산";
@@ -199,6 +212,11 @@ export interface CalcInput {
   policy: FeePolicy;
   projectType: "GENERAL" | "AUTONOMY_TRACK";
   carriedOverUnclaimed: number; // 이전 연도 일반 미청구 누적액
+  // 자율성트랙 과제 전체에 적용되는 정산구분 — 참여기관 개별 "정산구분"(CalcMember.settlementType)과는
+  // 별개의 프로젝트 단위 설정이다. 자율성트랙과 일반과제는 수수료 계산 방식 자체가 다르기 때문에,
+  // 참여기관별로 다르게 지정될 수 있는 값을 그대로 재사용하면 안 된다. projectType이 AUTONOMY_TRACK일
+  // 때만 의미가 있으며, 미지정 시 "자체정산"으로 취급한다.
+  autonomySettlementType?: "위탁정산" | "자체정산";
 }
 
 // ─── 산정 결과 타입 ───────────────────────────────────────────────
@@ -244,7 +262,7 @@ export interface CalcResult {
 
 // ─── 핵심 산정 함수 ───────────────────────────────────────────────
 export function calcTermFee(input: CalcInput): CalcResult {
-  const { members, workType, policy, projectType, carriedOverUnclaimed } = input;
+  const { members, workType, policy, projectType, carriedOverUnclaimed, autonomySettlementType } = input;
   const { feeRateBrackets, coInstAddonMethod, exemptGrades, hasAutonomyTrack, annualBillingRate } = policy;
   const feeBasis = policy.feeBasis ?? "CASH";
   const billingRatio = annualBillingRate ?? 0.85;
@@ -261,7 +279,7 @@ export function calcTermFee(input: CalcInput): CalcResult {
 
   // 산정 기준액(현금 또는 현금+현물)이 있는 기관만 대상
   const cashMembers = eligibleMembers.filter((m) => amountOf(m) > 0);
-  const coInstMembers = cashMembers.filter((m) => m.role === "PARTICIPANT");
+  const coInstMembers = cashMembers.filter((m) => m.role !== "LEAD");
 
   // calcMode "PER_INSTITUTION" (IITP ICT기금사업): 공동기관 구분 없이 참여기관별로 각자의
   // 사업비를 구간표에 각각 대입해 개별 산정하며, 매년 청구비율(annualBillingRate)을 그대로 적용한다.
@@ -317,62 +335,28 @@ export function calcTermFee(input: CalcInput): CalcResult {
   const addonFee = getAddonFee(baseFee, coInstCount, coInstAddonMethod);
   const standardFee = baseFee + addonFee;
 
-  // 자율성트랙: 참여기관이 전원 자체정산이면 전 연도 billingRatio 균일 적용(정산 없음, 면제기관 미고려).
-  // 위탁정산 기관이 예외적으로 섞여 있으면, 위탁정산 기관 하나 때문에 과제 전체가 조용히 일반과제
-  // 계산식으로 넘어가지 않도록 — 자체정산 기관은 자율성트랙 방식대로, 위탁정산 기관은 일반과제와
-  // 동일한 방식(면제기관·정산연차 규칙 포함)으로 각각 계산해 합산한다.
-  if (projectType === "AUTONOMY_TRACK" && hasAutonomyTrack) {
-    const outsourcedMembers = members.filter((m) => m.settlementType !== "자체정산");
-
-    if (outsourcedMembers.length === 0) {
-      const calculatedFee = Math.round(standardFee * billingRatio);
-      return {
-        totalCashBudget, coInstCount, baseFee, addonFee, standardFee,
-        nonExemptCashBudget: totalCashBudget,
-        nonExemptCoInstCount: coInstCount,
-        nonExemptBaseFee: baseFee,
-        nonExemptAddonFee: addonFee,
-        generalFee: standardFee,
-        exemptFeeTotal: 0,
-        exemptBreakdown: [],
-        excludedInstitutionIds,
-        calculatedFee,
-        generalCalcFee: calculatedFee,
-        generalBillingFee: calculatedFee,
-        generalUnclaimedFee: 0,
-        carriedOverUnclaimed: 0,
-        totalBillingFee: calculatedFee + carriedOverUnclaimed,
-        billingRatio,
-      };
-    }
-
-    const selfSettleMembers = members.filter((m) => m.settlementType === "자체정산");
-    const outsourcedResult = calcTermFee({ members: outsourcedMembers, workType, policy, projectType: "GENERAL", carriedOverUnclaimed: 0 });
-    if (selfSettleMembers.length === 0) {
-      return { ...outsourcedResult, carriedOverUnclaimed, totalBillingFee: outsourcedResult.totalBillingFee + carriedOverUnclaimed };
-    }
-    const selfResult = calcTermFee({ members: selfSettleMembers, workType, policy, projectType: "AUTONOMY_TRACK", carriedOverUnclaimed: 0 });
-
+  // 자율성트랙 + 자체정산(기본값): 전 연도 billingRatio 균일 적용(정산 없음, 면제기관 미고려) —
+  // 참여기관 개별 "정산구분"과는 무관하게 프로젝트 전체에 적용된다.
+  // 자율성트랙 + 위탁정산: 일반과제와 완전히 동일한 계산 방식(면제기관 분리·정산연차 100%청구 등)을
+  // 그대로 적용하므로, 여기서 return하지 않고 아래 일반과제 로직으로 흘려보낸다(fall through).
+  if (projectType === "AUTONOMY_TRACK" && hasAutonomyTrack && (autonomySettlementType ?? "자체정산") === "자체정산") {
+    const calculatedFee = Math.round(standardFee * billingRatio);
     return {
-      totalCashBudget:        selfResult.totalCashBudget + outsourcedResult.totalCashBudget,
-      coInstCount:            selfResult.coInstCount + outsourcedResult.coInstCount,
-      baseFee:                selfResult.baseFee + outsourcedResult.baseFee,
-      addonFee:               selfResult.addonFee + outsourcedResult.addonFee,
-      standardFee:            selfResult.standardFee + outsourcedResult.standardFee,
-      nonExemptCashBudget:    selfResult.nonExemptCashBudget + outsourcedResult.nonExemptCashBudget,
-      nonExemptCoInstCount:   selfResult.nonExemptCoInstCount + outsourcedResult.nonExemptCoInstCount,
-      nonExemptBaseFee:       selfResult.nonExemptBaseFee + outsourcedResult.nonExemptBaseFee,
-      nonExemptAddonFee:      selfResult.nonExemptAddonFee + outsourcedResult.nonExemptAddonFee,
-      generalFee:             selfResult.generalFee + outsourcedResult.generalFee,
-      exemptFeeTotal:         selfResult.exemptFeeTotal + outsourcedResult.exemptFeeTotal,
-      exemptBreakdown:        [...selfResult.exemptBreakdown, ...outsourcedResult.exemptBreakdown],
-      excludedInstitutionIds: [...selfResult.excludedInstitutionIds, ...outsourcedResult.excludedInstitutionIds],
-      calculatedFee:          selfResult.calculatedFee + outsourcedResult.calculatedFee,
-      generalCalcFee:         selfResult.generalCalcFee + outsourcedResult.generalCalcFee,
-      generalBillingFee:      selfResult.generalBillingFee + outsourcedResult.generalBillingFee,
-      generalUnclaimedFee:    selfResult.generalUnclaimedFee + outsourcedResult.generalUnclaimedFee,
-      carriedOverUnclaimed,
-      totalBillingFee:        selfResult.totalBillingFee + outsourcedResult.totalBillingFee + carriedOverUnclaimed,
+      totalCashBudget, coInstCount, baseFee, addonFee, standardFee,
+      nonExemptCashBudget: totalCashBudget,
+      nonExemptCoInstCount: coInstCount,
+      nonExemptBaseFee: baseFee,
+      nonExemptAddonFee: addonFee,
+      generalFee: standardFee,
+      exemptFeeTotal: 0,
+      exemptBreakdown: [],
+      excludedInstitutionIds,
+      calculatedFee,
+      generalCalcFee: calculatedFee,
+      generalBillingFee: calculatedFee,
+      generalUnclaimedFee: 0,
+      carriedOverUnclaimed: 0,
+      totalBillingFee: calculatedFee + carriedOverUnclaimed,
       billingRatio,
     };
   }

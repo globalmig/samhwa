@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { getCurrentUser } from "./auth";
-import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, allocateExact, resolveMemberGradeForTerm, type CalcMember } from "./fee-calculator";
+import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, allocateExact, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, type CalcMember } from "./fee-calculator";
 import {
   institutions as initialInstitutions,
   projects as initialProjects,
@@ -398,7 +398,7 @@ export function addProject(data: Omit<Project, "id">): Project {
 }
 
 // 수수료 산정에 영향을 주는 필드 — 변경 시 해당 과제의 연차별 수수료를 자동 재산정한다.
-const PROJECT_FEE_AFFECTING_FIELDS = ["agencyId", "startDate", "totalTerms", "agreementType", "stages", "projectType"] as const;
+const PROJECT_FEE_AFFECTING_FIELDS = ["agencyId", "startDate", "totalTerms", "agreementType", "stages", "projectType", "autonomySettlementType"] as const;
 
 export function updateProject(id: string, data: Partial<Project>): void {
   const before = _state.projects.find((p) => p.id === id);
@@ -480,7 +480,7 @@ export function addProjectMember(data: Omit<ProjectMember, "id">): ProjectMember
 }
 
 // 수수료 산정에 영향을 주는 필드 — 변경 시 해당 과제의 연차별 수수료를 자동 재산정한다.
-const FEE_AFFECTING_FIELDS = ["budget", "cashBudget", "inKindBudget", "institutionGrade", "gradeOverrides", "settlementType", "annualBudgets", "role"] as const;
+const FEE_AFFECTING_FIELDS = ["budget", "cashBudget", "inKindBudget", "institutionGrade", "gradeOverrides", "settlementType", "settlementTypeOverrides", "annualBudgets", "role"] as const;
 
 export function updateProjectMember(id: string, data: Partial<ProjectMember>): void {
   const before = _state.projectMembers.find((m) => m.id === id);
@@ -512,6 +512,9 @@ export function applyInstitutionGradeToProjects(
   newGrade: "최우수(S)" | "우수(A)" | "우수(B)" | "우수(C)" | "일반",
 ): InstitutionGradeApplyResult {
   const affectedProjects = new Map<string, { projectNumber: string; projectName: string; termNumbers: number[] }>();
+  // 이미 확정(CONFIRMED/BILLED)되어 자동 반영은 안 됐지만, 그 연차를 계산할 때 쓴 등급이 새 등급과
+  // 달라 수기 확인이 필요한 건들 — 과제별로 모아서 이슈로 남긴다.
+  const lockedMismatches = new Map<string, { projectNumber: string; projectName: string; entries: { termNumber: number; oldGrade: string }[] }>();
   let updatedTermCount = 0;
   let lockedTermCount = 0;
 
@@ -523,16 +526,23 @@ export function applyInstitutionGradeToProjects(
     const overrides = [...(m.gradeOverrides ?? [])];
     const changedTerms: number[] = [];
     for (let termNumber = 1; termNumber <= project.totalTerms; termNumber++) {
+      const existingIdx = overrides.findIndex((g) => g.termNumber === termNumber);
+      const currentGrade = existingIdx >= 0 ? overrides[existingIdx].grade : (m.institutionGrade ?? "일반");
+      if (currentGrade === newGrade) continue; // 이미 같은 등급이면 확정 여부와 무관하게 손댈 게 없음
+
       const locked = _state.termFees.some(
         (tf) => tf.projectNumber === project.projectNumber &&
           tf.institutionId === institutionId &&
           tf.termNumber === termNumber &&
           (tf.status === "CONFIRMED" || tf.status === "BILLED" || tf.manualOverride)
       );
-      if (locked) { lockedTermCount++; continue; }
-      const existingIdx = overrides.findIndex((g) => g.termNumber === termNumber);
-      const currentGrade = existingIdx >= 0 ? overrides[existingIdx].grade : (m.institutionGrade ?? "일반");
-      if (currentGrade === newGrade) continue;
+      if (locked) {
+        lockedTermCount++;
+        const entry = lockedMismatches.get(project.id) ?? { projectNumber: project.projectNumber, projectName: project.projectName, entries: [] };
+        entry.entries.push({ termNumber, oldGrade: currentGrade });
+        lockedMismatches.set(project.id, entry);
+        continue;
+      }
       if (existingIdx >= 0) overrides[existingIdx] = { termNumber, grade: newGrade };
       else overrides.push({ termNumber, grade: newGrade });
       changedTerms.push(termNumber);
@@ -546,6 +556,35 @@ export function applyInstitutionGradeToProjects(
     });
     return { ...m, gradeOverrides: overrides.sort((a, b) => a.termNumber - b.termNumber) };
   });
+
+  // 확정된 연차라 자동 반영은 안 했지만, 이미 청구된 금액이 최신 등급과 어긋난다는 걸 담당자가
+  // 놓치지 않도록 과제별로 이슈를 남긴다 — 이슈 등록은 상단 알림(종 아이콘)의 "이슈/메모 알림"에도
+  // 그대로 뜨므로 별도의 알림 저장소를 따로 두지 않아도 된다.
+  if (lockedMismatches.size > 0) {
+    const institutionName = _state.institutions.find((i) => i.id === institutionId)?.name ?? "";
+    const authorName = getCurrentUser()?.name ?? "시스템";
+    const now = new Date().toISOString().replace("T", " ").slice(0, 16);
+    for (const [projectId, info] of lockedMismatches) {
+      const termList = info.entries
+        .sort((a, b) => a.termNumber - b.termNumber)
+        .map((e) => `${e.termNumber}연차(${e.oldGrade} → ${newGrade})`)
+        .join(", ");
+      addProjectIssue({
+        projectId,
+        projectNumber: info.projectNumber,
+        content:
+          `${institutionName} 등급이 ${newGrade}로 변경되었으나, 이미 확정(청구완료)된 연차라 금액은 자동으로 바뀌지 않았습니다.\n` +
+          `해당 연차: ${termList}\n` +
+          `이미 발행된 금액을 그대로 둘지, 수기로 조정할지 확인해주세요.`,
+        author: authorName,
+        createdAt: now,
+        priority: "HIGH",
+        status: "OPEN",
+        recipientGroups: ["MANAGER", "ACCOUNTANT"],
+        institutionName,
+      });
+    }
+  }
 
   if (affectedProjects.size === 0) return { updatedProjectCount: 0, updatedTermCount: 0, lockedTermCount, updatedProjects: [] };
 
@@ -1133,7 +1172,7 @@ export function autoGenerateTermFees(projectId: string): void {
         role: m.role,
         grade: normalizeGrade(resolveMemberGradeForTerm(m, termNumber)),
         institutionType: m.institutionType,
-        settlementType: m.settlementType ?? policy.defaultSettlementType ?? "자체정산",
+        settlementType: resolveMemberSettlementTypeForTerm(m, termNumber, policy.defaultSettlementType ?? "자체정산"),
         cashBudget: ab.cashBudget,
         inKindBudget: ab.inKindBudget,
       });
@@ -1146,6 +1185,7 @@ export function autoGenerateTermFees(projectId: string): void {
       policy,
       projectType: project.projectType ?? "GENERAL",
       carriedOverUnclaimed,
+      autonomySettlementType: project.autonomySettlementType,
     });
 
     // 면제기관 / 완전제외기관 ID 집합

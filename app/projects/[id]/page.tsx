@@ -13,7 +13,7 @@ import {
   setTermOtherFirmHandled,
 } from "@/lib/store";
 import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type SystemUser, type EmailDispatch, EMPTY_NOTICE_TEMPLATE, COMPANY_INFO } from "@/lib/mock";
-import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isNonProfitInstitution, resolveRdaAgencyId, resolveMemberGradeForTerm, type CalcMember } from "@/lib/fee-calculator";
+import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isNonProfitInstitution, resolveRdaAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, type CalcMember } from "@/lib/fee-calculator";
 import { fmtWonFull, fmtDate, splitVatInclusive, addMonths, termDateRange } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
@@ -81,6 +81,7 @@ const GRADE_COLOR: Record<string, string> = {
   일반: "bg-slate-100 text-slate-500",
 };
 const GRADE_LABEL: Record<string, string> = { S: "최우수(S)", "A~C": "우수(A~C)", 일반: "일반" };
+const ROLE_LABEL: Record<"LEAD" | "PARTICIPANT" | "ENTRUSTED", string> = { LEAD: "주관", PARTICIPANT: "참여", ENTRUSTED: "위탁" };
 
 // ─── 발행구분 (수수료 청구관리 목록과 동일한 옵션 — project.billingType 필드 공유) ──
 const BILLING_TYPE_COLOR: Record<string, string> = {
@@ -179,6 +180,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   const [showAddMember, setShowAddMember] = useState(false);
   const [editingBudgetMember, setEditingBudgetMember] = useState<ProjectMember | null>(null);
   const [editingGradeMember, setEditingGradeMember] = useState<ProjectMember | null>(null);
+  const [editingSettlementMember, setEditingSettlementMember] = useState<ProjectMember | null>(null);
   const [showIssueForm, setShowIssueForm] = useState(false);
   const [issueContent, setIssueContent] = useState("");
   const [issuePriority, setIssuePriority] = useState<"HIGH" | "MEDIUM" | "LOW">("MEDIUM");
@@ -195,6 +197,10 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   });
   const [deletingIssueId, setDeletingIssueId] = useState<string | null>(null);
   const [showProjectTypeConfirm, setShowProjectTypeConfirm] = useState(false);
+  // 참여기관 목록에서 "지금 보고 있는 연차" — 기본은 현재 진행 연차이지만, 참여기관·등급·정산구분·
+  // 사업비가 연차마다 바뀔 수 있어 탭으로 다른 연차를 훑어볼 수 있게 한다. 인라인 일괄수정("기관 수정")은
+  // 항상 실제 진행 연차(currentTerm) 기준으로만 동작하므로, 편집 모드에 들어가면 이 값을 되돌린다.
+  const [viewTerm, setViewTerm] = useState(() => project?.currentTerm ?? 1);
 
   if (!project) return null;
 
@@ -207,6 +213,15 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
 
   // KEIT 수수료 산정 (현재 연차 기준)
   const currentTerm = project.currentTerm ?? 1;
+  // 연차 탭에 몇 개까지 보여줄지 — project.totalTerms만 믿으면 이 값이 실제 데이터와 어긋난 과제(예:
+  // 엑셀 업로드 총연차 계산 오류 등으로 totalTerms=1인데 실제로는 5연차까지 사업비가 입력된 경우)에서
+  // 탭 자체가 하나도 안 뜨는 문제가 생긴다. currentTerm과 실제 연차별 사업비에 찍힌 연차까지 감안해
+  // 항상 실제 존재하는 연차만큼은 탭으로 보이게 한다.
+  const maxViewableTerm = Math.max(
+    project.totalTerms ?? 1,
+    currentTerm,
+    ...members.flatMap((m) => m.annualBudgets?.map((b) => b.termNumber) ?? [])
+  );
   // 당해시작일/당해종료일은 [수수료 청구 관리] 목록과 동일하게 "과제 시작일(1연차 기준일) + 현재 연차"로
   // 파생 계산한다 — 과거에는 이 값을 draft.startDate/endDate로 직접 입력받아 목록의 계산값과 어긋났었다.
   const draftTermRange = termDateRange(draft.startDate, draft.currentTerm ?? 1);
@@ -228,30 +243,39 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       [m.id]: { ...(prev[m.id] ?? getCurrentTermBudget(m)), [field]: value },
     }));
   }
+  // 현재 진행 연차가 아닌 다른 연차를 탭으로 훑어볼 때 쓴다 — getCurrentTermBudget과 달리 사업비를
+  // 입력한 적 없는 연차는 기관 총액으로 되돌리지 않고 0으로 둔다(그래야 "이 연차엔 참여 안 함"이 드러난다).
+  function getViewTermBudget(m: ProjectMember, termNumber: number): { cashBudget: number; inKindBudget: number } {
+    if (termNumber === currentTerm) return getCurrentTermBudget(m);
+    const ab = m.annualBudgets?.find((a) => a.termNumber === termNumber);
+    return { cashBudget: ab?.cashBudget ?? 0, inKindBudget: ab?.inKindBudget ?? 0 };
+  }
 
   const policy = resolvePolicy(project.agencyId, feePolicies, project.programType ?? "GENERAL");
   const defaultSettlementType = policy?.defaultSettlementType ?? "자체정산";
+  // 아래(calcMembers~feeResult)는 참여기관 목록 탭에서 "지금 보고 있는 연차"(viewTerm) 기준으로 계산한다.
+  // 다른 화면 요소(당해 사업비 자동계산 등)는 여전히 getMemberBudgetVal/currentTerm을 직접 쓰므로 영향 없다.
   const calcMembers: CalcMember[] = policy ? members.flatMap((m) => {
-    const { cashBudget, inKindBudget } = getCurrentTermBudget(m);
+    const { cashBudget, inKindBudget } = getViewTermBudget(m, viewTerm);
     const amount = policy.feeBasis === "CASH_PLUS_INKIND" ? cashBudget + inKindBudget : cashBudget;
     if (amount <= 0) return [];
     return [{
       institutionId: m.institutionId,
       institutionName: m.institutionName,
-      role: m.role as "LEAD" | "PARTICIPANT",
-      grade: normalizeGrade(resolveMemberGradeForTerm(m, currentTerm)),
+      role: m.role as "LEAD" | "PARTICIPANT" | "ENTRUSTED",
+      grade: normalizeGrade(resolveMemberGradeForTerm(m, viewTerm)),
       institutionType: m.institutionType,
-      settlementType: (m.settlementType ?? defaultSettlementType) as "위탁정산" | "자체정산",
+      settlementType: resolveMemberSettlementTypeForTerm(m, viewTerm, defaultSettlementType),
       cashBudget,
       inKindBudget,
     }];
   }) : [];
 
-  const currentWorkType: "ANNUAL" | "SETTLEMENT" = isSettlementTerm(project, currentTerm) ? "SETTLEMENT" : "ANNUAL";
+  const currentWorkType: "ANNUAL" | "SETTLEMENT" = isSettlementTerm(project, viewTerm) ? "SETTLEMENT" : "ANNUAL";
   // 정산 연차는 이전 연차들의 일반 미청구 누적액도 이번에 함께 걷어야 하므로, 자동산정 시 저장해둔
   // TermFeeCalc.carriedOverUnclaimed(단계 내 누적)를 그대로 가져와 반영한다 — 0으로 고정하면 안 됨.
   const carriedOverUnclaimed = termFeeCalcs.find(
-    (c) => c.projectNumber === project.projectNumber && c.termNumber === currentTerm
+    (c) => c.projectNumber === project.projectNumber && c.termNumber === viewTerm
   )?.carriedOverUnclaimed ?? 0;
   const feeResult = policy && calcMembers.length > 0
     ? calcTermFee({
@@ -260,6 +284,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
         policy,
         projectType: project.projectType ?? "GENERAL",
         carriedOverUnclaimed,
+        autonomySettlementType: project.autonomySettlementType,
       })
     : null;
 
@@ -319,7 +344,8 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
 
   function saveEdit() {
     const projectTypeChanged = (draft.projectType ?? "GENERAL") !== (project!.projectType ?? "GENERAL");
-    if (projectTypeChanged && countUnlockedTerms() > 0) {
+    const autonomySettlementChanged = (draft.autonomySettlementType ?? "자체정산") !== (project!.autonomySettlementType ?? "자체정산");
+    if ((projectTypeChanged || autonomySettlementChanged) && countUnlockedTerms() > 0) {
       setShowProjectTypeConfirm(true);
       return;
     }
@@ -331,8 +357,12 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   const totalCashBudget = members.reduce((s, m) => s + getMemberBudgetVal(m, "cashBudget"), 0);
   const totalInKindBudget = members.reduce((s, m) => s + getMemberBudgetVal(m, "inKindBudget"), 0);
   const budgetMatchesAnnual = totalCashBudget + totalInKindBudget === annualBudget;
+  // 참여기관 표 하단 합계는 편집 중일 때만 위 currentTerm+초안 반영 합계를 그대로 쓰고(입력하는 대로
+  // 바로 반영되어야 하니까), 탭으로 다른 연차를 보고 있을 때는 그 연차 기준(calcMembers)으로 다시 더한다.
+  const viewTotalCashBudget = editingMembers ? totalCashBudget : calcMembers.reduce((s, m) => s + m.cashBudget, 0);
+  const viewTotalInKindBudget = editingMembers ? totalInKindBudget : calcMembers.reduce((s, m) => s + (m.inKindBudget ?? 0), 0);
 
-  function startMemberEdit() { setMemberDrafts({}); setBudgetDrafts({}); setBudgetMismatchError(""); setEditingMembers(true); }
+  function startMemberEdit() { setMemberDrafts({}); setBudgetDrafts({}); setBudgetMismatchError(""); setViewTerm(currentTerm); setEditingMembers(true); }
   function cancelMemberEdit() { setEditingMembers(false); setMemberDrafts({}); setBudgetDrafts({}); setBudgetMismatchError(""); }
   function saveMemberEdits() {
     if (!budgetMatchesAnnual) {
@@ -595,6 +625,25 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                   }`}>자율성트랙</button>
               </div>
             </div>
+            {draft.projectType === "AUTONOMY_TRACK" && (
+              <div className="col-span-3">
+                <label className="block text-xs font-medium text-slate-500 mb-1">
+                  자율성트랙 정산구분 <span className="text-slate-400 font-normal">· 참여기관별 정산구분과 별개로, 과제 전체에 일괄 적용됩니다</span>
+                </label>
+                <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-medium max-w-xs">
+                  <button type="button"
+                    onClick={() => setDraft((p) => ({ ...p, autonomySettlementType: "자체정산" }))}
+                    className={`flex-1 px-2 py-1.5 transition-colors ${
+                      (draft.autonomySettlementType ?? "자체정산") === "자체정산" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"
+                    }`}>자체정산</button>
+                  <button type="button"
+                    onClick={() => setDraft((p) => ({ ...p, autonomySettlementType: "위탁정산" }))}
+                    className={`flex-1 px-2 py-1.5 border-l border-slate-200 transition-colors ${
+                      draft.autonomySettlementType === "위탁정산" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"
+                    }`}>위탁정산</button>
+                </div>
+              </div>
+            )}
             {draft.agencyId === "fa-003" && (
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">
@@ -636,13 +685,15 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
               currentWorkType === "SETTLEMENT" ? "bg-purple-100 text-purple-700" : "bg-slate-100 text-slate-500"
             }`}>
-              {currentTerm}연차 · {currentWorkType === "SETTLEMENT" ? "정산" : "연차상시"}
+              {viewTerm}연차 · {currentWorkType === "SETTLEMENT" ? "정산" : "연차상시"}
             </span>
-            <span className={`text-xs ${budgetMatchesAnnual ? "text-slate-500" : "text-red-600 font-medium"}`}>
-              현금+현물 합계 <strong className={budgetMatchesAnnual ? "text-slate-800" : "text-red-600"}>{fmtWonFull(totalCashBudget + totalInKindBudget)}</strong>
-              <span className="text-slate-400 mx-1">/</span>
-              당해 사업비 {fmtWonFull(annualBudget)}
-            </span>
+            {viewTerm === currentTerm && (
+              <span className={`text-xs ${budgetMatchesAnnual ? "text-slate-500" : "text-red-600 font-medium"}`}>
+                현금+현물 합계 <strong className={budgetMatchesAnnual ? "text-slate-800" : "text-red-600"}>{fmtWonFull(totalCashBudget + totalInKindBudget)}</strong>
+                <span className="text-slate-400 mx-1">/</span>
+                당해 사업비 {fmtWonFull(annualBudget)}
+              </span>
+            )}
             <span className="text-xs text-slate-500">
               산정 수수료 합계 <strong className="text-slate-800 ml-1">{fmtWonFull(totalCalcFee)}</strong>
             </span>
@@ -671,6 +722,25 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             ) : null}
           </div>
         </div>
+        {!editingMembers && maxViewableTerm > 1 && (
+          <div className="px-5 py-2 border-b border-slate-100 flex items-center gap-1.5 overflow-x-auto">
+            <span className="text-[10px] text-slate-400 shrink-0 mr-1">연차별 보기</span>
+            {Array.from({ length: maxViewableTerm }, (_, i) => i + 1).map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setViewTerm(t)}
+                className={`shrink-0 px-2.5 py-1 text-xs font-medium rounded-lg border transition-colors ${
+                  viewTerm === t
+                    ? "bg-blue-600 border-blue-600 text-white"
+                    : "bg-white border-slate-200 text-slate-500 hover:bg-slate-50"
+                }`}
+              >
+                {t}연차{t === currentTerm ? " · 현재" : ""}
+              </button>
+            ))}
+          </div>
+        )}
         {budgetMismatchError && (
           <div className="px-5 py-2.5 bg-red-50 border-b border-red-100 text-xs font-medium text-red-600">
             {budgetMismatchError}
@@ -681,7 +751,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             projectId={projectId}
             projectNumber={project.projectNumber}
             startDate={project.startDate}
-            totalTerms={project.totalTerms ?? 1}
+            totalTerms={maxViewableTerm}
             institutions={institutions}
             existingInstitutionIds={new Set(members.map((m) => m.institutionId))}
             onClose={() => setShowAddMember(false)}
@@ -701,7 +771,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 <th className="text-right px-4 py-3 text-xs font-medium text-slate-500">현물예산 (원)</th>
                 <th className="text-right px-4 py-3 text-xs font-medium text-slate-500">합계금액 (원)</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500">구분</th>
-                <th className="text-right px-4 py-3 text-xs font-medium text-slate-500">산정 수수료 ({currentTerm}연차)</th>
+                <th className="text-right px-4 py-3 text-xs font-medium text-slate-500">산정 수수료 ({viewTerm}연차)</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 w-24">연차별 사업비</th>
                 {canEditProjects && <th className="px-4 py-3 w-10" />}
               </tr>
@@ -710,15 +780,24 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               {members.map((m) => {
                 const rawGrade = (getMemberVal(m, "institutionGrade") ?? "일반") as string;
                 const grade = normalizeGrade(rawGrade);
-                // 배지 표시는 편집 중인 기본값이 아니라 "이번 연차에 실제로 적용되는" 등급(연차별 오버라이드 반영)을 보여준다.
-                const displayGrade = normalizeGrade(resolveMemberGradeForTerm(m, currentTerm));
-                const cashBudget = getMemberBudgetVal(m, "cashBudget");
-                const inKindBudget = getMemberBudgetVal(m, "inKindBudget");
+                // 배지 표시는 편집 중인 기본값이 아니라 "지금 보고 있는 연차에 실제로 적용되는" 값(연차별
+                // 오버라이드 반영)을 보여준다. 인라인 일괄수정 중에는 항상 진행 연차(currentTerm)만 다루므로
+                // 그때는 getMemberBudgetVal(currentTerm 고정) 값을 그대로 쓴다.
+                const displayGrade = normalizeGrade(resolveMemberGradeForTerm(m, viewTerm));
+                const displaySettlementType = resolveMemberSettlementTypeForTerm(m, viewTerm, defaultSettlementType);
+                const cashBudget = editingMembers ? getMemberBudgetVal(m, "cashBudget") : getViewTermBudget(m, viewTerm).cashBudget;
+                const inKindBudget = editingMembers ? getMemberBudgetVal(m, "inKindBudget") : getViewTermBudget(m, viewTerm).inKindBudget;
+                const isParticipatingThisTerm = cashBudget > 0 || inKindBudget > 0;
                 return (
-                  <tr key={m.id} className="border-b border-slate-50 hover:bg-slate-50">
+                  <tr key={m.id} className={`border-b border-slate-50 hover:bg-slate-50 ${!isParticipatingThisTerm ? "opacity-50" : ""}`}>
                     <td className="px-4 py-3">
                       <Link href={`/institutions/${m.institutionId}`}
                         className="text-sm text-blue-600 hover:underline font-medium">{m.institutionName}</Link>
+                      {!isParticipatingThisTerm && (
+                        <span className="ml-1.5 text-[10px] font-medium text-slate-400" title={`${viewTerm}연차 사업비가 입력되지 않아 이 연차 계산에서 빠집니다`}>
+                          · {viewTerm}연차 미참여
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-center">
                       {editingMembers ? (
@@ -728,9 +807,13 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                           className="text-xs border border-slate-200 rounded-lg px-2 py-1 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400">
                           <option value="LEAD">주관</option>
                           <option value="PARTICIPANT">참여</option>
+                          <option value="ENTRUSTED">위탁</option>
                         </select>
                       ) : (
-                        <StatusBadge label={m.role === "LEAD" ? "주관" : "참여"} color={m.role === "LEAD" ? "blue" : "slate"} />
+                        <StatusBadge
+                          label={ROLE_LABEL[m.role]}
+                          color={m.role === "LEAD" ? "blue" : m.role === "ENTRUSTED" ? "amber" : "slate"}
+                        />
                       )}
                     </td>
                     <td className="px-4 py-3 text-center">
@@ -744,7 +827,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                           <option value="일반">일반</option>
                         </select>
                       ) : (
-                        <span className={`text-xs font-medium px-2 py-0.5 rounded ${GRADE_COLOR[displayGrade] ?? GRADE_COLOR["일반"]}`} title={`${currentTerm}연차 적용 등급`}>
+                        <span className={`text-xs font-medium px-2 py-0.5 rounded ${GRADE_COLOR[displayGrade] ?? GRADE_COLOR["일반"]}`} title={`${viewTerm}연차 적용 등급`}>
                           {GRADE_LABEL[displayGrade] ?? displayGrade}
                         </span>
                       )}
@@ -777,11 +860,23 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                         </select>
                       ) : (
                         <span className={`text-xs font-medium px-2 py-0.5 rounded ${
-                          (m.settlementType ?? defaultSettlementType) === "자체정산" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"
-                        }`}>
-                          {m.settlementType ?? defaultSettlementType}
+                          displaySettlementType === "자체정산" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"
+                        }`} title={`${viewTerm}연차 적용 정산구분`}>
+                          {displaySettlementType}
                         </span>
                       )}
+                      <button
+                        onClick={() => setEditingSettlementMember(m)}
+                        className="mt-1 inline-flex items-center gap-1 text-slate-400 hover:text-blue-600 transition-colors"
+                        title={(m.settlementTypeOverrides?.length ?? 0) > 0
+                          ? `연차별 정산구분 ${m.settlementTypeOverrides!.length}건 설정됨 — 클릭하여 수정`
+                          : "정산구분은 연차 중간에 바뀔 수 있습니다 — 연차별로 다르게 지정하려면 클릭"}
+                      >
+                        <FiEdit2 size={11} />
+                        {(m.settlementTypeOverrides?.length ?? 0) > 0 && (
+                          <span className="text-[10px] font-medium">{m.settlementTypeOverrides!.length}</span>
+                        )}
+                      </button>
                     </td>
                     <td className="px-4 py-3 text-right">
                       {editingMembers ? (
@@ -832,9 +927,28 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                       <td className="px-4 py-3 text-center">
                         <button
                           onClick={() => {
-                            if (confirm(`"${m.institutionName}"을(를) 참여기관에서 제외하시겠습니까?`)) deleteProjectMember(m.id);
+                            // 연차 탭이 여러 개인 과제에서 "삭제"는 그 연차부터 이후 연차까지 전부 빠지는
+                            // 것을 의미한다(계약 종료 등으로 이 연차부터 참여를 그만두는 경우) — 그 이전
+                            // 연차 참여 이력은 그대로 남긴다. 그 결과 남는 연차가 하나도 없으면(애초에
+                            // 이 연차부터 참여였던 경우) 참여기관 자체를 완전히 제거한다.
+                            if (maxViewableTerm > 1) {
+                              if (!confirm(`"${m.institutionName}"을(를) ${viewTerm}연차부터 이후 연차 전부 제외합니다. 그 이전 연차 참여 이력은 그대로 유지됩니다. 계속하시겠습니까?`)) return;
+                              const remainingBudgets = (m.annualBudgets ?? []).filter((b) => b.termNumber < viewTerm);
+                              if (remainingBudgets.length === 0) {
+                                deleteProjectMember(m.id);
+                              } else {
+                                updateProjectMember(m.id, {
+                                  annualBudgets: remainingBudgets,
+                                  gradeOverrides: m.gradeOverrides?.filter((g) => g.termNumber < viewTerm),
+                                  settlementTypeOverrides: m.settlementTypeOverrides?.filter((s) => s.termNumber < viewTerm),
+                                });
+                              }
+                            } else {
+                              if (confirm(`"${m.institutionName}"을(를) 참여기관에서 제외하시겠습니까?`)) deleteProjectMember(m.id);
+                            }
                           }}
-                          className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors">
+                          className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                          title={maxViewableTerm > 1 ? `${viewTerm}연차부터 이후 연차 전부 제외` : "참여기관에서 제외"}>
                           <FiTrash2 size={13} />
                         </button>
                       </td>
@@ -846,13 +960,13 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             <tfoot>
               <tr className="bg-slate-50 border-t border-slate-200">
                 <td colSpan={4} className="px-4 py-2.5 text-right text-xs text-slate-400">합계</td>
-                <td className={`px-4 py-2.5 text-right font-bold ${budgetMatchesAnnual ? "text-slate-800" : "text-red-600"}`}>
-                  현금 {fmtWonFull(totalCashBudget)}
+                <td className={`px-4 py-2.5 text-right font-bold ${!editingMembers || budgetMatchesAnnual ? "text-slate-800" : "text-red-600"}`}>
+                  현금 {fmtWonFull(viewTotalCashBudget)}
                 </td>
-                <td className={`px-4 py-2.5 text-right font-bold ${budgetMatchesAnnual ? "text-slate-800" : "text-red-600"}`}>
-                  현물 {fmtWonFull(totalInKindBudget)}
+                <td className={`px-4 py-2.5 text-right font-bold ${!editingMembers || budgetMatchesAnnual ? "text-slate-800" : "text-red-600"}`}>
+                  현물 {fmtWonFull(viewTotalInKindBudget)}
                 </td>
-                <td className="px-4 py-2.5 text-right font-bold text-slate-800">{fmtWonFull(totalCashBudget + totalInKindBudget)}</td>
+                <td className="px-4 py-2.5 text-right font-bold text-slate-800">{fmtWonFull(viewTotalCashBudget + viewTotalInKindBudget)}</td>
                 <td />
                 <td className="px-4 py-2.5 text-right font-bold text-slate-800">{fmtWonFull(totalCalcFee)}</td>
                 <td />
@@ -1153,9 +1267,13 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
         <Modal title="과제 유형 변경 확인" onClose={() => setShowProjectTypeConfirm(false)}>
           <div className="p-6 space-y-4">
             <p className="text-sm text-slate-700 leading-relaxed">
-              과제 유형을 <span className="font-semibold">{draft.projectType === "AUTONOMY_TRACK" ? "자율성트랙" : "일반 R&D"}</span>(으)로 변경하면,
+              {(draft.projectType ?? "GENERAL") !== (project.projectType ?? "GENERAL") ? (
+                <>과제 유형을 <span className="font-semibold">{draft.projectType === "AUTONOMY_TRACK" ? "자율성트랙" : "일반 R&D"}</span>(으)로 변경하면, </>
+              ) : (
+                <>자율성트랙 정산구분을 <span className="font-semibold">{draft.autonomySettlementType ?? "자체정산"}</span>(으)로 변경하면, </>
+              )}
               아직 확정(청구완료)되지 않은 <span className="font-semibold text-blue-700">{countUnlockedTerms()}개 연차</span>의 수수료가
-              새 유형 기준으로 다시 계산됩니다. 과거 연차라도 확정 전이면 함께 재계산 대상에 포함됩니다.
+              새 기준으로 다시 계산됩니다. 과거 연차라도 확정 전이면 함께 재계산 대상에 포함됩니다.
             </p>
             <p className="text-xs text-slate-400">
               이미 확정되었거나 금액을 직접 수정(수동조정)해 둔 연차는 영향을 받지 않습니다.
@@ -1199,6 +1317,24 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             )}
             canEdit={canEditProjects}
             onClose={() => setEditingGradeMember(null)}
+          />
+        </Modal>
+      )}
+
+      {editingSettlementMember && (
+        <Modal title={`${editingSettlementMember.institutionName} · 연차별 정산구분`} onClose={() => setEditingSettlementMember(null)}>
+          <SettlementTypeOverrideEditor
+            member={editingSettlementMember}
+            project={project}
+            defaultSettlementType={defaultSettlementType}
+            lockedTermNumbers={new Set(
+              termFees
+                .filter((tf) => tf.projectNumber === project.projectNumber && tf.institutionId === editingSettlementMember.institutionId &&
+                  (tf.status === "CONFIRMED" || tf.status === "BILLED" || tf.manualOverride))
+                .map((tf) => tf.termNumber)
+            )}
+            canEdit={canEditProjects}
+            onClose={() => setEditingSettlementMember(null)}
           />
         </Modal>
       )}
@@ -1396,6 +1532,102 @@ function GradeOverrideEditor({
   );
 }
 
+// ─── 참여기관별 연차별 정산구분 입력 ──────────────────────────
+// 참여기관의 위탁/자체 정산 여부는 계약 변경 등으로 연차 중간에 바뀔 수 있어, 여기서 그 연차
+// 이후만 다르게 지정한다. 이미 확정(청구완료)된 연차는 잠겨서 여기서 바꿔도 반영되지 않는다.
+function SettlementTypeOverrideEditor({
+  member,
+  project,
+  defaultSettlementType,
+  lockedTermNumbers,
+  canEdit,
+  onClose,
+}: {
+  member: ProjectMember;
+  project: Project;
+  defaultSettlementType: "위탁정산" | "자체정산";
+  lockedTermNumbers: Set<number>;
+  canEdit: boolean;
+  onClose: () => void;
+}) {
+  const totalTerms = project.totalTerms ?? 1;
+  const baseSettlementType = member.settlementType ?? defaultSettlementType;
+  const [rows, setRows] = useState(() =>
+    Array.from({ length: totalTerms }, (_, i) => {
+      const termNumber = i + 1;
+      const override = member.settlementTypeOverrides?.find((g) => g.termNumber === termNumber);
+      return { termNumber, settlementType: override?.settlementType ?? baseSettlementType };
+    })
+  );
+
+  function setRowSettlementType(termNumber: number, settlementType: "위탁정산" | "자체정산") {
+    setRows((prev) => prev.map((r) => (r.termNumber === termNumber ? { ...r, settlementType } : r)));
+  }
+
+  function handleSave() {
+    // 기본값(settlementType)과 같은 연차는 굳이 오버라이드로 남기지 않는다.
+    const overrides = rows
+      .filter((r) => r.settlementType !== baseSettlementType)
+      .map((r) => ({ termNumber: r.termNumber, settlementType: r.settlementType }));
+    updateProjectMember(member.id, { settlementTypeOverrides: overrides.length > 0 ? overrides : undefined });
+    onClose();
+  }
+
+  return (
+    <div className="p-6 space-y-4">
+      <p className="text-xs text-slate-400 -mt-1">
+        기본 정산구분은 <span className="font-medium text-slate-600">{baseSettlementType}</span>입니다. 특정 연차부터 정산구분이 바뀐 경우에만 그 연차를 다르게 지정하세요.
+        이미 확정(청구완료)되었거나 수동조정된 연차는 잠겨서 여기서 바꿔도 계산에 반영되지 않습니다.
+      </p>
+      <div className="border border-slate-300 rounded-lg overflow-hidden bg-white shadow-sm">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="bg-slate-100 border-b border-slate-300">
+              <th className="text-left px-3 py-2 font-semibold text-slate-600">연차</th>
+              <th className="text-left px-3 py-2 font-semibold text-slate-600">정산구분</th>
+              <th className="text-left px-3 py-2 font-semibold text-slate-600">상태</th>
+            </tr>
+          </thead>
+          <tbody className="bg-white">
+            {rows.map((r) => {
+              const locked = lockedTermNumbers.has(r.termNumber);
+              return (
+                <tr key={r.termNumber} className="border-b border-slate-100 last:border-0">
+                  <td className="px-3 py-2 font-medium text-slate-700 whitespace-nowrap">{r.termNumber}연차</td>
+                  <td className="px-3 py-2">
+                    <select
+                      disabled={!canEdit || locked}
+                      value={r.settlementType}
+                      onChange={(e) => setRowSettlementType(r.termNumber, e.target.value as "위탁정산" | "자체정산")}
+                      className="text-xs border border-slate-300 rounded px-2 py-1.5 bg-white text-slate-700 disabled:bg-slate-50 disabled:text-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                    >
+                      <option value="위탁정산">위탁정산</option>
+                      <option value="자체정산">자체정산</option>
+                    </select>
+                  </td>
+                  <td className="px-3 py-2">
+                    {locked ? <span className="text-amber-600 font-medium">확정됨</span> : <span className="text-slate-300">-</span>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+        <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
+          {canEdit ? "취소" : "닫기"}
+        </button>
+        {canEdit && (
+          <button onClick={handleSave} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
+            저장
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── 참여기관 추가 폼 ──────────────────────────────────────────
 function AddMemberForm({
   projectId,
@@ -1415,7 +1647,7 @@ function AddMemberForm({
   onClose: () => void;
 }) {
   const [institutionId, setInstitutionId] = useState("");
-  const [role, setRole] = useState<"LEAD" | "PARTICIPANT">("PARTICIPANT");
+  const [role, setRole] = useState<"LEAD" | "PARTICIPANT" | "ENTRUSTED">("PARTICIPANT");
   const [grade, setGrade] = useState<NonNullable<ProjectMember["institutionGrade"]>>("일반");
   const [settlementType, setSettlementType] = useState<"위탁정산" | "자체정산">("위탁정산");
   // 연차별 사업비 — AnnualBudgetEditor와 동일한 구조로 처음부터 연차별 입력을 받는다.
@@ -1472,6 +1704,8 @@ function AddMemberForm({
               className={`flex-1 px-2 py-1.5 transition-colors ${role === "LEAD" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"}`}>주관</button>
             <button type="button" onClick={() => setRole("PARTICIPANT")}
               className={`flex-1 px-2 py-1.5 border-l border-slate-200 transition-colors ${role === "PARTICIPANT" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"}`}>참여</button>
+            <button type="button" onClick={() => setRole("ENTRUSTED")}
+              className={`flex-1 px-2 py-1.5 border-l border-slate-200 transition-colors ${role === "ENTRUSTED" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"}`}>위탁</button>
           </div>
         </div>
         <div>
@@ -1530,7 +1764,10 @@ function AddMemberForm({
             </tbody>
           </table>
         </div>
-        <p className="text-[11px] text-slate-400 mt-1">사업비가 입력된 연차만 해당 연차의 수수료가 자동 산정됩니다.</p>
+        <p className="text-[11px] text-slate-400 mt-1">
+          사업비가 입력된 연차만 참여로 등록되어 그 연차의 수수료가 자동 산정됩니다. 0원으로 둔 연차는
+          참여하지 않은 것으로 저장됩니다 — 예를 들어 3연차부터만 채우면 1·2연차는 참여 안 함으로 처리됩니다.
+        </p>
       </div>
       <div className="flex justify-end gap-2">
         <button onClick={onClose} className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
@@ -2681,7 +2918,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
     ? agencyNoticeTemplates.filter((t) => t.agencyShortName === noticeAgency.shortName)
     : [];
   const leadMember = projectMembers.find((m) => m.projectId === project.id && m.role === "LEAD");
-  const coInstitutionCount = projectMembers.filter((m) => m.projectId === project.id && m.role === "PARTICIPANT").length;
+  const coInstitutionCount = projectMembers.filter((m) => m.projectId === project.id && m.role !== "LEAD").length;
   const noticeStatusRows: NoticeStatusRow[] = [
     { label: "과제번호 (RCMS)", value: project.projectCode || project.projectNumber },
     { label: "과제명", value: project.projectName },

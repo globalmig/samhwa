@@ -490,10 +490,10 @@ export default function NoticeLetterPreview({
         <div className="flex flex-col items-end gap-2">
           <p className="text-xl font-bold tracking-widest">{spaced(COMPANY_INFO.name)}</p>
           <div className="flex items-center gap-3">
+            <p className="text-xl font-bold">대표이사 {COMPANY_INFO.ceoName}</p>
             <div className="relative w-16 h-16 shrink-0">
               <Image src="/CEO_stamp.png" alt="대표이사 인" fill sizes="64px" className="object-contain" />
             </div>
-            <p className="text-xl font-bold">대표이사 {COMPANY_INFO.ceoName}</p>
           </div>
         </div>
       </div>

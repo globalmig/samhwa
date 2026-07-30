@@ -4,7 +4,7 @@ import { useState, useMemo, useRef, useEffect, type CSSProperties } from "react"
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import * as XLSX from "xlsx";
-import { FiPlus, FiChevronDown, FiChevronUp, FiChevronRight, FiMail, FiDownload, FiX } from "react-icons/fi";
+import { FiPlus, FiChevronDown, FiChevronUp, FiChevronRight, FiMail, FiSend, FiDownload, FiX } from "react-icons/fi";
 import ExcelUploadModal, { downloadExcelTemplate } from "@/components/common/ExcelUploadModal";
 import {
   useStore,
@@ -26,6 +26,9 @@ import {
   type TaxInvoice,
   type Project,
   type ProjectIssue,
+  type AgencyNoticeTemplateEntry,
+  type SystemUser,
+  EMPTY_NOTICE_TEMPLATE,
   COMPANY_INFO,
 } from "@/lib/mock";
 import { fmtWon, fmtDate, splitVatInclusive, addMonths, termDateRange } from "@/lib/utils";
@@ -34,6 +37,8 @@ import DateInput from "@/components/common/DateInput";
 import InstitutionQuickAdd from "@/components/common/InstitutionQuickAdd";
 import MoneyInput from "@/components/common/MoneyInput";
 import AgreementStructureEditor, { type Stage } from "@/components/common/AgreementStructureEditor";
+import NoticeLetterPreview, { type NoticeStatusRow } from "@/components/common/NoticeLetterPreview";
+import { buildNoticeEmailHtml } from "@/lib/notice-email-html";
 import { useCanWrite } from "@/lib/permissions";
 import { getCurrentUser } from "@/lib/auth";
 import { resolveRdaAgencyId, isSettlementTerm } from "@/lib/fee-calculator";
@@ -1759,13 +1764,273 @@ function govFiscalQuarterRange(q: 1 | 2 | 3 | 4): [string, string] {
   return [from, to];
 }
 
+// ── 정산절차 안내 공문 일괄발송 ────────────────────────────────
+interface BulkNoticeTarget {
+  projectId: string;
+  projectNumber: string;
+  projectName: string;
+  agencyShortName: string;
+  leadInstitutionName: string;
+  recipientEmail: string;
+  statusRows: NoticeStatusRow[];
+  templates: AgencyNoticeTemplateEntry[];
+}
+
+function BulkSettlementNoticeModal({
+  targets,
+  startSeq,
+  senderUser,
+  onClose,
+}: {
+  targets: BulkNoticeTarget[];
+  startSeq: number;
+  senderUser: SystemUser | null;
+  onClose: () => void;
+}) {
+  // 공문 양식이 없는 전담기관 과제는 보낼 방법이 없어 건너뛰고, 수신 이메일이 없는 과제도 자동 제외한다
+  // (참여기관 목록에 담당자 이메일이 등록돼 있어야 함 — 과제 상세에서 확인 가능).
+  const noTemplate = targets.filter((t) => t.templates.length === 0);
+  const noEmail = targets.filter((t) => t.templates.length > 0 && !t.recipientEmail);
+  const eligible = targets.filter((t) => t.templates.length > 0 && t.recipientEmail);
+
+  const agencyGroups = useMemo(() => {
+    const map = new Map<string, BulkNoticeTarget[]>();
+    eligible.forEach((t) => {
+      if (!map.has(t.agencyShortName)) map.set(t.agencyShortName, []);
+      map.get(t.agencyShortName)!.push(t);
+    });
+    return [...map.entries()];
+  }, [eligible]);
+
+  const [templateChoices, setTemplateChoices] = useState<Record<string, string>>(() => {
+    const initial: Record<string, string> = {};
+    agencyGroups.forEach(([agency, items]) => { initial[agency] = items[0]?.templates[0]?.id ?? ""; });
+    return initial;
+  });
+  const [excluded, setExcluded] = useState<Set<string>>(new Set());
+  const [previewAgency, setPreviewAgency] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+  const [done, setDone] = useState(false);
+  const [results, setResults] = useState<{ projectName: string; email: string; status: "SUCCESS" | "FAILED"; error?: string }[]>([]);
+
+  const canSendMail = !!senderUser?.hiworksEmail && !!senderUser?.hiworksMailPassword;
+  const toSend = eligible.filter((t) => !excluded.has(t.projectId));
+
+  function toggleExclude(projectId: string) {
+    setExcluded((prev) => {
+      const next = new Set(prev);
+      if (next.has(projectId)) next.delete(projectId); else next.add(projectId);
+      return next;
+    });
+  }
+
+  async function sendAll() {
+    if (!senderUser?.hiworksEmail || !senderUser?.hiworksMailPassword) return;
+    setSending(true);
+    const now = new Date();
+    const issuedDate = now.toISOString().slice(0, 10).replace(/-/g, ".");
+    const batchId = `BATCH-${Date.now()}`;
+    let seq = startSeq;
+    const newResults: typeof results = [];
+
+    for (const t of toSend) {
+      const templateId = templateChoices[t.agencyShortName] ?? t.templates[0]?.id;
+      const template = t.templates.find((x) => x.id === templateId)?.content ?? t.templates[0]?.content ?? EMPTY_NOTICE_TEMPLATE;
+      const docNumber = `${COMPANY_INFO.docNumberPrefix} ${now.getFullYear()}-${String(seq).padStart(4, "0")}`;
+      seq++;
+      const subject = `[${t.projectNumber}] ${template.title || "정산절차 안내 및 수수료 청구"}`;
+      const html = buildNoticeEmailHtml({ template, statusRows: t.statusRows, docNumber, issuedDate });
+
+      let status: "SUCCESS" | "FAILED" = "SUCCESS";
+      let errMsg = "";
+      try {
+        const res = await fetch("/api/notices/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            senderEmail: senderUser.hiworksEmail,
+            senderPassword: senderUser.hiworksMailPassword,
+            senderName: senderUser.name,
+            to: [t.recipientEmail],
+            subject,
+            html,
+          }),
+        });
+        const json = await res.json();
+        if (!res.ok || !json.ok) { status = "FAILED"; errMsg = json.error || "메일 발송에 실패했습니다."; }
+      } catch {
+        status = "FAILED"; errMsg = "메일 발송 중 네트워크 오류가 발생했습니다.";
+      }
+
+      addEmailDispatch({
+        batchId,
+        sentAt: new Date().toISOString().replace("T", " ").slice(0, 16),
+        senderName: senderUser.name,
+        recipientInstitution: t.leadInstitutionName,
+        recipientEmail: t.recipientEmail,
+        subject,
+        emailType: "SETTLEMENT_NOTICE",
+        attachments: template.attachments.map((a) => a.name),
+        status,
+        noticeSnapshot: { template, statusRows: t.statusRows, docNumber, issuedDate },
+      });
+      newResults.push({ projectName: t.projectName, email: t.recipientEmail, status, error: errMsg });
+    }
+
+    setResults(newResults);
+    setSending(false);
+    setDone(true);
+  }
+
+  if (done) {
+    const successCount = results.filter((r) => r.status === "SUCCESS").length;
+    const failCount = results.length - successCount;
+    return (
+      <div className="p-6 flex flex-col items-center gap-4">
+        <div className="w-14 h-14 rounded-full bg-green-100 flex items-center justify-center">
+          <FiSend size={22} className="text-green-600" />
+        </div>
+        <p className="text-sm font-semibold text-slate-800">{successCount}건 발송 완료{failCount > 0 ? ` · ${failCount}건 실패` : ""}</p>
+        <div className="w-full max-h-56 overflow-y-auto border border-slate-100 rounded-xl divide-y divide-slate-100">
+          {results.map((r, i) => (
+            <div key={i} className="flex items-center justify-between px-3 py-2 text-xs">
+              <span className="truncate flex-1 text-slate-700">{r.projectName}</span>
+              <span className="text-slate-400 mx-2">{r.email}</span>
+              {r.status === "SUCCESS" ? (
+                <span className="text-green-600 font-medium shrink-0">성공</span>
+              ) : (
+                <span className="text-red-600 font-medium shrink-0" title={r.error}>실패</span>
+              )}
+            </div>
+          ))}
+        </div>
+        <button onClick={onClose} className="mt-2 px-6 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
+          닫기
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-6 space-y-4">
+      <div className="grid grid-cols-3 gap-3">
+        <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-center">
+          <p className="text-2xl font-bold text-emerald-700">{toSend.length}</p>
+          <p className="text-xs text-slate-500 mt-0.5">발송 대상</p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-center">
+          <p className="text-2xl font-bold text-slate-500">{noTemplate.length}</p>
+          <p className="text-xs text-slate-500 mt-0.5">공문 양식 없음 (건너뜀)</p>
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-center">
+          <p className="text-2xl font-bold text-slate-500">{noEmail.length}</p>
+          <p className="text-xs text-slate-500 mt-0.5">수신 이메일 없음 (건너뜀)</p>
+        </div>
+      </div>
+
+      {agencyGroups.length > 0 && (
+        <div className="space-y-3">
+          {agencyGroups.map(([agency, items]) => (
+            <div key={agency} className="border border-slate-200 rounded-xl overflow-hidden">
+              <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3">
+                <span className="text-xs font-semibold text-slate-700">{agency} · {items.length}건</span>
+                <div className="flex items-center gap-2">
+                  {items[0].templates.length > 1 && (
+                    <select
+                      value={templateChoices[agency] ?? ""}
+                      onChange={(e) => setTemplateChoices((prev) => ({ ...prev, [agency]: e.target.value }))}
+                      className="text-xs border border-slate-200 rounded-lg px-2 py-1 bg-white text-slate-700"
+                    >
+                      {items[0].templates.map((t) => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
+                    </select>
+                  )}
+                  <button
+                    onClick={() => setPreviewAgency((prev) => (prev === agency ? null : agency))}
+                    className="text-[11px] text-purple-600 hover:underline"
+                  >
+                    {previewAgency === agency ? "미리보기 닫기 ▲" : "미리보기 ▼"}
+                  </button>
+                </div>
+              </div>
+              {previewAgency === agency && (() => {
+                const templateId = templateChoices[agency] ?? items[0].templates[0]?.id;
+                const template = items[0].templates.find((t) => t.id === templateId)?.content ?? items[0].templates[0]?.content ?? EMPTY_NOTICE_TEMPLATE;
+                return (
+                  <div className="max-h-[40vh] overflow-y-auto border-b border-slate-200 p-4 bg-slate-50/50">
+                    <p className="text-[10px] text-slate-400 mb-2">&quot;{items[0].projectName}&quot; 기준 미리보기 — 과제별로 아래 내용만 자동으로 바뀌어 발송됩니다.</p>
+                    <NoticeLetterPreview
+                      template={template}
+                      statusRows={items[0].statusRows}
+                      docNumber={`${COMPANY_INFO.docNumberPrefix} ${new Date().getFullYear()}-미리보기`}
+                      issuedDate={new Date().toISOString().slice(0, 10).replace(/-/g, ".")}
+                    />
+                  </div>
+                );
+              })()}
+              <div className="divide-y divide-slate-100">
+                {items.map((t) => (
+                  <label key={t.projectId} className="flex items-center gap-3 px-4 py-2 text-xs cursor-pointer hover:bg-slate-50">
+                    <input
+                      type="checkbox"
+                      checked={!excluded.has(t.projectId)}
+                      onChange={() => toggleExclude(t.projectId)}
+                      className="rounded border-slate-300 text-purple-600 focus:ring-purple-500/30"
+                    />
+                    <span className="flex-1 min-w-0 truncate font-medium text-slate-700">{t.projectName}</span>
+                    <span className="text-slate-400 shrink-0">{t.recipientEmail}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {(noTemplate.length > 0 || noEmail.length > 0) && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700 space-y-1">
+          {noTemplate.length > 0 && (
+            <p>공문 양식이 없는 전담기관 과제: {noTemplate.map((t) => t.projectName).join(", ")}</p>
+          )}
+          {noEmail.length > 0 && (
+            <p>주관기관 담당자 이메일이 없는 과제: {noEmail.map((t) => t.projectName).join(", ")}</p>
+          )}
+        </div>
+      )}
+
+      {eligible.length === 0 && (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+          발송 가능한 과제가 없습니다.
+        </div>
+      )}
+
+      <p className="text-[11px] text-slate-400">
+        발신 계정: {canSendMail ? senderUser!.hiworksEmail : <span className="text-red-500">등록된 하이웍스 계정이 없습니다 (관리자 &gt; 사용자 관리에서 등록)</span>}
+      </p>
+
+      <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+        <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
+        <button
+          onClick={sendAll}
+          disabled={toSend.length === 0 || sending || !canSendMail}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          <FiSend size={14} />
+          {sending ? "발송 중..." : `${toSend.length}건 발송`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── FeesPage ──────────────────────────────────────────────────
 export default function FeesPage() {
   const canEdit     = useCanWrite("fees");
   const canEditSales = useCanWrite("fees-sales");
   const canEditEmails = useCanWrite("emails");
   const allRows     = useFeeRows();
-  const { fundingAgencies } = useStore();
+  const { fundingAgencies, projects, projectMembers, agencyNoticeTemplates, users, emailDispatches } = useStore();
   const searchParams = useSearchParams();
   const router = useRouter();
   const [filterProjectNumber,   setFilterProjectNumber]   = useState("");
@@ -1788,6 +2053,7 @@ export default function FeesPage() {
   const [expandedKey, setExpandedKey]     = useState<string | null>(null);
   const [modal, setModal]                 = useState<ModalState | null>(null);
   const [selectedKeys, setSelectedKeys]   = useState<Set<string>>(new Set());
+  const [showBulkNotice, setShowBulkNotice] = useState(false);
   const [showRcmsUpload, setShowRcmsUpload] = useState(false);
 
   // 표 영역을 스크롤바 드래그 없이 아무 빈 공간이나 잡고 좌우로 끌어서 스크롤할 수 있게 한다.
@@ -1886,6 +2152,32 @@ export default function FeesPage() {
      invoiceDateFrom, invoiceDateTo, termEndDateFrom, termEndDateTo, agencyAssignedFrom, agencyAssignedTo]
   );
 
+  // ── 페이지네이션 — 과제 10개 단위로 끊는다(한 과제가 연차별로 여러 행을 차지하므로
+  // "행" 기준이 아니라 "과제" 기준으로 페이지를 나눠야 한 과제의 연차 행들이 페이지 중간에서
+  // 잘리지 않는다). filtered는 이미 projectNumber 순으로 정렬돼 있어 순서대로 묶으면 된다.
+  const PAGE_SIZE = 10;
+  const [page, setPage] = useState(1);
+  const distinctProjectNumbers = useMemo(() => {
+    const seen = new Set<string>();
+    const list: string[] = [];
+    for (const r of filtered) {
+      if (!seen.has(r.projectNumber)) { seen.add(r.projectNumber); list.push(r.projectNumber); }
+    }
+    return list;
+  }, [filtered]);
+  const totalPages = Math.max(1, Math.ceil(distinctProjectNumbers.length / PAGE_SIZE));
+  // 필터가 바뀌어 과제 수가 줄면 이전 페이지 번호가 범위를 벗어날 수 있어 렌더링 시점에 보정한다
+  // (버튼 클릭도 이 값 기준으로 계산하므로 별도 useEffect로 되돌릴 필요가 없다).
+  const safePage = Math.min(page, totalPages);
+  const pagedProjectNumbers = useMemo(
+    () => new Set(distinctProjectNumbers.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)),
+    [distinctProjectNumbers, safePage]
+  );
+  const pagedRows = useMemo(
+    () => filtered.filter((r) => pagedProjectNumbers.has(r.projectNumber)),
+    [filtered, pagedProjectNumbers]
+  );
+
   // 같은 과제(연차별로 여러 행)를 시각적으로 묶어 보여주기 위한 그룹 인덱스 — filtered는 이미
   // projectNumber로 정렬되어 있으므로, 앞 행과 과제번호가 바뀔 때마다 그룹을 하나씩 증가시킨다.
   const rowGroupIndex = useMemo(() => {
@@ -1921,13 +2213,14 @@ export default function FeesPage() {
     });
   }
 
-  const allVisibleSelected = filtered.length > 0 && filtered.every((r) => selectedKeys.has(r.key));
+  // "전체 선택"은 지금 페이지에 보이는 행 기준 — 다른 페이지에서 이미 선택해둔 항목은 그대로 유지된다.
+  const allVisibleSelected = pagedRows.length > 0 && pagedRows.every((r) => selectedKeys.has(r.key));
 
   function toggleSelectAll() {
     setSelectedKeys((prev) => {
-      if (allVisibleSelected) return new Set();
       const next = new Set(prev);
-      filtered.forEach((r) => next.add(r.key));
+      if (allVisibleSelected) pagedRows.forEach((r) => next.delete(r.key));
+      else pagedRows.forEach((r) => next.add(r.key));
       return next;
     });
   }
@@ -1941,6 +2234,46 @@ export default function FeesPage() {
     projectIds.forEach((id) => updateProject(id, { status: "COMPLETED" }));
     setSelectedKeys(new Set());
   }
+
+  // 선택된 행 → 과제 단위로 묶어 "정산절차 안내 공문 일괄발송" 모달에 넘길 대상 목록을 만든다.
+  // 과제 상세 페이지의 단건 발송(SettlementNoticeModal)과 동일한 필드 구성을 그대로 재현한다.
+  const bulkNoticeTargets = useMemo<BulkNoticeTarget[]>(() => {
+    if (!showBulkNotice) return [];
+    const selectedProjectIds = Array.from(
+      new Set(filtered.filter((r) => selectedKeys.has(r.key)).map((r) => r.projectId))
+    ).filter(Boolean);
+
+    return selectedProjectIds.map((projectId) => {
+      const project = projects.find((p) => p.id === projectId)!;
+      const agency = fundingAgencies.find((a) => a.id === project.agencyId);
+      const templates = agency ? agencyNoticeTemplates.filter((t) => t.agencyShortName === agency.shortName) : [];
+      const leadMember = projectMembers.find((m) => m.projectId === projectId && m.role === "LEAD");
+      const coInstitutionCount = projectMembers.filter((m) => m.projectId === projectId && m.role !== "LEAD").length;
+      const statusRows: NoticeStatusRow[] = [
+        { label: "과제번호 (RCMS)", value: project.projectCode || project.projectNumber },
+        { label: "과제명", value: project.projectName },
+        { label: "단계연구개발기간", value: `${fmtDate(project.stageStartDate ?? project.startDate)} ~ ${fmtDate(project.stageEndDate ?? project.endDate)}` },
+        { label: "대상기간", value: `${fmtDate(project.firstStartDate ?? project.startDate)} ~ ${fmtDate(project.finalEndDate ?? project.endDate)}` },
+        { label: "정산구분", value: leadMember?.settlementType ?? "위탁정산" },
+        { label: "주관연구개발기관", value: project.leadInstitutionName },
+        { label: "연구책임자", value: project.researchLead ?? "—" },
+        { label: "공동연구개발기관수", value: `${coInstitutionCount}개` },
+      ];
+      return {
+        projectId,
+        projectNumber: project.projectNumber,
+        projectName: project.projectName,
+        agencyShortName: agency?.shortName ?? "",
+        leadInstitutionName: project.leadInstitutionName,
+        recipientEmail: leadMember?.contactEmail ?? "",
+        statusRows,
+        templates,
+      };
+    });
+  }, [showBulkNotice, filtered, selectedKeys, projects, fundingAgencies, agencyNoticeTemplates, projectMembers]);
+
+  const bulkNoticeSenderUser = users.find((u) => u.id === getCurrentUser()?.id) ?? null;
+  const bulkNoticeStartSeq = emailDispatches.filter((e) => e.emailType === "SETTLEMENT_NOTICE").length + 1;
 
   function cell(row: FeeRow, colKey: string) {
     switch (colKey) {
@@ -2345,6 +2678,14 @@ export default function FeesPage() {
           >
             선택 과제 완료 처리
           </button>
+          {canEditEmails && (
+            <button
+              onClick={() => setShowBulkNotice(true)}
+              className="flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-lg bg-purple-600 text-white hover:bg-purple-700 transition-colors"
+            >
+              <FiSend size={12} /> 정산절차 안내 공문 일괄발송
+            </button>
+          )}
           <button
             onClick={() => setSelectedKeys(new Set())}
             className="text-xs text-slate-500 hover:text-slate-700 px-2 py-1.5 rounded hover:bg-white transition-colors"
@@ -2417,20 +2758,20 @@ export default function FeesPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.length === 0 ? (
+              {pagedRows.length === 0 ? (
                 <tr>
                   <td colSpan={COLUMNS.length + (canEdit ? 6 : 5)} className="px-4 py-10 text-center text-sm text-slate-400">
                     검색 결과가 없습니다
                   </td>
                 </tr>
               ) : (
-                filtered.flatMap((row, idx) => {
+                pagedRows.flatMap((row, idx) => {
                   const isExpanded   = expandedKey === row.key;
                   const hasReceivable = row.receivableId !== "";
                   const isFullyPaid   = row.collectionStatus === "PAID";
                   // 같은 과제(연차별 여러 행)를 옅은 배경색으로 묶어 보여주고, 다른 과제로 넘어가는
                   // 경계엔 굵은 구분선을 넣어 어디까지가 한 과제인지 한눈에 보이게 한다.
-                  const isGroupStart = idx === 0 || filtered[idx - 1].projectNumber !== row.projectNumber;
+                  const isGroupStart = idx === 0 || pagedRows[idx - 1].projectNumber !== row.projectNumber;
                   // 고정(sticky) 열이 스크롤되는 다른 열 위에 완전히 덮여야 하므로, 배경은 반투명이 아닌
                   // 불투명 색상만 써야 한다 — 반투명이면 그 밑으로 스크롤되는 내용이 비쳐서 겹쳐 보인다.
                   const groupBg = (rowGroupIndex.get(row.key) ?? 0) % 2 === 1 ? "bg-slate-50" : "bg-white";
@@ -2651,8 +2992,48 @@ export default function FeesPage() {
             </tbody>
           </table>
         </div>
-        <div className="px-4 py-2.5 border-t border-slate-100 text-xs text-slate-400">
-          총 {filtered.length}건 표시 (전체 {allRows.length}건)
+        <div className="px-4 py-2.5 border-t border-slate-100 flex items-center justify-between gap-3">
+          <span className="text-xs text-slate-400">
+            과제 {distinctProjectNumbers.length}건 중 {pagedRows.length}행 표시 (전체 {allRows.length}행)
+          </span>
+          {totalPages > 1 && (
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setPage(Math.max(1, safePage - 1))}
+                disabled={safePage === 1}
+                className="px-2 py-1 text-xs rounded border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                이전
+              </button>
+              {Array.from({ length: totalPages }, (_, i) => i + 1)
+                .filter((n) => n === 1 || n === totalPages || Math.abs(n - safePage) <= 2)
+                .flatMap((n, i, arr) => {
+                  const nodes: React.ReactNode[] = [];
+                  if (i > 0 && n - arr[i - 1] > 1) {
+                    nodes.push(<span key={`ellipsis-${n}`} className="px-1 text-xs text-slate-300">…</span>);
+                  }
+                  nodes.push(
+                    <button
+                      key={n}
+                      onClick={() => setPage(n)}
+                      className={`min-w-[1.75rem] px-2 py-1 text-xs rounded transition-colors ${
+                        n === safePage ? "bg-blue-600 text-white" : "border border-slate-200 text-slate-600 hover:bg-slate-50"
+                      }`}
+                    >
+                      {n}
+                    </button>
+                  );
+                  return nodes;
+                })}
+              <button
+                onClick={() => setPage(Math.min(totalPages, safePage + 1))}
+                disabled={safePage === totalPages}
+                className="px-2 py-1 text-xs rounded border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                다음
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -2667,6 +3048,16 @@ export default function FeesPage() {
         </Modal>
       )}
       {showRcmsUpload && <ExcelUploadModal onClose={() => setShowRcmsUpload(false)} />}
+      {showBulkNotice && (
+        <Modal title="정산절차 안내 공문 일괄발송" onClose={() => setShowBulkNotice(false)} size="xl">
+          <BulkSettlementNoticeModal
+            targets={bulkNoticeTargets}
+            startSeq={bulkNoticeStartSeq}
+            senderUser={bulkNoticeSenderUser}
+            onClose={() => setShowBulkNotice(false)}
+          />
+        </Modal>
+      )}
       {modal?.mode === "collection" && (
         <Modal
           title={

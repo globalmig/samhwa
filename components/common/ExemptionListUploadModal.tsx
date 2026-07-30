@@ -336,7 +336,8 @@ export default function ExemptionListUploadModal({ onClose }: { onClose: () => v
           )}
           {cascadeSummary.locked > 0 && (
             <p className="w-full text-[11px] text-amber-600 -mt-2">
-              이미 확정(청구완료)되었거나 수동조정된 연차 {cascadeSummary.locked}개는 건드리지 않고 그대로 두었습니다.
+              이미 확정(청구완료)되었거나 수동조정된 연차 {cascadeSummary.locked}개는 금액을 그대로 두었습니다 —
+              등급이 실제로 달라진 건은 해당 과제에 이슈로 등록해뒀으니 과제 상세 페이지에서 확인해주세요.
             </p>
           )}
 

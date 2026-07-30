@@ -109,7 +109,7 @@ interface MemberAggregate {
   projectNumber: string;
   bizNumber: string;
   institutionName: string;
-  role: "LEAD" | "PARTICIPANT";
+  role: "LEAD" | "PARTICIPANT" | "ENTRUSTED";
   settlementType: "위탁정산" | "자체정산";
   // 엑셀에 등급 컬럼이 없거나 값이 비어 있으면 undefined — 기존에 입력돼 있던 등급을 실수로
   // "일반"으로 덮어쓰지 않기 위해, "값이 아예 없었다"와 "일반으로 명시됨"을 구분해서 담아둔다.
@@ -245,6 +245,7 @@ function buildMemberAggregates(sheets: ParsedSheet[]): {
 
       const roleStr = get("institutionRole", row);
       if (roleStr.includes("주관")) agg.role = "LEAD";
+      else if (roleStr.includes("위탁")) agg.role = "ENTRUSTED";
 
       const settlementStr = get("settlementType", row);
       if (settlementStr) agg.settlementType = settlementStr.includes("자체") ? "자체정산" : "위탁정산";
@@ -468,6 +469,35 @@ function computeProjectUpdates(
     });
   }
   return updates;
+}
+
+// RCMS 과제번호가 재부여되어 문자열이 바뀌는 경우가 있어(같은 실제 과제인데 번호만 달라짐),
+// 새 과제를 만들기 전에 "이미 등록된 같은 과제"인지 먼저 확인한다.
+// 1순위: 과제코드(전담기관 과제코드) 일치. 2순위: 과제명+시작일+종료일이 전부 동일.
+// 후보가 2개 이상 나오면(우연한 일치 가능성) 판단하지 않고 ambiguousCandidates로 넘겨 이슈로 남긴다.
+function resolveRenamedProject(
+  projectName: string,
+  startDate: string,
+  endDate: string,
+  projectCode: string | undefined,
+  existingProjects: Project[]
+): { project: Project | null; ambiguousCandidates: Project[] } {
+  if (projectCode) {
+    // 현재 과제코드든, 예전에 쓰였던 과제코드(이력)든 일치하면 같은 과제로 본다 — 과제코드가
+    // 재부여된 뒤에도 누군가 예전 코드가 적힌 파일을 다시 올리는 경우가 있어서다.
+    const byCode = existingProjects.filter(
+      (p) => (p.projectCode && p.projectCode === projectCode) || (p.previousProjectCodes?.includes(projectCode) ?? false)
+    );
+    if (byCode.length === 1) return { project: byCode[0], ambiguousCandidates: [] };
+    if (byCode.length > 1) return { project: null, ambiguousCandidates: byCode };
+    // byCode.length === 0 → 이 과제코드로 등록된(과거 이력 포함) 기존 과제가 없음 → 이름+기간으로 폴백
+  }
+  const byNameDate = existingProjects.filter(
+    (p) => p.projectName === projectName && p.startDate === startDate && p.endDate === endDate
+  );
+  if (byNameDate.length === 1) return { project: byNameDate[0], ambiguousCandidates: [] };
+  if (byNameDate.length > 1) return { project: null, ambiguousCandidates: byNameDate };
+  return { project: null, ambiguousCandidates: [] };
 }
 
 // autoGenerateTermFees와 동일한 방식(startDate + 연차-1년)으로 "현재 몇 연차인지" 추정
@@ -894,6 +924,7 @@ interface DoneResult {
   memberUpdated: number;
   projectAdvanced: number;
   stageAlerts: number;
+  renamed: number;
 }
 
 function DoneStep({ result, onClose }: { result: DoneResult; onClose: () => void }) {
@@ -936,11 +967,21 @@ function DoneStep({ result, onClose }: { result: DoneResult; onClose: () => void
       {result.projectAdvanced > 0 && (
         <p className="text-[11px] text-slate-400 -mt-2">연차/참여기관 변경 내역은 각 과제의 변경이력에서 확인할 수 있습니다.</p>
       )}
+      {result.renamed > 0 && (
+        <div className="w-full rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-700">
+          <p className="font-semibold">과제번호 변경 반영 — {result.renamed}건</p>
+          <p className="mt-0.5 text-blue-600">
+            과제코드 또는 과제명·시작일·종료일이 같아 기존 과제로 판단해 과제번호만 새로 갱신했습니다(새 과제로 만들지 않음).
+            이전 과제번호는 각 과제의 변경이력에서 확인할 수 있습니다.
+          </p>
+        </div>
+      )}
       {result.stageAlerts > 0 && (
         <div className="w-full rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700">
           <p className="font-semibold">확인 필요 — {result.stageAlerts}개 과제</p>
           <p className="mt-0.5 text-amber-600">
-            단계 구조 값이 비어있거나, 같은 과제인데 행마다 과제코드·과제담당자·연구책임자 등이 서로 달라 자동으로 채우지 못한 과제입니다.
+            단계 구조 값이 비어있거나, 같은 과제인데 행마다 과제코드·과제담당자·연구책임자 등이 서로 달라 자동으로 채우지 못했거나,
+            과제번호가 바뀐 것 같은데 기존 과제 후보가 여러 개라 자동으로 연결하지 못한 과제입니다.
             해당 과제 담당자·회계담당자에게 이슈로 등록해뒀으니, 과제 상세 페이지에서 직접 확인해주세요.
           </p>
         </div>
@@ -1110,7 +1151,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
   const [matchedSheets, setMatchedSheets] = useState<{ sheetName: string; def: SheetDef }[]>([]);
   const [parsedSheets, setParsedSheets] = useState<ParsedSheet[]>([]);
   const [previewRows, setPreviewRows] = useState<PreviewRow[]>([]);
-  const [doneResult, setDoneResult] = useState<DoneResult>({ agency: 0, project: 0, inst: 0, member: 0, memberUpdated: 0, projectAdvanced: 0, stageAlerts: 0 });
+  const [doneResult, setDoneResult] = useState<DoneResult>({ agency: 0, project: 0, inst: 0, member: 0, memberUpdated: 0, projectAdvanced: 0, stageAlerts: 0, renamed: 0 });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [previewBackStep, setPreviewBackStep] = useState<Step>("mapping");
@@ -1334,7 +1375,9 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
     // 않는(stale) 스냅샷이라, 방금 만든 과제를 projects.find(...)로 다시 찾으면 항상 못 찾는다.
     // 주관기관 보정 단계에서 농촌진흥청(RDA1/RDA2) agencyId를 다시 판별할 때 이 값을 쓴다.
     const newProjectAgencyId = new Map<string, string>(); // normProjectNum → agencyId
-    let agencyCount = 0, projectCount = 0, instCount = 0, memberCount = 0;
+    let agencyCount = 0, projectCount = 0, instCount = 0, memberCount = 0, renamedCount = 0;
+    // 과제코드/이름+기간으로는 기존 과제 후보가 2개 이상 나와 자동으로 판단할 수 없는 경우 — 등록하지 않고 이슈로 남긴다.
+    const renameAmbiguities: { normNum: string; rawProjectNumber: string; projectName: string; candidates: Project[] }[] = [];
 
     // 기존 전담기관·과제·기관 미리 채워두기 (참여기관 연결에 필요)
     for (const a of fundingAgencies) registeredAgencies.set(a.name, a.id);
@@ -1406,37 +1449,96 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         const projectCode = scalarInfo?.projectCodes.size === 1 ? [...scalarInfo.projectCodes][0] : undefined;
         const researchLead = scalarInfo?.researchLeads.size === 1 ? [...scalarInfo.researchLeads][0] : undefined;
 
-        const created = addProject({
-          projectNumber: row.projectNumber,
-          projectName: row.projectName || "미입력",
-          agencyId,
-          agency: row.agencyName,
-          // 주관기관은 이 시점엔 특정할 수 없음 — 참여기관 등록 후 role="LEAD" 행으로 보정한다.
-          leadInstitutionId: "",
-          leadInstitutionName: "",
-          totalBudget: 0,
-          startDate: startDateStr,
-          endDate: row.endDate || today,
-          totalTerms,
-          currentTerm,
-          status: "ACTIVE",
-          billingType: parseBillingType(row.billingType),
-          agreementType,
-          stages,
-          projectCategory,
-          projectType: scalarInfo?.isAutonomyTrack ? "AUTONOMY_TRACK" : undefined,
-          govGrant: govGrant > 0 ? govGrant : undefined,
-          privateCash: privateCash > 0 ? privateCash : undefined,
-          privateInKind: privateInKind > 0 ? privateInKind : undefined,
-          stageStartDate: stageDateRange?.start,
-          stageEndDate: stageDateRange?.end,
-          assignedManager,
-          projectCode,
-          researchLead,
-        });
-        registeredProjects.set(normNum, created.id);
-        newProjectAgencyId.set(normNum, agencyId);
-        projectCount++;
+        // 새로 만들기 전에 "과제번호만 바뀐 기존 과제"인지 먼저 확인한다 — RCMS에서 과제번호가
+        // 재부여되는 경우가 있어, 문자열이 달라도 과제코드나 (과제명+기간)이 같으면 같은 과제로 본다.
+        const { project: renamedFrom, ambiguousCandidates } = resolveRenamedProject(
+          row.projectName || "미입력", startDateStr, row.endDate || today, projectCode, projects
+        );
+
+        if (ambiguousCandidates.length > 0) {
+          // 후보가 여러 개라 자동으로 판단할 수 없음 — 등록하지 않고 아래에서 이슈로 남긴다
+          // (registeredProjects에 안 넣으므로 이 과제군의 참여기관·단계 정보도 함께 건너뛴다).
+          renameAmbiguities.push({ normNum, rawProjectNumber: row.projectNumber, projectName: row.projectName, candidates: ambiguousCandidates });
+        } else if (renamedFrom) {
+          // 과제번호 변경으로 판단 — 새로 만들지 않고 기존 과제를 그대로 갱신한다. updateProject의
+          // 변경이력 기록이 "이전 과제번호 → 새 과제번호"를 감사로그에 자동으로 남긴다.
+          //
+          // 과제코드는 조금 다르게 다룬다 — 코드가 재부여된 뒤에 누군가 예전 코드가 적힌 파일을
+          // 다시 올리는 경우가 있어서, "이력에 이미 있는 예전 코드"가 들어오면 현재 코드를 그걸로
+          // 되돌리지 않는다. 진짜 새 코드일 때만 지금 코드를 이력에 넣고 교체한다.
+          let nextProjectCode = renamedFrom.projectCode;
+          let nextPreviousCodes = renamedFrom.previousProjectCodes;
+          if (projectCode && projectCode !== renamedFrom.projectCode) {
+            const isKnownOldCode = renamedFrom.previousProjectCodes?.includes(projectCode) ?? false;
+            if (!isKnownOldCode) {
+              nextPreviousCodes = renamedFrom.projectCode
+                ? [...new Set([...(renamedFrom.previousProjectCodes ?? []), renamedFrom.projectCode])]
+                : renamedFrom.previousProjectCodes;
+              nextProjectCode = projectCode;
+            }
+            // isKnownOldCode === true면 nextProjectCode/nextPreviousCodes를 그대로 둬서(변경 없음) 되돌리지 않는다.
+          }
+
+          updateProject(renamedFrom.id, {
+            projectNumber: row.projectNumber,
+            projectName: row.projectName || renamedFrom.projectName,
+            agencyId: agencyId || renamedFrom.agencyId,
+            agency: row.agencyName || renamedFrom.agency,
+            startDate: startDateStr,
+            endDate: row.endDate || today,
+            totalTerms: Math.max(renamedFrom.totalTerms, totalTerms),
+            currentTerm,
+            billingType: parseBillingType(row.billingType) ?? renamedFrom.billingType,
+            agreementType: agreementType ?? renamedFrom.agreementType,
+            stages: stages ?? renamedFrom.stages,
+            projectCategory,
+            projectType: scalarInfo?.isAutonomyTrack ? "AUTONOMY_TRACK" : renamedFrom.projectType,
+            govGrant: govGrant > 0 ? govGrant : renamedFrom.govGrant,
+            privateCash: privateCash > 0 ? privateCash : renamedFrom.privateCash,
+            privateInKind: privateInKind > 0 ? privateInKind : renamedFrom.privateInKind,
+            stageStartDate: stageDateRange?.start ?? renamedFrom.stageStartDate,
+            stageEndDate: stageDateRange?.end ?? renamedFrom.stageEndDate,
+            assignedManager: assignedManager ?? renamedFrom.assignedManager,
+            projectCode: nextProjectCode,
+            previousProjectCodes: nextPreviousCodes,
+            researchLead: researchLead ?? renamedFrom.researchLead,
+          });
+          registeredProjects.set(normNum, renamedFrom.id);
+          newProjectAgencyId.set(normNum, agencyId || renamedFrom.agencyId);
+          renamedCount++;
+        } else {
+          const created = addProject({
+            projectNumber: row.projectNumber,
+            projectName: row.projectName || "미입력",
+            agencyId,
+            agency: row.agencyName,
+            // 주관기관은 이 시점엔 특정할 수 없음 — 참여기관 등록 후 role="LEAD" 행으로 보정한다.
+            leadInstitutionId: "",
+            leadInstitutionName: "",
+            totalBudget: 0,
+            startDate: startDateStr,
+            endDate: row.endDate || today,
+            totalTerms,
+            currentTerm,
+            status: "ACTIVE",
+            billingType: parseBillingType(row.billingType),
+            agreementType,
+            stages,
+            projectCategory,
+            projectType: scalarInfo?.isAutonomyTrack ? "AUTONOMY_TRACK" : undefined,
+            govGrant: govGrant > 0 ? govGrant : undefined,
+            privateCash: privateCash > 0 ? privateCash : undefined,
+            privateInKind: privateInKind > 0 ? privateInKind : undefined,
+            stageStartDate: stageDateRange?.start,
+            stageEndDate: stageDateRange?.end,
+            assignedManager,
+            projectCode,
+            researchLead,
+          });
+          registeredProjects.set(normNum, created.id);
+          newProjectAgencyId.set(normNum, agencyId);
+          projectCount++;
+        }
       }
     }
 
@@ -1636,6 +1738,25 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       stageAlertCount++;
     }
 
+    // 과제코드/이름+기간 매칭 후보가 여러 개라 자동으로 어느 과제인지 판단 못 한 경우 — 첫 번째
+    // 후보 과제에 이슈를 남겨서(그 과제의 이슈 목록에서 확인 가능) 담당자·회계담당자에게 알린다.
+    for (const amb of renameAmbiguities) {
+      const anchor = amb.candidates[0];
+      const candidateList = amb.candidates.map((c) => `${c.projectName} (${c.projectNumber})`).join(" / ");
+      addProjectIssue({
+        projectId: anchor.id,
+        projectNumber: anchor.projectNumber,
+        content: `RCMS 엑셀 업로드 — 과제번호 "${amb.rawProjectNumber}"(과제명: ${amb.projectName})가 기존 과제 중 어느 것과 같은 과제인지 자동으로 판단할 수 없어 등록하지 않았습니다.\n후보: ${candidateList}\n과제코드 또는 과제명·시작일·종료일을 확인해 직접 연결해주세요.`,
+        author: authorName,
+        createdAt: now,
+        priority: "HIGH",
+        status: "OPEN",
+        recipientGroups: ["MANAGER", "ACCOUNTANT"],
+        noInstitution: true,
+      });
+      stageAlertCount++;
+    }
+
     setDoneResult({
       agency: agencyCount,
       project: projectCount,
@@ -1644,6 +1765,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       memberUpdated: memberUpdatedCount,
       projectAdvanced: advancedProjectCount,
       stageAlerts: stageAlertCount,
+      renamed: renamedCount,
     });
     setLoading(false);
     setStep("done");

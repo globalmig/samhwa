@@ -10,6 +10,7 @@ import { useCanWrite } from "@/lib/permissions";
 const ROLE_MAP = {
   LEAD: { label: "주관기관", color: "blue" as const },
   PARTICIPANT: { label: "참여기관", color: "slate" as const },
+  ENTRUSTED: { label: "위탁기관", color: "amber" as const },
 };
 
 const ACTION_MAP = {
@@ -65,7 +66,7 @@ export default function InstitutionDetailPage({ params }: { params: Promise<{ id
 
   const myMemberships = projectMembers.filter((m) => m.institutionId === id);
   const leadProjects = myMemberships.filter((m) => m.role === "LEAD");
-  const participantProjects = myMemberships.filter((m) => m.role === "PARTICIPANT");
+  const participantProjects = myMemberships.filter((m) => m.role !== "LEAD");
   const relatedFees = termFees.filter((f) => f.institutionId === id);
   const history = auditLog.filter((e) => e.entityType === "institution" && e.entityId === id);
   const projectsById = new Map(projects.map((project) => [project.id, project]));
