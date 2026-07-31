@@ -41,13 +41,31 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function UserForm({ initial, onSubmit, onClose }: { initial: Omit<SystemUser, "id">; onSubmit: (d: Omit<SystemUser, "id">) => void; onClose: () => void }) {
+function UserForm({ initial, existingUsers, excludeId, onSubmit, onClose }: {
+  initial: Omit<SystemUser, "id">;
+  existingUsers: SystemUser[];
+  excludeId?: string;
+  onSubmit: (d: Omit<SystemUser, "id">) => void;
+  onClose: () => void;
+}) {
   const [form, setForm] = useState(initial);
   const s = (k: keyof typeof form, v: unknown) => setForm((p) => ({ ...p, [k]: v }));
+  const nameTrimmed = form.name.trim();
+  const duplicateUsers = nameTrimmed
+    ? existingUsers.filter((u) => u.id !== excludeId && u.name.trim() === nameTrimmed)
+    : [];
   return (
     <div className="p-6 space-y-4">
       <div className="grid grid-cols-2 gap-4">
-        <Field label="이름"><input className={inputCls} value={form.name} onChange={(e) => s("name", e.target.value)} placeholder="홍길동" /></Field>
+        <div>
+          <Field label="이름"><input className={inputCls} value={form.name} onChange={(e) => s("name", e.target.value)} placeholder="홍길동" /></Field>
+          {duplicateUsers.length > 0 && (
+            <p className="mt-1 text-[11px] text-amber-600 leading-snug">
+              ⚠ 동명이인 — 이미 등록된 &quot;{nameTrimmed}&quot;님({duplicateUsers.map((u) => u.email).join(", ")})과 이름이 같습니다.
+              수수료 청구관리의 삼화담당자는 이름으로 연결되어, 동명이인이 있으면 상세페이지로 자동 연결되지 않습니다.
+            </p>
+          )}
+        </div>
         <Field label="이메일"><input className={inputCls} type="email" value={form.email} onChange={(e) => s("email", e.target.value)} placeholder="user@samhwa.co.kr" /></Field>
       </div>
       <div className="grid grid-cols-2 gap-4">
@@ -234,7 +252,13 @@ export default function AdminUsersPage() {
 
       {modal && (
         <Modal title={modal.mode === "add" ? "새 사용자 추가" : "사용자 수정"} onClose={() => setModal(null)}>
-          <UserForm initial={modal.mode === "edit" ? modal.target : EMPTY} onSubmit={handleSubmit} onClose={() => setModal(null)} />
+          <UserForm
+            initial={modal.mode === "edit" ? modal.target : EMPTY}
+            existingUsers={users}
+            excludeId={modal.mode === "edit" ? modal.target.id : undefined}
+            onSubmit={handleSubmit}
+            onClose={() => setModal(null)}
+          />
         </Modal>
       )}
     </div>

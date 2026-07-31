@@ -12,6 +12,7 @@ import {
   updateReceivable,
   updateProject,
   updateProjectMember,
+  updateTermFee,
   addTaxInvoice,
   updateTaxInvoice,
   addEmailDispatch,
@@ -51,6 +52,13 @@ type FeeRow = {
   projectNumber: string;
   projectName: string;
   leadInstitutionName: string;
+  // 실제로 계산서·공문·수금이 청구되는 기관 — 통상 주관기관과 같지만, RDA2처럼 기관별로 따로
+  // 청구하는 과제는 행이 기관별로 나뉘어 이 값이 그 행이 대표하는 참여기관으로 바뀐다.
+  billedInstitutionId: string;
+  billedInstitutionName: string;
+  // 이 행이 RDA2 등에서 기관별로 분리된 청구 단위인지 — 세금계산서·채권을 새로 만들 때
+  // institutionId를 함께 저장해야 다음 렌더에서 이 기관의 것으로 다시 찾을 수 있다.
+  isSplitRow: boolean;
   researchLead: string;
   projectCategory: string;
   startDate: string;
@@ -68,11 +76,14 @@ type FeeRow = {
   billedAmount: number;
   collectionStatus: string;
   paidAmount: number;
+  paidAt: string | null;
   receivableAmount: number;
   unclaimedAmount: number;
   // 과제 정보
   projectCode: string;
   agencyAssignedAt: string;
+  // 서류요청일/회신일이 저장된 TermFee id — InfoEditModal에서 수정 시 이 id로 updateTermFee를 호출한다.
+  docFeeId: string;
   docRequestDate: string;
   docReplyDate: string;
   recipientName: string;
@@ -86,8 +97,17 @@ type FeeRow = {
   taxInvoiceId: string;
   taxInvoiceStatus: TaxInvoice["status"] | "";
   appliedFeeTotal: number;
+  // 타회계법인이 진행한 연차인지 — true면 appliedFeeTotal에서 그 기관들의 청구액은 이미 빠져있다
+  // (삼화가 청구할 몫이 아니므로). 대신 otherFirmUnclaimedTotal에 그 기관들의 당해 미청구(15%)를 담아둔다 —
+  // 이 금액은 나중에 정산연차에서 자동으로 이월·합산되므로 여기서 청구하면 안 되고 표시만 한다.
+  otherFirmHandled: boolean;
+  otherFirmUnclaimedTotal: number;
   // 원본 termFees (확장용)
   fees: TermFee[];
+  // 이 과제에 연차별 수수료(TermFee) 기록이 하나도 없어서 만든 자리표시 행인지 — 대시보드
+  // 파이프라인(진행중/완료/중단)에서 클릭해 들어왔을 때 과제 자체는 보이되 수수료 관련 칸은
+  // 비어 있는 이유를 알 수 있게 표시한다.
+  noFeeRecord: boolean;
   termYear: number;
   termNumber: number;
   totalTerms: number;
@@ -105,6 +125,7 @@ type CollectionTarget = {
   leadInstitutionName: string;
   billedAmount: number;
   paidAmount: number;
+  paidAt: string | null;
   receivableAmount: number;
 };
 
@@ -113,6 +134,7 @@ type SalesTarget = {
   projectNumber: string;
   projectName: string;
   leadInstitutionName: string;
+  institutionId?: string; // RDA2 등 기관별 분리 청구 행일 때만 채워짐
   termYear: number;
   termNumber: number;
   currentBillingType: string;
@@ -142,12 +164,18 @@ type DispatchTarget = {
   endDate:             string;
   stageStartDate:      string; // 단계사업연도
   stageEndDate:        string;
+  // 청구서 PDF 전용 — 공문 본문(제목/본문)엔 안 쓰이던 값들이지만 청구서 양식엔 필요하다.
+  researchLead:        string;
+  agencyFullName:      string; // 전담기관 정식명칭 (예: "한국산업기술기획평가원") — 약칭과 별개
+  participantCount:    number;
+  docNumber:           string;
 };
 
 type InfoEditTarget = {
   projectId:      string;
   projectName:    string;
   leadMemberId:   string;
+  docFeeId:       string;
   docRequestDate: string;
   docReplyDate:   string;
   recipientName:  string;
@@ -259,6 +287,7 @@ function SalesIssueModal({ target, onClose }: { target: SalesTarget; onClose: ()
         termNumber:          target.termNumber,
         leadInstitutionId:   "",
         leadInstitutionName: target.leadInstitutionName,
+        institutionId:       target.institutionId,
         issuedAt,
         supplyAmount,
         taxAmount,
@@ -285,6 +314,7 @@ function SalesIssueModal({ target, onClose }: { target: SalesTarget; onClose: ()
         termNumber:          target.termNumber,
         leadInstitutionId:   "",
         leadInstitutionName: target.leadInstitutionName,
+        institutionId:       target.institutionId,
         billedAt:            issuedAt,
         billedAmount:        totalAmount,
         paidAmount:          0,
@@ -524,6 +554,12 @@ function parseEmails(raw: string): string[] {
 
 function generateBatchId(): string {
   return `BATCH-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.floor(Math.random() * 9000) + 1000}`;
+}
+
+function generateDocNumber(): string {
+  const yyyymm = new Date().toISOString().slice(0, 7).replace(/-/g, "");
+  const seq = String(Math.floor(Math.random() * 9000) + 1000);
+  return `E${yyyymm}-${seq}`;
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -1016,6 +1052,7 @@ ${COMPANY_INFO.name} 드림`;
 // ── CollectionModal ───────────────────────────────────────────
 function CollectionModal({ target, onClose }: { target: CollectionTarget; onClose: () => void }) {
   const [inputAmount, setInputAmount] = useState(0);
+  const [paidAtInput, setPaidAtInput] = useState(target.paidAt ?? new Date().toISOString().slice(0, 10));
   const remaining = target.billedAmount - target.paidAmount;
 
   function calcStatus(paid: number): "PENDING" | "PARTIAL" | "PAID" | "OVERDUE" {
@@ -1030,6 +1067,7 @@ function CollectionModal({ target, onClose }: { target: CollectionTarget; onClos
     const newReceivable = Math.max(0, target.billedAmount - newPaid);
     updateReceivable(target.receivableId, {
       paidAmount:       newPaid,
+      paidAt:           paidAtInput || undefined,
       receivableAmount: newReceivable,
       status:           calcStatus(newPaid),
     });
@@ -1040,6 +1078,7 @@ function CollectionModal({ target, onClose }: { target: CollectionTarget; onClos
     if (remaining <= 0) return;
     updateReceivable(target.receivableId, {
       paidAmount:       target.billedAmount,
+      paidAt:           paidAtInput || undefined,
       receivableAmount: 0,
       status:           "PAID",
     });
@@ -1049,6 +1088,7 @@ function CollectionModal({ target, onClose }: { target: CollectionTarget; onClos
   function handleCancel() {
     updateReceivable(target.receivableId, {
       paidAmount:       0,
+      paidAt:           null,
       receivableAmount: target.billedAmount,
       status:           "PENDING",
     });
@@ -1102,6 +1142,12 @@ function CollectionModal({ target, onClose }: { target: CollectionTarget; onClos
             완납처리
           </button>
         </div>
+      </div>
+
+      {/* 수금일 */}
+      <div className="space-y-2">
+        <label className="text-xs font-medium text-slate-600">수금일</label>
+        <DateInput value={paidAtInput} onChange={setPaidAtInput} className="w-full" />
       </div>
 
       {/* 입력 후 미리보기 */}
@@ -1161,11 +1207,15 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
 
   function handleSave() {
     updateProject(target.projectId, {
-      docRequestDate: docRequestDate || undefined,
-      docReplyDate:   docReplyDate || undefined,
       assignedManager: assignedManager || undefined,
       registeredAt:   registeredAt || undefined,
     });
+    if (target.docFeeId) {
+      updateTermFee(target.docFeeId, {
+        docRequestDate: docRequestDate || undefined,
+        docReplyDate:   docReplyDate || undefined,
+      });
+    }
     if (target.leadMemberId) {
       updateProjectMember(target.leadMemberId, {
         contactName:  recipientName || undefined,
@@ -1479,7 +1529,7 @@ function useFeeRows(): FeeRow[] {
       groups.get(k)!.push(tf);
     });
 
-    const rows: FeeRow[] = Array.from(groups.entries()).map(([key, fees]) => {
+    const rows: FeeRow[] = Array.from(groups.entries()).flatMap(([key, fees]) => {
       const f0 = fees[0];
       const project = projects.find((p) => p.projectNumber === f0.projectNumber);
       const agency  = fundingAgencies.find((a) => a.id === (project?.agencyId ?? ""));
@@ -1489,36 +1539,10 @@ function useFeeRows(): FeeRow[] {
         feePolicies.find((p) => p.agencyId === null && p.status === "ACTIVE" && (p.programType ?? "GENERAL") === programType) ??
         null;
 
-      // 세금계산서
-      const invoice = taxInvoices.find(
-        (ti) => ti.projectNumber === f0.projectNumber && ti.termYear === f0.termYear && ti.termNumber === f0.termNumber
-      );
-
-      // 수금(receivable)
-      const rv = receivables.find(
-        (r) => r.projectNumber === f0.projectNumber && r.termYear === f0.termYear && r.termNumber === f0.termNumber
-      );
-
-      // 미청구
-      const ucRecord = unclaimedFees.find(
-        (u) => u.projectNumber === f0.projectNumber && u.termYear === f0.termYear && u.termNumber === f0.termNumber
-      );
-
-      // 주관기관 담당자 (projectMembers의 LEAD 기관 중 연락처 정보 있는 첫 번째)
-      const leadMember = projectMembers.find(
-        (pm) => pm.projectNumber === f0.projectNumber && pm.role === "LEAD"
-      );
-
-      // 이슈/메모 (최신순)
+      // 이슈/메모 (최신순) — 과제 단위라 기관별로 나뉘어도 동일하게 붙는다.
       const issues = projectIssues
         .filter((i) => i.projectNumber === f0.projectNumber)
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-
-      // 발행구분 — billingType 없으면 세금계산서 유무로 판별.
-      // 단, 취소된(CANCELED) 계산서는 "발행됨"으로 치지 않는다 — 안 그러면 발행 취소 후에도
-      // billingType이 비어있는 과제는 계속 "정발행"으로 표시되어 버린다.
-      const billingType = project?.billingType ?? (invoice && invoice.status !== "CANCELED" ? "정발행" : "");
-      const appliedFeeTotal = fees.reduce((s, f) => s + f.appliedFee, 0);
 
       // 과제구분(연차상시/정산)과 당해시작일/종료일은 과제 전체 기간이 아니라 "이 행이 나타내는 연차"
       // 기준으로 계산해야 한다 — 다년차 과제는 연차마다 행이 따로 나오므로, project 레벨 고정값을 그대로
@@ -1526,54 +1550,186 @@ function useFeeRows(): FeeRow[] {
       const termRange = project ? termDateRange(project.startDate, f0.termNumber) : null;
       const projectCategory = project ? (isSettlementTerm(project, f0.termNumber) ? "정산" : "연차상시") : "연차상시";
 
-      return {
-        key,
-        projectId:           project?.id ?? "",
-        leadInstitutionId:   project?.leadInstitutionId ?? "",
-        agencyShortName:     agency?.shortName ?? "",
-        projectNumber:       f0.projectNumber,
-        projectName:         f0.projectName,
-        leadInstitutionName: project?.leadInstitutionName ?? "",
-        researchLead:        project?.researchLead ?? "",
-        projectCategory,
-        startDate:           termRange?.start ?? project?.startDate ?? "",
-        endDate:             termRange?.end ?? project?.endDate ?? "",
-        stageStartDate:      project?.stageStartDate ?? "",
-        stageEndDate:        project?.stageEndDate ?? "",
-        billingType,
-        invoiceIssuedAt:     invoice?.issuedAt ?? "",
-        supplyAmount:        invoice?.supplyAmount ?? 0,
-        taxAmount:           invoice?.taxAmount ?? 0,
-        totalInvoiceAmount:  invoice?.totalAmount ?? 0,
-        receivableId:        rv?.id ?? "",
-        billedAmount:        rv?.billedAmount ?? 0,
-        collectionStatus:    rv?.status ?? "",
-        paidAmount:          rv?.paidAmount ?? 0,
-        receivableAmount:    rv?.receivableAmount ?? 0,
-        unclaimedAmount:     ucRecord?.amount ?? 0,
-        projectCode:         project?.projectCode ?? "",
-        agencyAssignedAt:    project?.agencyAssignedAt ?? "",
-        docRequestDate:      project?.docRequestDate ?? "",
-        docReplyDate:        project?.docReplyDate ?? "",
-        recipientName:       leadMember?.contactName ?? "",
-        recipientEmail:      leadMember?.contactEmail ?? "",
-        projectDivision:     project?.projectDivision ?? "",
-        assignedManager:     project?.assignedManager ?? "",
-        registeredAt:        project?.registeredAt ?? "",
-        taxInvoiceId:        invoice?.id ?? "",
-        taxInvoiceStatus:    invoice?.status ?? "",
-        appliedFeeTotal,
-        fees,
-        termYear:            f0.termYear,
-        termNumber:          f0.termNumber,
-        totalTerms:          project?.totalTerms ?? f0.termNumber,
-        effectivePolicy,
-        projectStatus:       project?.status ?? "",
-        unclaimedFeeId:      ucRecord?.id ?? "",
-        leadMemberId:        leadMember?.id ?? "",
-        issues,
-      };
+      // RDA2는 참여기관마다 계산서·공문발송·수금을 따로 관리하므로(과제 상세의 BillingBlock과 동일 기준),
+      // 실제로 수수료가 발생하는(appliedFee > 0) 기관마다 행을 따로 만든다. 그 외 전담기관은 지금까지와
+      // 동일하게 연차 전체를 기관 구분 없이 1행으로 합친다.
+      const isRda2 = project?.agencyId === "fa-006";
+      const splitUnits = isRda2 ? fees.filter((f) => f.appliedFee > 0) : [];
+      const unitGroups: TermFee[][] = splitUnits.length > 0 ? splitUnits.map((f) => [f]) : [fees];
+
+      return unitGroups.map((unitFees) => {
+        const isSplit = splitUnits.length > 0;
+        const primary = unitFees[0];
+
+        // 세금계산서 — 분리행이면 그 기관의 계산서만, 아니면 기존처럼 연차 통합 계산서를 찾는다.
+        const invoice = taxInvoices.find(
+          (ti) => ti.projectNumber === f0.projectNumber && ti.termYear === f0.termYear && ti.termNumber === f0.termNumber &&
+            (isSplit ? ti.institutionId === primary.institutionId : true)
+        );
+
+        // 수금(receivable)
+        const rv = receivables.find(
+          (r) => r.projectNumber === f0.projectNumber && r.termYear === f0.termYear && r.termNumber === f0.termNumber &&
+            (isSplit ? r.institutionId === primary.institutionId : true)
+        );
+
+        // 미청구 — 기관별 레코드가 없으므로 지금까지처럼 연차 단위로만 붙인다(분리행이어도 동일 값 공유).
+        const ucRecord = unclaimedFees.find(
+          (u) => u.projectNumber === f0.projectNumber && u.termYear === f0.termYear && u.termNumber === f0.termNumber
+        );
+
+        // 이 행의 청구 대상 기관 — 분리행이면 그 참여기관, 아니면 지금까지처럼 주관기관.
+        const billedInstitutionId   = isSplit ? primary.institutionId   : (project?.leadInstitutionId ?? primary.institutionId);
+        const billedInstitutionName = isSplit ? primary.institutionName : (project?.leadInstitutionName ?? primary.institutionName);
+
+        // 수신자 담당자 — 분리행이면 그 기관의 참여기관 레코드, 아니면 지금까지처럼 주관기관(LEAD) 레코드.
+        const recipientMember = isSplit
+          ? projectMembers.find((pm) => pm.projectNumber === f0.projectNumber && pm.institutionId === primary.institutionId)
+          : projectMembers.find((pm) => pm.projectNumber === f0.projectNumber && pm.role === "LEAD");
+
+        // 서류요청일/회신일을 들고 있는 TermFee — 분리행이면 그 기관 자신, 아니면 주관기관 쪽(없으면
+        // 청구(BILLED)된 쪽, 그것도 없으면 첫 번째 행)을 기본 소유자로 삼는다.
+        const docOwner = isSplit
+          ? primary
+          : unitFees.find((f) => f.institutionId === project?.leadInstitutionId) ?? unitFees.find((f) => f.status === "BILLED") ?? primary;
+
+        // 발행구분 — billingType 없으면 세금계산서 유무로 판별.
+        // 단, 취소된(CANCELED) 계산서는 "발행됨"으로 치지 않는다 — 안 그러면 발행 취소 후에도
+        // billingType이 비어있는 과제는 계속 "정발행"으로 표시되어 버린다.
+        const billingType = project?.billingType ?? (invoice && invoice.status !== "CANCELED" ? "정발행" : "");
+        // 타회계법인이 진행한 기관×연차는 삼화가 청구할 금액이 아니므로 appliedFeeTotal(실제 청구/발행 대상
+        // 금액)에서 제외한다 — 그 몫의 당해 미청구(15%)는 otherFirmUnclaimedTotal로 따로 보여주기만 하고,
+        // 정산연차가 되면 store.ts의 이월 로직이 알아서 그때 청구액에 합산한다.
+        const appliedFeeTotal = unitFees.reduce((s, f) => s + (f.otherFirmHandled ? 0 : f.appliedFee), 0);
+        const otherFirmHandled = unitFees.some((f) => f.otherFirmHandled);
+        const otherFirmUnclaimedTotal = unitFees.reduce((s, f) => s + (f.otherFirmHandled ? (f.unclaimedFee ?? 0) : 0), 0);
+
+        return {
+          key: isSplit ? `${key}|${primary.institutionId}` : key,
+          projectId:           project?.id ?? "",
+          leadInstitutionId:   project?.leadInstitutionId ?? "",
+          agencyShortName:     agency?.shortName ?? "",
+          projectNumber:       f0.projectNumber,
+          projectName:         f0.projectName,
+          leadInstitutionName: project?.leadInstitutionName ?? "",
+          billedInstitutionId,
+          billedInstitutionName,
+          isSplitRow:          isSplit,
+          researchLead:        project?.researchLead ?? "",
+          projectCategory,
+          startDate:           termRange?.start ?? project?.startDate ?? "",
+          endDate:             termRange?.end ?? project?.endDate ?? "",
+          stageStartDate:      project?.stageStartDate ?? "",
+          stageEndDate:        project?.stageEndDate ?? "",
+          billingType,
+          invoiceIssuedAt:     invoice?.issuedAt ?? "",
+          supplyAmount:        invoice?.supplyAmount ?? 0,
+          taxAmount:           invoice?.taxAmount ?? 0,
+          totalInvoiceAmount:  invoice?.totalAmount ?? 0,
+          receivableId:        rv?.id ?? "",
+          billedAmount:        rv?.billedAmount ?? 0,
+          collectionStatus:    rv?.status ?? "",
+          paidAmount:          rv?.paidAmount ?? 0,
+          paidAt:              rv?.paidAt ?? null,
+          receivableAmount:    rv?.receivableAmount ?? 0,
+          unclaimedAmount:     ucRecord?.amount ?? 0,
+          projectCode:         project?.projectCode ?? "",
+          agencyAssignedAt:    project?.agencyAssignedAt ?? "",
+          docFeeId:            docOwner?.id ?? "",
+          docRequestDate:      docOwner?.docRequestDate ?? "",
+          docReplyDate:        docOwner?.docReplyDate ?? "",
+          recipientName:       recipientMember?.contactName ?? "",
+          recipientEmail:      recipientMember?.contactEmail ?? "",
+          projectDivision:     project?.projectDivision ?? "",
+          assignedManager:     project?.assignedManager ?? "",
+          registeredAt:        project?.registeredAt ?? "",
+          taxInvoiceId:        invoice?.id ?? "",
+          taxInvoiceStatus:    invoice?.status ?? "",
+          appliedFeeTotal,
+          otherFirmHandled,
+          otherFirmUnclaimedTotal,
+          fees: unitFees,
+          termYear:            f0.termYear,
+          termNumber:          f0.termNumber,
+          totalTerms:          project?.totalTerms ?? f0.termNumber,
+          effectivePolicy,
+          projectStatus:       project?.status ?? "",
+          unclaimedFeeId:      ucRecord?.id ?? "",
+          leadMemberId:        recipientMember?.id ?? "",
+          issues,
+          noFeeRecord: false,
+        };
+      });
     });
+
+    // 연차별 수수료(TermFee) 기록이 하나도 없는 과제는 위 루프에서 아예 안 잡힌다 — 대시보드
+    // "과제 파이프라인"(진행중/완료/중단)에서 그런 과제를 클릭해 들어오면 리스트가 통째로 비어 보여서
+    // "왜 아무것도 안 보이지?"가 되므로, 과제 자체는 자리표시 행으로 보여주고 수수료 관련 칸만 비운다.
+    const projectNumbersWithFees = new Set(termFees.map((tf) => tf.projectNumber));
+    for (const project of projects) {
+      if (projectNumbersWithFees.has(project.projectNumber)) continue;
+      const agency = fundingAgencies.find((a) => a.id === project.agencyId);
+      const leadMember = projectMembers.find((pm) => pm.projectNumber === project.projectNumber && pm.role === "LEAD");
+      const issues = projectIssues
+        .filter((i) => i.projectNumber === project.projectNumber)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      const termRange = termDateRange(project.startDate, project.currentTerm);
+      rows.push({
+        key: `no-fee|${project.projectNumber}`,
+        projectId: project.id,
+        leadInstitutionId: project.leadInstitutionId ?? "",
+        agencyShortName: agency?.shortName ?? "",
+        projectNumber: project.projectNumber,
+        projectName: project.projectName,
+        leadInstitutionName: project.leadInstitutionName ?? "",
+        billedInstitutionId: project.leadInstitutionId ?? "",
+        billedInstitutionName: project.leadInstitutionName ?? "",
+        isSplitRow: false,
+        researchLead: project.researchLead ?? "",
+        projectCategory: isSettlementTerm(project, project.currentTerm) ? "정산" : "연차상시",
+        startDate: termRange?.start ?? project.startDate ?? "",
+        endDate: termRange?.end ?? project.endDate ?? "",
+        stageStartDate: project.stageStartDate ?? "",
+        stageEndDate: project.stageEndDate ?? "",
+        billingType: project.billingType ?? "",
+        invoiceIssuedAt: "",
+        supplyAmount: 0,
+        taxAmount: 0,
+        totalInvoiceAmount: 0,
+        receivableId: "",
+        billedAmount: 0,
+        collectionStatus: "",
+        paidAmount: 0,
+        paidAt: null,
+        receivableAmount: 0,
+        unclaimedAmount: 0,
+        projectCode: project.projectCode ?? "",
+        agencyAssignedAt: project.agencyAssignedAt ?? "",
+        docFeeId: "",
+        docRequestDate: "",
+        docReplyDate: "",
+        recipientName: leadMember?.contactName ?? "",
+        recipientEmail: leadMember?.contactEmail ?? "",
+        projectDivision: project.projectDivision ?? "",
+        assignedManager: project.assignedManager ?? "",
+        registeredAt: project.registeredAt ?? "",
+        taxInvoiceId: "",
+        taxInvoiceStatus: "",
+        appliedFeeTotal: 0,
+        fees: [],
+        termYear: termRange ? Number(termRange.start.slice(0, 4)) : new Date().getFullYear(),
+        termNumber: project.currentTerm,
+        totalTerms: project.totalTerms,
+        effectivePolicy: null,
+        projectStatus: project.status ?? "",
+        unclaimedFeeId: "",
+        leadMemberId: leadMember?.id ?? "",
+        issues,
+        otherFirmHandled: false,
+        otherFirmUnclaimedTotal: 0,
+        noFeeRecord: true,
+      });
+    }
 
     rows.sort((a, b) => {
       if (a.projectNumber !== b.projectNumber) return a.projectNumber.localeCompare(b.projectNumber);
@@ -1639,10 +1795,11 @@ function UnclaimedAmountCell({ row, canEdit }: { row: FeeRow; canEdit: boolean }
 // ── 열 헤더 정의 ──────────────────────────────────────────────
 const COLUMNS = [
   { key: "agencyShortName",    label: "약칭",        width: "w-20",  align: "text-center" },
-  { key: "projectNumber",      label: "과제번호",    width: "w-36",  align: "text-left"   },
-  { key: "projectName",        label: "과제명",      width: "w-44",  align: "text-left"   },
-  { key: "leadInstitutionName",label: "주관기관",    width: "w-32",  align: "text-left"   },
+  { key: "projectNumber",      label: "과제번호",    width: "w-32",  align: "text-left"   },
+  { key: "projectName",        label: "과제명",      width: "w-40",  align: "text-left"   },
+  { key: "leadInstitutionName",label: "주관기관",    width: "w-28",  align: "text-left"   },
   { key: "researchLead",       label: "연구책임자",  width: "w-20",  align: "text-center" },
+  { key: "billedInstitutionName",label: "청구기관",  width: "w-24",  align: "text-left"   },
   { key: "term",                label: "연차",        width: "w-16",  align: "text-center" },
   { key: "projectCategory",    label: "과제구분",    width: "w-24",  align: "text-center" },
   { key: "startDate",          label: "당해시작일",  width: "w-24",  align: "text-center" },
@@ -1654,6 +1811,7 @@ const COLUMNS = [
   { key: "totalInvoiceAmount", label: "합계",        width: "w-28",  align: "text-right"  },
   { key: "collectionStatus",   label: "수금표시",    width: "w-16",  align: "text-center" },
   { key: "paidAmount",         label: "수금액",      width: "w-28",  align: "text-right"  },
+  { key: "paidAt",             label: "수금일",      width: "w-24",  align: "text-center" },
   { key: "receivableAmount",   label: "미수액",      width: "w-28",  align: "text-right"  },
   { key: "unclaimedAmount",    label: "손실금액",    width: "w-28",  align: "text-right"  },
   { key: "projectCode",        label: "과제코드",    width: "w-32",  align: "text-left"   },
@@ -1670,7 +1828,7 @@ const COLUMNS = [
 // Tailwind의 w-* 유틸은 빌드 타임에 고정된 px값이라(w-20=80px 등) 여기서도 같은 값을 그대로 사용해
 // sticky left 오프셋을 누적 계산한다 — 폭이 바뀌면 이 표도 같이 맞춰야 한다.
 const STICKY_LEFT_KEYS = ["agencyShortName", "projectNumber", "projectName", "leadInstitutionName", "researchLead"] as const;
-const STICKY_COL_PX: Record<string, number> = { agencyShortName: 80, projectNumber: 144, projectName: 176, leadInstitutionName: 128, researchLead: 80 };
+const STICKY_COL_PX: Record<string, number> = { agencyShortName: 80, projectNumber: 128, projectName: 160, leadInstitutionName: 112, researchLead: 80 };
 const STICKY_CHECKBOX_PX = 32;
 const STICKY_CHEVRON_PX = 32;
 
@@ -2289,9 +2447,19 @@ export default function FeesPage() {
 
       case "projectName":
         return (
-          <Link href={`/projects/${row.projectId}`} className="block w-full font-medium text-blue-600 hover:underline hover:text-blue-800 text-xs line-clamp-2" title={row.projectName}>
-            {row.projectName}
-          </Link>
+          <div>
+            <Link href={`/projects/${row.projectId}`} className="block w-full font-medium text-blue-600 hover:underline hover:text-blue-800 text-xs line-clamp-2" title={row.projectName}>
+              {row.projectName}
+            </Link>
+            {row.noFeeRecord && (
+              <span
+                className="inline-block mt-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 whitespace-nowrap"
+                title="이 과제는 아직 연차별 수수료(TermFee)가 등록되지 않아 발행·수금 관련 칸이 비어 있습니다"
+              >
+                수수료 미등록
+              </span>
+            )}
+          </div>
         );
 
       case "leadInstitutionName":
@@ -2302,6 +2470,11 @@ export default function FeesPage() {
       case "researchLead":
         return row.researchLead ? (
           <Link href={`/researchers/${encodeURIComponent(row.researchLead)}`} className="block truncate text-xs text-slate-700 hover:text-blue-600 hover:underline transition-colors" title={row.researchLead}>{row.researchLead}</Link>
+        ) : <span className="text-slate-300">—</span>;
+
+      case "billedInstitutionName":
+        return row.billedInstitutionName ? (
+          <Link href={`/institutions/${row.billedInstitutionId}`} className="block truncate text-xs text-slate-700 hover:text-blue-600 hover:underline transition-colors" title={row.billedInstitutionName}>{row.billedInstitutionName}</Link>
         ) : <span className="text-slate-300">—</span>;
 
       case "term":
@@ -2323,11 +2496,23 @@ export default function FeesPage() {
         return <span className="text-xs text-slate-600">{row.endDate ? fmtDate(row.endDate) : "—"}</span>;
 
       case "billingType":
-        return row.billingType ? (
-          <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded whitespace-nowrap ${BILLING_TYPE_COLOR[row.billingType] ?? "bg-slate-100 text-slate-600"}`}>
-            {row.billingType}
-          </span>
-        ) : <span className="text-slate-300">—</span>;
+        return (
+          <div className="flex flex-col items-center gap-0.5">
+            {row.billingType ? (
+              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded whitespace-nowrap ${BILLING_TYPE_COLOR[row.billingType] ?? "bg-slate-100 text-slate-600"}`}>
+                {row.billingType}
+              </span>
+            ) : <span className="text-slate-300">—</span>}
+            {row.otherFirmHandled && (
+              <span
+                className="text-[9px] font-medium px-1.5 py-0.5 rounded whitespace-nowrap bg-orange-100 text-orange-700"
+                title={`이 연차는 타회계법인이 진행해 삼화 청구액에서 제외됩니다. 당해 미청구(15%) ${fmtWon(row.otherFirmUnclaimedTotal)}은 정산연차에 자동 이월됩니다.`}
+              >
+                타회계법인 진행
+              </span>
+            )}
+          </div>
+        );
 
       case "invoiceIssuedAt":
         return <span className="text-xs text-slate-600">{row.invoiceIssuedAt ? fmtDate(row.invoiceIssuedAt) : "—"}</span>;
@@ -2354,6 +2539,9 @@ export default function FeesPage() {
             {row.paidAmount > 0 ? fmtWon(row.paidAmount) : "—"}
           </span>
         );
+
+      case "paidAt":
+        return <span className="text-xs text-slate-600">{row.paidAt ? fmtDate(row.paidAt) : "—"}</span>;
 
       case "receivableAmount":
         return (
@@ -2404,8 +2592,25 @@ export default function FeesPage() {
           </span>
         ) : <span className="text-slate-300">—</span>;
 
-      case "assignedManager":
-        return <span className="text-xs text-slate-700">{row.assignedManager || "—"}</span>;
+      case "assignedManager": {
+        if (!row.assignedManager) return <span className="text-slate-300">—</span>;
+        const matches = users.filter((u) => u.name === row.assignedManager);
+        if (matches.length === 1) {
+          return (
+            <Link href={`/admin/users/${matches[0].id}`} className="block truncate text-xs text-slate-700 hover:text-blue-600 hover:underline transition-colors" title={row.assignedManager}>
+              {row.assignedManager}
+            </Link>
+          );
+        }
+        if (matches.length > 1) {
+          return (
+            <span className="text-xs text-amber-600" title="동명이인이 등록되어 있어 담당자 상세페이지로 연결할 수 없습니다">
+              {row.assignedManager} ⚠
+            </span>
+          );
+        }
+        return <span className="text-xs text-slate-700">{row.assignedManager}</span>;
+      }
 
       default:
         return null;
@@ -2419,6 +2624,7 @@ export default function FeesPage() {
       "과제명": r.projectName,
       "주관기관": r.leadInstitutionName,
       "연구책임자": r.researchLead,
+      "청구기관": r.billedInstitutionName,
       "연차": `${r.termNumber}/${r.totalTerms}`,
       "과제구분": r.projectCategory,
       "당해시작일": r.startDate,
@@ -2430,6 +2636,7 @@ export default function FeesPage() {
       "합계": r.totalInvoiceAmount,
       "수금상태": COLLECTION_STATUS_LABEL[r.collectionStatus] ?? "",
       "수금액": r.paidAmount,
+      "수금일": r.paidAt ?? "",
       "미수액": r.receivableAmount,
       "손실금액": r.unclaimedAmount,
       "과제코드": r.projectCode,
@@ -2835,14 +3042,16 @@ export default function FeesPage() {
                       <td className={`px-3 py-2.5 text-center align-middle w-24 ${rowBorder}`}>
                         {canEditEmails && row.taxInvoiceId && row.taxInvoiceStatus !== "CANCELED" ? (
                           <DispatchDropdown
-                            onSelect={(choice) =>
+                            onSelect={(choice) => {
+                              const dispatchProject = projects.find((p) => p.id === row.projectId);
+                              const dispatchAgency = fundingAgencies.find((a) => a.id === dispatchProject?.agencyId);
                               setModal({
                                 mode: "dispatch",
                                 target: {
                                   kind:                choice.kind,
                                   projectNumber:       row.projectNumber,
                                   projectName:         row.projectName,
-                                  leadInstitutionName: row.leadInstitutionName,
+                                  leadInstitutionName: row.billedInstitutionName,
                                   agencyShortName:     row.agencyShortName,
                                   termYear:            row.termYear,
                                   termNumber:          row.termNumber,
@@ -2856,9 +3065,13 @@ export default function FeesPage() {
                                   endDate:             row.endDate,
                                   stageStartDate:      row.stageStartDate,
                                   stageEndDate:        row.stageEndDate,
+                                  researchLead:        row.researchLead,
+                                  agencyFullName:      dispatchAgency?.name ?? row.agencyShortName,
+                                  participantCount:    projectMembers.filter((m) => m.projectId === row.projectId).length,
+                                  docNumber:           generateDocNumber(),
                                 },
-                              })
-                            }
+                              });
+                            }}
                           />
                         ) : (
                           <span className="text-slate-300 text-xs">—</span>
@@ -2876,7 +3089,8 @@ export default function FeesPage() {
                                     projectId:           row.projectId,
                                     projectNumber:       row.projectNumber,
                                     projectName:         row.projectName,
-                                    leadInstitutionName: row.leadInstitutionName,
+                                    leadInstitutionName: row.billedInstitutionName,
+                                    institutionId:       row.isSplitRow ? row.billedInstitutionId : undefined,
                                     termYear:            row.termYear,
                                     termNumber:          row.termNumber,
                                     currentBillingType:  row.billingType,
@@ -2902,7 +3116,8 @@ export default function FeesPage() {
                                       projectId:           row.projectId,
                                       projectNumber:       row.projectNumber,
                                       projectName:         row.projectName,
-                                      leadInstitutionName: row.leadInstitutionName,
+                                      leadInstitutionName: row.billedInstitutionName,
+                                      institutionId:       row.isSplitRow ? row.billedInstitutionId : undefined,
                                       termYear:            row.termYear,
                                       termNumber:          row.termNumber,
                                       currentBillingType:  row.billingType,
@@ -2935,9 +3150,10 @@ export default function FeesPage() {
                                 target: {
                                   receivableId:       row.receivableId,
                                   projectName:        row.projectName,
-                                  leadInstitutionName:row.leadInstitutionName,
+                                  leadInstitutionName:row.billedInstitutionName,
                                   billedAmount:       row.billedAmount,
                                   paidAmount:         row.paidAmount,
+                                  paidAt:             row.paidAt,
                                   receivableAmount:   row.receivableAmount,
                                 },
                               })
@@ -2967,6 +3183,7 @@ export default function FeesPage() {
                                   projectId:       row.projectId,
                                   projectName:     row.projectName,
                                   leadMemberId:    row.leadMemberId,
+                                  docFeeId:        row.docFeeId,
                                   docRequestDate:  row.docRequestDate,
                                   docReplyDate:    row.docReplyDate,
                                   recipientName:   row.recipientName,

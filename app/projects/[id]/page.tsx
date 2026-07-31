@@ -1,6 +1,7 @@
 "use client";
 
-import { use, useState, useMemo, useEffect, type ReactNode } from "react";
+import { use, useState, useMemo, useEffect, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -12,8 +13,8 @@ import {
   updateProjectMember, autoGenerateTermFees, addProjectMember, deleteProjectMember, deleteProject,
   setTermOtherFirmHandled,
 } from "@/lib/store";
-import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type SystemUser, type EmailDispatch, EMPTY_NOTICE_TEMPLATE, COMPANY_INFO } from "@/lib/mock";
-import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isNonProfitInstitution, resolveRdaAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, type CalcMember } from "@/lib/fee-calculator";
+import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type SystemUser, type EmailDispatch, type FeePolicy, EMPTY_NOTICE_TEMPLATE, COMPANY_INFO } from "@/lib/mock";
+import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isNonProfitInstitution, isExcludedMember, resolveRdaAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, type CalcMember } from "@/lib/fee-calculator";
 import { fmtWonFull, fmtDate, splitVatInclusive, addMonths, termDateRange } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
@@ -452,17 +453,12 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
           </div>
         </div>
         <div className="px-5 py-5 space-y-4">
-          {/* 과제번호 + 과제명 + 상태 */}
-          <div className="grid grid-cols-4 gap-4">
+          {/* 과제코드 + 상태 */}
+          <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">과제번호</label>
-              <input className={`${inp} w-full font-mono`} value={draft.projectNumber}
-                onChange={(e) => setDraft((p) => ({ ...p, projectNumber: e.target.value }))} />
-            </div>
-            <div className="col-span-2">
-              <label className="block text-xs font-medium text-slate-500 mb-1">과제명</label>
-              <input className={`${inp} w-full`} value={draft.projectName}
-                onChange={(e) => setDraft((p) => ({ ...p, projectName: e.target.value }))} />
+              <label className="block text-xs font-medium text-slate-500 mb-1">과제코드</label>
+              <input className={`${inp} w-full font-mono`} value={draft.projectCode ?? ""}
+                onChange={(e) => setDraft((p) => ({ ...p, projectCode: e.target.value }))} />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">상태</label>
@@ -475,15 +471,12 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             </div>
           </div>
 
-          {/* 주관기관 + 지원기관 */}
-          <div className="grid grid-cols-3 gap-4">
-            <div className="col-span-2">
-              <InstitutionQuickAdd
-                label="주관기관"
-                value={draft.leadInstitutionId}
-                onChange={(id) => setDraft((p) => ({ ...p, leadInstitutionId: id }))}
-                institutions={institutions}
-              />
+          {/* 과제번호 + 전담기관 */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">과제번호</label>
+              <input className={`${inp} w-full font-mono`} value={draft.projectNumber}
+                onChange={(e) => setDraft((p) => ({ ...p, projectNumber: e.target.value }))} />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">전담기관</label>
@@ -500,6 +493,30 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             </div>
           </div>
 
+          {/* 과제명 */}
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">과제명</label>
+            <input className={`${inp} w-full`} value={draft.projectName}
+              onChange={(e) => setDraft((p) => ({ ...p, projectName: e.target.value }))} />
+          </div>
+
+          {/* 주관기관 + 연구책임자명 */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <InstitutionQuickAdd
+                label="주관기관"
+                value={draft.leadInstitutionId}
+                onChange={(id) => setDraft((p) => ({ ...p, leadInstitutionId: id }))}
+                institutions={institutions}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">연구책임자명</label>
+              <input className={`${inp} w-full`} value={draft.researchLead ?? ""}
+                onChange={(e) => setDraft((p) => ({ ...p, researchLead: e.target.value }))} />
+            </div>
+          </div>
+
           {/* 사업비 구분 (총사업비 / 현금사업비 / 현물사업비) */}
           <div className="rounded-lg border border-slate-100 bg-slate-50/50 px-4 py-3 space-y-3">
             <p className="text-xs font-semibold text-slate-600">사업비 구분 (총사업비 / 현금사업비 / 현물사업비)</p>
@@ -510,12 +527,11 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                   onChange={(v) => setDraft((p) => ({ ...p, govGrant: v }))} />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">
-                  사용실적 제출기한
-                  <span className="ml-1 text-slate-400 font-normal">· 전담기관 사용실적보고서 기준</span>
-                </label>
-                <DateInput className="w-full" value={draft.usageReportDeadline ?? ""}
-                  onChange={(v) => setDraft((p) => ({ ...p, usageReportDeadline: v }))} />
+                <label className="block text-xs font-medium text-slate-500 mb-1">공동기관 수</label>
+                <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-white text-slate-500">
+                  {members.filter((m) => m.role === "PARTICIPANT").length}개
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1">참여기관 목록에서 기관을 추가·삭제하면 자동 반영됩니다</p>
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">당해 민간현금 (원)</label>
@@ -523,11 +539,12 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                   onChange={(v) => setDraft((p) => ({ ...p, privateCash: v }))} />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">공동기관 수</label>
-                <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-white text-slate-500">
-                  {members.filter((m) => m.role === "PARTICIPANT").length}개
-                </div>
-                <p className="text-[10px] text-slate-400 mt-1">참여기관 목록에서 기관을 추가·삭제하면 자동 반영됩니다</p>
+                <label className="block text-xs font-medium text-slate-500 mb-1">
+                  사용실적 제출기한
+                  <span className="ml-1 text-slate-400 font-normal">· 전담기관 사용실적보고서 기준</span>
+                </label>
+                <DateInput className="w-full" value={draft.usageReportDeadline ?? ""}
+                  onChange={(v) => setDraft((p) => ({ ...p, usageReportDeadline: v }))} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">당해 민간현물 (원)</label>
@@ -626,11 +643,12 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               </div>
             </div>
             {draft.projectType === "AUTONOMY_TRACK" && (
-              <div className="col-span-3">
-                <label className="block text-xs font-medium text-slate-500 mb-1">
-                  자율성트랙 정산구분 <span className="text-slate-400 font-normal">· 참여기관별 정산구분과 별개로, 과제 전체에 일괄 적용됩니다</span>
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1"
+                  title="참여기관별 정산구분과 별개로, 과제 전체에 일괄 적용됩니다">
+                  자율성트랙 정산구분
                 </label>
-                <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-medium max-w-xs">
+                <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-medium">
                   <button type="button"
                     onClick={() => setDraft((p) => ({ ...p, autonomySettlementType: "자체정산" }))}
                     className={`flex-1 px-2 py-1.5 transition-colors ${
@@ -1780,9 +1798,46 @@ function AddMemberForm({
 // ─── 수수료(적용) 금액 직접 수정 셀 ───────────────────────────
 // 자동산정된 값을 그대로 청구하기 어려운 협의 건이 있어, 담당자가 최종 청구액을 직접 조정할 수
 // 있게 한다. 한번 직접 수정하면(manualOverride) "수수료 재계산"을 눌러도 이 값은 보존된다.
-function AppliedFeeCell({ fee, canEdit, projectId }: { fee: TermFee; canEdit: boolean; projectId: string }) {
+// ─── 적용액이 0원(미적용)인 이유 설명 ───────────────────────────
+// "왜 0원이지?"에 답하기 위해, 실제 계산 로직(fee-calculator의 완전제외 조건)과 동일한 기준으로
+// 이유를 되짚어본다. 정책상 제외가 아니면 사업비 미입력/직접수정 등 다른 이유를 순서대로 확인한다.
+function zeroFeeReasons(f: TermFee, role: string | undefined, grade: string, policy: FeePolicy | null | undefined): string[] {
+  const reasons: string[] = [];
+  if (policy?.excludeLeadFromCalc === true && role === "LEAD") {
+    reasons.push("주관기관은 이 전담기관 정책상 산정기준액에서 완전히 제외됩니다.");
+  }
+  if (policy && isExcludedMember(grade, f.institutionType, policy)) {
+    reasons.push(`${GRADE_LABEL[grade] ?? grade} 등급 비영리기관은 이 전담기관 정책상 산정기준액에서 완전히 제외됩니다(면제등급 완전제외 정책).`);
+  }
+  if (reasons.length === 0 && f.manualOverride) {
+    reasons.push("담당자가 금액을 0원으로 직접 수정했습니다.");
+  }
+  if (reasons.length === 0 && f.budget === 0) {
+    reasons.push("이 연차에 입력된 사업비가 없어 수수료가 발생하지 않았습니다.");
+  }
+  if (reasons.length === 0) {
+    reasons.push("사업비 대비 산정된 수수료가 0원입니다(최저금액 미만이거나 계산 결과가 0원).");
+  }
+  return reasons;
+}
+
+function AppliedFeeCell({ fee, canEdit, projectId, zeroReasons }: { fee: TermFee; canEdit: boolean; projectId: string; zeroReasons: string[] }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(fee.appliedFee);
+  const [showReason, setShowReason] = useState(false);
+  const [reasonPos, setReasonPos] = useState<{ top: number; left: number } | null>(null);
+  const reasonBtnRef = useRef<HTMLButtonElement>(null);
+
+  // 말풍선을 fixed로 body에 직접 그린다 — 표가 overflow-x-auto로 가로 스크롤되는 컨테이너 안에
+  // 있어서, absolute로 표 안에 그리면 스크롤 영역 경계에서 잘려 보인다.
+  function toggleReason() {
+    if (!showReason && reasonBtnRef.current) {
+      const rect = reasonBtnRef.current.getBoundingClientRect();
+      const width = 256; // w-64
+      setReasonPos({ top: rect.bottom + 6, left: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)) });
+    }
+    setShowReason((v) => !v);
+  }
 
   function startEdit() {
     setDraft(fee.appliedFee);
@@ -1826,14 +1881,199 @@ function AppliedFeeCell({ fee, canEdit, projectId }: { fee: TermFee; canEdit: bo
           직접수정됨 · 되돌리기
         </button>
       )}
-      <span className={fee.appliedFee === 0 ? "text-amber-500 font-normal" : "text-slate-800"}>
-        {fee.appliedFee === 0 ? "미적용" : fmtWonFull(fee.appliedFee)}
-      </span>
+      {fee.appliedFee === 0 ? (
+        <>
+          <button
+            ref={reasonBtnRef}
+            type="button"
+            onClick={toggleReason}
+            className="text-amber-500 font-normal underline decoration-dotted underline-offset-2 hover:text-amber-600"
+          >
+            미적용
+          </button>
+          {showReason && reasonPos && createPortal(
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setShowReason(false)} />
+              <div
+                className="fixed z-50 w-64 rounded-lg border border-slate-200 bg-white shadow-lg px-3 py-2.5 text-left"
+                style={{ top: reasonPos.top, left: reasonPos.left }}
+              >
+                <p className="text-[10px] font-semibold text-slate-400 tracking-wide mb-1 break-keep">왜 미적용(0원)인가요?</p>
+                <ul className="text-[11px] text-slate-600 space-y-1 list-disc list-inside break-keep">
+                  {zeroReasons.map((r, i) => <li key={i}>{r}</li>)}
+                </ul>
+              </div>
+            </>,
+            document.body
+          )}
+        </>
+      ) : (
+        <span className="text-slate-800">{fmtWonFull(fee.appliedFee)}</span>
+      )}
       {canEditThis && (
         <button type="button" onClick={startEdit} title="금액 직접 수정"
           className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-blue-600 transition-opacity">
           <FiEdit2 size={11} />
         </button>
+      )}
+    </div>
+  );
+}
+
+// ─── 연차 수수료 집계(공급가액/합계) 직접 수정 ───────────────────
+// 개별 기관 행은 AppliedFeeCell로 조정하지만, 협의 금액을 부가세 포함/별도 기준으로 한 번에
+// 맞추고 싶을 때가 있어 집계 박스에서도 공급가액·합계를 직접 조정할 수 있게 한다. 여러 기관이
+// 걸친 연차는 조정분을 기존 적용액 비율대로 나눠 각 기관 행(TermFee.appliedFee)에 반영한다.
+function FeeAggregateSummary({ group, canEdit, projectId }: { group: TermGroup; canEdit: boolean; projectId: string }) {
+  const { auditLog } = useStore();
+  const [editing, setEditing] = useState(false);
+  const [supplyDraft, setSupplyDraft] = useState(0);
+  const [reason, setReason] = useState("");
+  const [showHistory, setShowHistory] = useState(false);
+
+  const { supplyAmount: aggSupply, taxAmount: aggTax } = splitVatInclusive(group.totalApplied);
+  const overriddenFee = group.fees.find((f) => f.manualOverride && f.manualOverrideReason);
+  // 세금계산서가 이미 발행된(BILLED) 연차는 청구액을 여기서 더 건드릴 수 없다 — 발행 취소 후 수정.
+  const canEditThis = canEdit && group.termStatus !== "BILLED";
+
+  // 합계는 공급가액에서 파생되는 값이라(합계 = 공급가액 × 1.1) 공급가액만 입력받으면 충분하다 —
+  // 둘 다 입력란으로 두면 어느 쪽이 기준인지 헷갈리고 서로 어긋난 값을 입력할 여지가 생긴다.
+  const totalDraft = Math.round(supplyDraft * 1.1);
+
+  // 수정이력 — TermFee.manualOverrideReason은 값을 덮어쓰므로 화면엔 최신 사유만 남지만, 실제 변경
+  // 기록은 updateTermFee가 매번 감사로그(auditLog)에 남긴다. 그걸 모아 이 연차의 직접수정 이력으로 보여준다.
+  // 저장 1회가 기관별 TermFee 여러 건을 동시에 갱신해 항목마다 로그가 따로 남으므로, 같은 저장에서
+  // 나온 항목은 일시+사유로 묶어 하나의 이력 줄로 합친다.
+  const feeIds = new Set(group.fees.map((f) => f.id));
+  const overrideEntries = auditLog.filter(
+    (e) => e.entityType === "termFee" && feeIds.has(e.entityId) && e.changedFields?.manualOverrideReason
+  );
+  const historySeen = new Set<string>();
+  const overrideHistory = overrideEntries
+    .filter((e) => {
+      const reasonAfter = String(e.changedFields!.manualOverrideReason!.after ?? "");
+      const dedupeKey = `${e.performedAt}|${reasonAfter}`;
+      if (historySeen.has(dedupeKey)) return false;
+      historySeen.add(dedupeKey);
+      return true;
+    })
+    .sort((a, b) => b.performedAt.localeCompare(a.performedAt));
+
+  function startEdit() {
+    setSupplyDraft(aggSupply);
+    setReason("");
+    setEditing(true);
+  }
+  function changeSupply(v: number) {
+    setSupplyDraft(v);
+  }
+  function save() {
+    if (!reason.trim()) return;
+    const fees = group.fees;
+    const oldTotal = fees.reduce((s, f) => s + f.appliedFee, 0);
+    let allocated = 0;
+    fees.forEach((f, i) => {
+      const isLast = i === fees.length - 1;
+      const share = isLast
+        ? totalDraft - allocated
+        : Math.round(totalDraft * (oldTotal > 0 ? f.appliedFee / oldTotal : 1 / fees.length));
+      if (!isLast) allocated += share;
+      updateTermFee(f.id, { appliedFee: share, manualOverride: true, manualOverrideReason: reason.trim() });
+    });
+    setEditing(false);
+  }
+  function revert() {
+    group.fees.forEach((f) => updateTermFee(f.id, { manualOverride: false, manualOverrideReason: undefined }));
+    autoGenerateTermFees(projectId);
+  }
+
+  if (editing) {
+    return (
+      <div className="border-t border-slate-200 px-5 py-3 bg-blue-50/40 space-y-3">
+        <div className="flex items-center justify-end gap-6">
+          <div className="text-right">
+            <p className="text-[10px] text-slate-400 mb-1">공 급 가 액</p>
+            <MoneyInput value={supplyDraft} onChange={changeSupply}
+              className="w-36 text-right text-sm border border-blue-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/30" />
+          </div>
+          <div className="text-right">
+            <p className="text-[10px] text-slate-400 mb-1">부 가 세</p>
+            <p className="text-sm font-semibold text-slate-500 py-1.5">{fmtWonFull(totalDraft - supplyDraft)}</p>
+          </div>
+          <div className="text-right">
+            <p className="text-[10px] font-semibold text-slate-500 mb-1 tracking-widest uppercase">합 계</p>
+            <p className="text-sm font-bold text-slate-800 py-1.5">{fmtWonFull(totalDraft)}</p>
+          </div>
+        </div>
+        <div>
+          <label className="block text-[10px] text-slate-500 mb-1">수정 사유 (필수)</label>
+          <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={2}
+            placeholder="예: 협의에 따라 청구액을 일부 조정함"
+            className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500/30" />
+        </div>
+        <div className="flex justify-end gap-2">
+          <button onClick={() => setEditing(false)} className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
+          <button onClick={save} disabled={!reason.trim()}
+            className="flex items-center gap-1 px-4 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+            <FiCheck size={12} /> 저장
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-t border-slate-200 bg-slate-50/60">
+      <div className="px-5 py-3 flex items-center justify-end gap-10">
+        {overriddenFee && (
+          <div className="text-left mr-auto max-w-md">
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={revert} className="text-[10px] text-purple-500 hover:text-purple-700 hover:underline">
+                합계 직접수정됨 · 되돌리기
+              </button>
+              {overrideHistory.length > 1 && (
+                <button type="button" onClick={() => setShowHistory((v) => !v)}
+                  className="text-[10px] text-slate-400 hover:text-slate-600 hover:underline">
+                  수정이력 {overrideHistory.length}건 {showHistory ? "숨기기" : "보기"}
+                </button>
+              )}
+            </div>
+            <p className="text-[10px] text-slate-400 mt-0.5 leading-tight">사유: {overriddenFee.manualOverrideReason}</p>
+          </div>
+        )}
+        <div className="text-right">
+          <p className="text-[10px] text-slate-400 mb-0.5">공 급 가 액</p>
+          <p className="text-sm font-semibold text-slate-700">{fmtWonFull(aggSupply)}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-[10px] text-slate-400 mb-0.5">부 가 세</p>
+          <p className="text-sm font-semibold text-slate-700">{fmtWonFull(aggTax)}</p>
+        </div>
+        <div className="border-l border-slate-300 pl-10 text-right flex items-center gap-2">
+          <div>
+            <p className="text-[10px] font-semibold text-slate-500 mb-0.5 tracking-widest uppercase">합  계</p>
+            <p className="text-lg font-bold text-slate-900">{fmtWonFull(group.totalApplied)}</p>
+          </div>
+          {canEditThis && (
+            <button type="button" onClick={startEdit} title="합계·공급가액 직접 수정"
+              className="text-slate-400 hover:text-blue-600 transition-colors">
+              <FiEdit2 size={13} />
+            </button>
+          )}
+        </div>
+      </div>
+      {showHistory && overrideHistory.length > 0 && (
+        <div className="px-5 pb-3">
+          <ul className="border border-slate-200 rounded-lg divide-y divide-slate-100 bg-white overflow-hidden">
+            {overrideHistory.map((e) => (
+              <li key={e.id} className="px-3 py-2 text-[11px] flex items-start gap-3">
+                <span className="font-mono text-slate-400 whitespace-nowrap">{e.performedAt}</span>
+                <span className="text-slate-500 whitespace-nowrap">{e.performedBy}</span>
+                <span className="text-slate-600 flex-1">{String(e.changedFields!.manualOverrideReason!.after ?? "")}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );
@@ -2214,7 +2454,8 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
   const canEditUnclaimed = useCanWrite('unclaimed');
   const canEditFees = useCanWrite('fees');
   const canManageOtherFirm = useCanWrite('fees-other-firm');
-  const { institutions, emailDispatches, fundingAgencies } = useStore();
+  const { institutions, emailDispatches, fundingAgencies, feePolicies } = useStore();
+  const policy = resolvePolicy(project.agencyId, feePolicies, project.programType ?? "GENERAL");
   // 이 연차를 타회계법인이 진행했는지 여부 — 연차 내 기관별 행 전체에 동일하게 반영되므로 첫 행 값을 대표로 사용
   const otherFirmHandled = group.fees[0]?.otherFirmHandled ?? false;
   function toggleOtherFirmHandled(checked: boolean) {
@@ -2485,7 +2726,12 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                             </span>}
                       </td>
                       <td className="px-4 py-2.5 text-right font-semibold whitespace-nowrap">
-                        <AppliedFeeCell fee={f} canEdit={canEditFees} projectId={project.id} />
+                        <AppliedFeeCell
+                          fee={f}
+                          canEdit={canEditFees}
+                          projectId={project.id}
+                          zeroReasons={f.appliedFee === 0 ? zeroFeeReasons(f, gradeMember?.role, grade, policy) : []}
+                        />
                       </td>
                       {showFeeDetail && (
                         <td className="px-4 py-2.5 text-right whitespace-nowrap">
@@ -2547,26 +2793,11 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
             </table>
           </div>
 
-          {/* 수수료 집계: 공급가액 / 부가세 / 합계 — 산정된 수수료는 부가세 포함 금액이므로 분리해서 표시 */}
-          {group.totalApplied > 0 && (() => {
-            const { supplyAmount: aggSupply, taxAmount: aggTax } = splitVatInclusive(group.totalApplied);
-            return (
-              <div className="border-t border-slate-200 px-5 py-3 bg-slate-50/60 flex items-center justify-end gap-10">
-                <div className="text-right">
-                  <p className="text-[10px] text-slate-400 mb-0.5">공 급 가 액</p>
-                  <p className="text-sm font-semibold text-slate-700">{fmtWonFull(aggSupply)}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-[10px] text-slate-400 mb-0.5">부 가 세</p>
-                  <p className="text-sm font-semibold text-slate-700">{fmtWonFull(aggTax)}</p>
-                </div>
-                <div className="border-l border-slate-300 pl-10 text-right">
-                  <p className="text-[10px] font-semibold text-slate-500 mb-0.5 tracking-widest uppercase">합  계</p>
-                  <p className="text-lg font-bold text-slate-900">{fmtWonFull(group.totalApplied)}</p>
-                </div>
-              </div>
-            );
-          })()}
+          {/* 수수료 집계: 공급가액 / 부가세 / 합계 — 산정된 수수료는 부가세 포함 금액이므로 분리해서 표시.
+              필요 시 합계·공급가액을 직접 조정할 수 있고, 그때는 사유 입력이 필수다. */}
+          {group.totalApplied > 0 && (
+            <FeeAggregateSummary group={group} canEdit={canEditFees} projectId={project.id} />
+          )}
 
           {/* ── 세금계산서 + 공문발송 + 수금 (RDA2는 기관별로 여러 블록, 그 외엔 통합 1블록) ── */}
           {billingUnits.map((unit) => (

@@ -720,8 +720,8 @@ export interface Project {
   // 미지정 시 "자체정산"으로 취급한다.
   autonomySettlementType?: "위탁정산" | "자체정산";
   programType?: "GENERAL" | "ICT_FUND";        // 일반 R&D과제 | ICT 기금사업 (IITP 전용 별도 수수료체계)
-  docRequestDate?: string;  // 서류 요청일
-  docReplyDate?: string;    // 서류 회신일
+  // 서류요청일/회신일(공문발송일)은 기관별로 다를 수 있어(RDA2 등 기관별 개별청구 과제) TermFee.docRequestDate/
+  // docReplyDate로 관리한다 — 과제 레벨엔 두지 않는다.
   assignedManager?: string; // 삼화 담당자
   registeredAt?: string;    // 과제 등록일 — 연도별 대시보드 집계 기준(배정일). 과거 데이터는 미입력일 수 있음
 }
@@ -751,8 +751,6 @@ export const projects: Project[] = [
     researchLead: "김기술",
     projectCode: "KEIT-2024-001",
     projectDivision: "위탁",
-    docRequestDate: "2024-07-10",
-    docReplyDate: "2024-07-22",
     assignedManager: "박담당",
     registeredAt: "2023-03-15",
   },
@@ -775,8 +773,6 @@ export const projects: Project[] = [
     researchLead: "이연구",
     projectCode: "KETEP-2024-001",
     projectDivision: "위탁",
-    docRequestDate: "2024-03-15",
-    docReplyDate: "2024-03-28",
     assignedManager: "이회계",
     registeredAt: "2024-01-10",
   },
@@ -797,7 +793,6 @@ export const projects: Project[] = [
     researchLead: "박민준",
     projectCode: "SMTECH-2024-001",
     projectDivision: "공동",
-    docRequestDate: "2024-11-05",
     assignedManager: "김관리",
     registeredAt: "2022-06-10",
   },
@@ -818,8 +813,6 @@ export const projects: Project[] = [
     researchLead: "최지훈",
     projectCode: "KIAT-2023-001",
     projectDivision: "위탁",
-    docRequestDate: "2024-09-20",
-    docReplyDate: "2024-09-30",
     assignedManager: "박담당",
     registeredAt: "2023-04-12",
   },
@@ -841,7 +834,6 @@ export const projects: Project[] = [
     projectCode: "KETEP-2024-002",
     billingType: "역발행요청",
     projectDivision: "위탁",
-    docRequestDate: "2024-05-10",
     assignedManager: "이회계",
     registeredAt: "2024-03-08",
   },
@@ -862,8 +854,6 @@ export const projects: Project[] = [
     researchLead: "한재원",
     projectCode: "KEIT-2024-002",
     projectDivision: "위탁",
-    docRequestDate: "2024-06-15",
-    docReplyDate: "2024-06-25",
     assignedManager: "김관리",
     registeredAt: "2024-04-15",
   },
@@ -884,8 +874,6 @@ export const projects: Project[] = [
     researchLead: "송현구",
     projectCode: "KARI-2023-001",
     projectDivision: "위탁",
-    docRequestDate: "2024-08-12",
-    docReplyDate: "2024-08-20",
     assignedManager: "박담당",
     registeredAt: "2022-07-20",
   },
@@ -1650,10 +1638,16 @@ export interface TermFee {
   /** 담당자가 수수료(적용) 금액을 직접 수정했는지 여부. true면 CONFIRMED/BILLED와 마찬가지로
    *  autoGenerateTermFees가 재계산 시 이 항목을 건드리지 않고 그대로 보존한다. */
   manualOverride?: boolean;
+  /** manualOverride로 금액을 직접 수정한 사유. 수수료 집계(합계/공급가액) 직접 수정 시 필수 입력. */
+  manualOverrideReason?: string;
   /** 이 연차를 삼화가 아닌 타회계법인이 진행했는지 여부(단계협약 등으로 과거 연차의 담당
    *  회계법인이 바뀐 경우). true면 화면에서 85% 청구액 등 금액 정보를 숨기고 타회계법인이
    *  진행했다는 안내만 표시한다 — 시스템관리자/회계담당자만 체크 가능. */
   otherFirmHandled?: boolean;
+  // 서류요청일/회신일(공문발송일) — 기관별로 관리한다(RDA2 등 기관별로 계산서·공문·수금을 따로
+  // 진행하는 과제는 기관마다 날짜가 다를 수 있어 Project 레벨이 아니라 여기 둔다).
+  docRequestDate?: string;
+  docReplyDate?: string;
 }
 
 // 전담기관(6곳)당 1건씩만 남긴 더미 — 발송대상(noticeRecipientScope) 차이를 바로 확인할 수 있도록
@@ -1662,7 +1656,7 @@ export interface TermFee {
 // RDA1/RDA2 2건은 아직 예전 손입력 더미 그대로 — RDA는 S등급 완전제외(EXCLUDE) 규칙이 있어 별도 확인 후 정정 필요.
 export const termFees: TermFee[] = [
   // p-001 2연차 — 주관: 삼화전자 (KEIT · 주관기관만 발송)
-  { id: "tf-001", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2024, termNumber: 2, institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", budget: 700_000_000, feeRate: 2.8, calculatedFee: 1_291_500, appliedFee: 1_097_775, standardFee: 1_291_500, unclaimedFee: 193_725, status: "BILLED" },
+  { id: "tf-001", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2024, termNumber: 2, institutionId: "inst-001", institutionName: "삼화전자(주)", institutionType: "중소기업", budget: 700_000_000, feeRate: 2.8, calculatedFee: 1_291_500, appliedFee: 1_097_775, standardFee: 1_291_500, unclaimedFee: 193_725, status: "BILLED", docRequestDate: "2024-07-10", docReplyDate: "2024-07-22" },
   { id: "tf-002", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2024, termNumber: 2, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 1_200_000_000, feeRate: 2.8, calculatedFee: 130_235, appliedFee: 110_700, standardFee: 130_235, unclaimedFee: 19_535, status: "CONFIRMED" },
   { id: "tf-003", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2024, termNumber: 2, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 500_000_000, feeRate: 2.8, calculatedFee: 54_265, appliedFee: 46_125, standardFee: 54_265, unclaimedFee: 8_140, status: "CONFIRMED" },
   { id: "tf-004", projectNumber: "RS-2024-00214837", projectName: "초정밀 광학 센서 모듈 개발 및 양산화", termYear: 2024, termNumber: 2, institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", budget: 400_000_000, feeRate: 2.8, calculatedFee: 738_000, appliedFee: 627_300, standardFee: 738_000, unclaimedFee: 110_700, status: "CONFIRMED" },
@@ -1673,7 +1667,7 @@ export const termFees: TermFee[] = [
   // 등으로 실제 편집이 발생하면 이후엔 자동 재계산 경로를 탄다.
   // (아래 receivables/taxInvoices/emailDispatches/settlements/projectIssues의 옛 1연차 관련 기록은
   //  구성 변경 전 금액·기관 기준으로 남아 있으므로 별도로 정리가 필요함)
-  { id: "tf-005", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", budget: 200_000_000, feeRate: 3.5, calculatedFee: 1_212_000, appliedFee: 1_030_200, standardFee: 1_212_000, unclaimedFee: 181_800, status: "DRAFT" },
+  { id: "tf-005", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", budget: 200_000_000, feeRate: 3.5, calculatedFee: 1_212_000, appliedFee: 1_030_200, standardFee: 1_212_000, unclaimedFee: 181_800, status: "DRAFT", docRequestDate: "2024-03-15", docReplyDate: "2024-03-28" },
   { id: "tf-006", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 100_000_000, feeRate: 3.5, calculatedFee: 151_500, appliedFee: 128_775, standardFee: 151_500, unclaimedFee: 22_725, status: "DRAFT" },
   { id: "tf-007", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 50_000_000, feeRate: 3.5, calculatedFee: 303_000, appliedFee: 257_550, standardFee: 303_000, unclaimedFee: 45_450, status: "DRAFT" },
   { id: "tf-010", projectNumber: "RS-2024-00198321", projectName: "차세대 이차전지 양극재 소재 국산화", termYear: 2024, termNumber: 1, institutionId: "inst-011", institutionName: "하이테크머티리얼(주)", institutionType: "스타트업", budget: 50_000_000, feeRate: 3.5, calculatedFee: 303_000, appliedFee: 257_550, standardFee: 303_000, unclaimedFee: 45_450, status: "DRAFT" },
@@ -1718,12 +1712,12 @@ export const termFees: TermFee[] = [
   { id: "tf-p012-y3-b", projectNumber: "RS-2024-00253119", projectName: "지능형 엣지 AI 통신모듈 개발", termYear: 2026, termNumber: 3, institutionId: "inst-008", institutionName: "그린바이오텍(주)", institutionType: "중소기업", budget: 150_000_000, feeRate: 3.0, calculatedFee: 378_810, appliedFee: 479_188, standardFee: 378_810, unclaimedFee: 0, status: "DRAFT" },
 
   // p-003 1연차 2022 — 주관: 나노소재기술 (IITP · 주관기관만 발송)
-  { id: "tf-031", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2022, termNumber: 1, institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", budget: 600_000_000, feeRate: 3.0, calculatedFee: 1_060_875, appliedFee: 901_743, standardFee: 1_060_875, unclaimedFee: 159_132, status: "BILLED" },
+  { id: "tf-031", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2022, termNumber: 1, institutionId: "inst-005", institutionName: "나노소재기술(주)", institutionType: "스타트업", budget: 600_000_000, feeRate: 3.0, calculatedFee: 1_060_875, appliedFee: 901_743, standardFee: 1_060_875, unclaimedFee: 159_132, status: "BILLED", docRequestDate: "2024-11-05" },
   { id: "tf-032", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2022, termNumber: 1, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 400_000_000, feeRate: 3.0, calculatedFee: 707_250, appliedFee: 601_162, standardFee: 707_250, unclaimedFee: 106_088, status: "CONFIRMED" },
   { id: "tf-033", projectNumber: "RS-2024-00201547", projectName: "스마트 제조공정 AI 품질예측 시스템", termYear: 2022, termNumber: 1, institutionId: "inst-007", institutionName: "부산대학교", institutionType: "대학", budget: 200_000_000, feeRate: 3.0, calculatedFee: 353_625, appliedFee: 300_581, standardFee: 353_625, unclaimedFee: 53_044, status: "CONFIRMED" },
 
   // p-004 2연차 — 주관: 연세대학교 (KOFPI · 주관기관만 발송)
-  { id: "tf-013", projectNumber: "RS-2023-00187652", projectName: "바이오 플라스틱 생분해성 소재 개발", termYear: 2024, termNumber: 2, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 1_500_000_000, feeRate: 2.5, calculatedFee: 1_391_129, appliedFee: 1_391_129, status: "BILLED" },
+  { id: "tf-013", projectNumber: "RS-2023-00187652", projectName: "바이오 플라스틱 생분해성 소재 개발", termYear: 2024, termNumber: 2, institutionId: "inst-004", institutionName: "연세대학교", institutionType: "대학", budget: 1_500_000_000, feeRate: 2.5, calculatedFee: 1_391_129, appliedFee: 1_391_129, status: "BILLED", docRequestDate: "2024-09-20", docReplyDate: "2024-09-30" },
   { id: "tf-014", projectNumber: "RS-2023-00187652", projectName: "바이오 플라스틱 생분해성 소재 개발", termYear: 2024, termNumber: 2, institutionId: "inst-003", institutionName: "(주)에너텍솔루션", institutionType: "중견기업", budget: 800_000_000, feeRate: 2.5, calculatedFee: 741_935, appliedFee: 741_935, status: "CONFIRMED" },
   { id: "tf-015", projectNumber: "RS-2023-00187652", projectName: "바이오 플라스틱 생분해성 소재 개발", termYear: 2024, termNumber: 2, institutionId: "inst-008", institutionName: "그린바이오텍(주)", institutionType: "중소기업", budget: 500_000_000, feeRate: 2.5, calculatedFee: 463_710, appliedFee: 463_710, status: "CONFIRMED" },
   { id: "tf-016", projectNumber: "RS-2023-00187652", projectName: "바이오 플라스틱 생분해성 소재 개발", termYear: 2024, termNumber: 2, institutionId: "inst-002", institutionName: "한국과학기술연구원", institutionType: "정부출연연구소", budget: 200_000_000, feeRate: 2.5, calculatedFee: 185_484, appliedFee: 185_484, status: "CONFIRMED" },
@@ -1909,6 +1903,7 @@ export interface Receivable {
   billedAt: string;
   billedAmount: number;
   paidAmount: number;
+  paidAt?: string | null; // 수금일 — 실제로 입금된 날짜(부분입금 시 최근 입금일)
   receivableAmount: number;
   dueDate: string;
   status: "PENDING" | "OVERDUE" | "PAID" | "PARTIAL";

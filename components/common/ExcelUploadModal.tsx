@@ -23,6 +23,7 @@ import {
   updateProject,
   updateProjectMember,
   recalcProjectTotalBudget,
+  setTermOtherFirmHandled,
 } from "@/lib/store";
 import type { Project, ProjectMember, AnnualBudget } from "@/lib/mock";
 import { getCurrentUser } from "@/lib/auth";
@@ -365,6 +366,9 @@ interface ProjectStageInfo {
   // 이 프로젝트의 단계기관별 행 중 하나라도 4개 값 중 일부가 비어 있거나(시작단계≠종료단계처럼)
   // 해석할 수 없었던 경우 true — 담당자 확인이 필요하다는 신호로 쓴다.
   hasMissing: boolean;
+  // 단계별로 마지막에 관측된 "회계법인" 값 — 삼화가 아닌 이름이면 그 단계(=그 연차 범위)를
+  // 타회계법인 진행으로 자동 표시하는 데 쓴다.
+  auditFirmByStage: Map<number, string>;
 }
 
 function buildStageAggregates(sheets: ParsedSheet[]): Map<string, ProjectStageInfo> {
@@ -382,7 +386,7 @@ function buildStageAggregates(sheets: ParsedSheet[]): Map<string, ProjectStageIn
       if (!normNum) continue;
 
       let info = map.get(normNum);
-      if (!info) { info = { ranges: new Map(), dateRanges: new Map(), hasMissing: false }; map.set(normNum, info); }
+      if (!info) { info = { ranges: new Map(), dateRanges: new Map(), hasMissing: false, auditFirmByStage: new Map() }; map.set(normNum, info); }
 
       const rawStartStage = get("stageStartNumber", row);
       const rawStartTerm = get("stageStartTerm", row);
@@ -412,6 +416,9 @@ function buildStageAggregates(sheets: ParsedSheet[]): Map<string, ProjectStageIn
           end: endDateStr > existingDate.end ? endDateStr : existingDate.end,
         });
       }
+
+      const rawAuditFirm = get("auditFirm", row).trim();
+      if (rawAuditFirm) info.auditFirmByStage.set(startStage, rawAuditFirm);
     }
   }
 
@@ -511,6 +518,23 @@ function computeCurrentTerm(startDate: string, totalTerms: number, today: string
     if (termStart.toISOString().slice(0, 10) <= today) current = term;
   }
   return current;
+}
+
+// autoGenerateTermFees(store.ts)와 동일한 방식으로 termYear를 계산한다 — 엑셀의 "지원연도" 값이 아니라
+// 이 계산식으로 구해야 store.ts가 실제로 만든 TermFee.termYear와 정확히 일치해서 setTermOtherFirmHandled가 찾는다.
+function computeTermYear(startDate: string, termNumber: number): number {
+  const start = new Date(startDate);
+  if (Number.isNaN(start.getTime())) return new Date().getFullYear();
+  const termStart = new Date(start);
+  termStart.setFullYear(start.getFullYear() + termNumber - 1);
+  return termStart.getFullYear();
+}
+
+// "삼화"라는 글자가 포함되어 있으면 삼화 자신으로 간주한다(표기가 "삼화회계법인"/"삼화" 등으로 다양할 수 있음).
+// 비어있지 않고 삼화가 아니면 타회계법인으로 판단한다.
+function isOtherFirmName(name: string): boolean {
+  const n = name.trim();
+  return n.length > 0 && !n.includes("삼화");
 }
 
 // ============================================================
@@ -1003,15 +1027,15 @@ export async function downloadExcelTemplate() {
     "※필수", "※필수", "※필수",
     "선택", "선택 (\"자율성트랙\"만 인식)",
     "※필수 (YYYY-MM-DD)", "※필수 (YYYY-MM-DD)",
-    "선택", "선택", "선택",
+    "선택", "※필수 (이 행의 사업비가 몇 연차 것인지 — 비면 1연차로 잘못 등록됨)", "선택",
     "※필수", "※필수 (000-00-00000)",
     "선택 (주관/공동/위탁)", "선택 (S/A/B/C, 미입력시 등급 없음)", "선택 (위탁정산/자체정산)",
-    "선택 (이 연차 현금사업비 — 있으면 아래 \"현금사업비총액\"보다 우선)",
+    "※필수 (이 연차 현금사업비 — 참여기관별·연차별 사업비. 비면 이 연차엔 참여 안 함으로 처리됨)",
     "선택 (이 연차 현물사업비 — 있으면 아래 \"현물사업비총액\"보다 우선)",
     "선택 (이 연차 정부출연금 — 과제의 당해 정부출연금 합산에 사용)",
     "선택 (이 연차 민간현금 — 과제의 당해 민간현금 합산에 사용)",
     "선택 (이 연차 민간현물 — 과제의 당해 민간현물 합산에 사용)",
-    "※필수 (원 단위, 위 \"연차_기관_총사업비(현금)\" 없을 때만 사용)", "선택 (원 단위, 위 \"연차_기관_총사업비(현물)\" 없을 때만 사용)",
+    "선택 (원 단위, 위 \"연차_기관_총사업비(현금)\"이 없을 때만 쓰는 대체값)", "선택 (원 단위, 위 \"연차_기관_총사업비(현물)\" 없을 때만 사용)",
     "선택 (Y/N)",
   ];
   const headers = [
@@ -1375,6 +1399,16 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
     // 않는(stale) 스냅샷이라, 방금 만든 과제를 projects.find(...)로 다시 찾으면 항상 못 찾는다.
     // 주관기관 보정 단계에서 농촌진흥청(RDA1/RDA2) agencyId를 다시 판별할 때 이 값을 쓴다.
     const newProjectAgencyId = new Map<string, string>(); // normProjectNum → agencyId
+    // 위와 같은 이유(신규 과제는 projects 스냅샷에서 못 찾음)로 startDate도 별도 추적한다 — 회계법인
+    // 자동판별 단계에서 연차별 termYear를 계산하려면 과제 시작일이 필요하다.
+    const newProjectStartDate = new Map<string, string>(); // normProjectNum → startDate
+    // setTermOtherFirmHandled는 projectNumber "원문"으로 TermFee를 찾으므로, 신규/기존/이름변경 과제
+    // 구분 없이 파일에 처음 등장한 원문 과제번호를 normNum마다 하나씩 기록해둔다.
+    const projectNumberByNormNum = new Map<string, string>();
+    for (const row of previewRows) {
+      const n = normProjectNum(row.projectNumber);
+      if (n && !projectNumberByNormNum.has(n)) projectNumberByNormNum.set(n, row.projectNumber);
+    }
     let agencyCount = 0, projectCount = 0, instCount = 0, memberCount = 0, renamedCount = 0;
     // 과제코드/이름+기간으로는 기존 과제 후보가 2개 이상 나와 자동으로 판단할 수 없는 경우 — 등록하지 않고 이슈로 남긴다.
     const renameAmbiguities: { normNum: string; rawProjectNumber: string; projectName: string; candidates: Project[] }[] = [];
@@ -1505,6 +1539,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           });
           registeredProjects.set(normNum, renamedFrom.id);
           newProjectAgencyId.set(normNum, agencyId || renamedFrom.agencyId);
+          newProjectStartDate.set(normNum, renamedFrom.startDate);
           renamedCount++;
         } else {
           const created = addProject({
@@ -1537,6 +1572,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           });
           registeredProjects.set(normNum, created.id);
           newProjectAgencyId.set(normNum, agencyId);
+          newProjectStartDate.set(normNum, startDateStr);
           projectCount++;
         }
       }
@@ -1681,6 +1717,28 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           ? { agencyId: resolvedAgencyId, agency: resolvedAgency }
           : {}),
       });
+    }
+
+    // 회계법인 자동 반영 — "단계기관별" 시트의 "회계법인" 값이 삼화가 아니면, 그 단계(=연차 범위)를
+    // 타회계법인 진행으로 자동 표시한다. 삼화가 정산연차만 새로 배정받고 이전 연차상시는 다른 회계법인이
+    // 진행한 과제를 엑셀 한 번에 등록 + 표시까지 마칠 수 있게 하기 위함(수동으로 과제 상세에서 연차마다
+    // 체크할 필요가 없어짐). TermFee는 위 참여기관 등록 단계에서 이미 자동 생성되어 있어야 찾을 수 있다.
+    for (const [normNum, stageInfo] of stageAggregates) {
+      const projectId = registeredProjects.get(normNum);
+      if (!projectId) continue;
+      const projectNumber = projectNumberByNormNum.get(normNum);
+      if (!projectNumber) continue;
+      const startDate = newProjectStartDate.get(normNum) ?? projects.find((p) => p.id === projectId)?.startDate;
+      if (!startDate) continue;
+
+      for (const [stageNumber, range] of stageInfo.ranges) {
+        const auditFirm = stageInfo.auditFirmByStage.get(stageNumber);
+        if (!auditFirm || !isOtherFirmName(auditFirm)) continue;
+        for (let termNumber = range.start; termNumber <= range.end; termNumber++) {
+          const termYear = computeTermYear(startDate, termNumber);
+          setTermOtherFirmHandled(projectNumber, termYear, termNumber, true);
+        }
+      }
     }
 
     // 총사업비 재계산 — 이번에 새로 만들었거나 갱신한 과제만 대상으로, 참여기관 사업비 합계로 맞춘다.
