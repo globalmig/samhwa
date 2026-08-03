@@ -54,7 +54,10 @@ function applyAgency(s: string, agencyFullName: string): string {
   return s.split("{agency}").join(agencyFullName);
 }
 
-function buildInvoiceHtml(target: FeeInvoiceTarget, content: FeeInvoiceTemplate): string {
+// 화면 미리보기와 PDF 캡처가 항상 같은 내용을 보여주도록 공유하는 HTML 빌더.
+// (PDF 뷰어가 없는 환경/브라우저 정책 때문에 <iframe>으로 최종 PDF를 못 띄우는 경우가 있어,
+// 청구서 첨부는 이 HTML을 모달에 직접 렌더링해서 미리보기를 보여준다.)
+export function buildFeeInvoiceHtml(target: FeeInvoiceTarget, content: FeeInvoiceTemplate): string {
   const periodLabel = content.periodLabel;
   const periodRange = `${fmtDotPad(target.startDate)}~${fmtDotPad(target.endDate)}`;
   const title = applyAgency(content.title, target.agencyFullName);
@@ -160,7 +163,7 @@ export async function generateFeeInvoicePdfDataUrl(target: FeeInvoiceTarget, con
   container.style.position = "fixed";
   container.style.top = "-10000px";
   container.style.left = "0";
-  container.innerHTML = buildInvoiceHtml(target, content);
+  container.innerHTML = buildFeeInvoiceHtml(target, content);
   document.body.appendChild(container);
 
   // 폰트/이미지 로딩이 끝난 뒤 캡처하도록 한 프레임 대기.
@@ -191,7 +194,13 @@ export async function generateFeeInvoicePdfDataUrl(target: FeeInvoiceTarget, con
       heightLeft -= pageHeight;
     }
 
-    return pdf.output("datauristring");
+    // jsPDF의 datauristring 출력은 항상 "data:application/pdf;filename=...;base64,..."처럼
+    // filename 파라미터를 끼워 넣는데, 이 비표준 형태 때문에 <iframe> 내장 PDF 뷰어가 빈 화면만
+    // 보여주고 메일 발송 API(app/api/notices/send)의 data URL 파싱 정규식도 매치에 실패한다.
+    // base64 본문만 뽑아 표준 형태로 다시 감싼다.
+    const raw = pdf.output("datauristring");
+    const base64 = raw.slice(raw.indexOf(",") + 1);
+    return `data:application/pdf;base64,${base64}`;
   } finally {
     document.body.removeChild(container);
   }

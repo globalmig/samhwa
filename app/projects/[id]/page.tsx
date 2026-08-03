@@ -15,7 +15,7 @@ import {
 } from "@/lib/store";
 import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type SystemUser, type EmailDispatch, type FeePolicy, EMPTY_NOTICE_TEMPLATE, COMPANY_INFO } from "@/lib/mock";
 import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isNonProfitInstitution, isExcludedMember, resolveRdaAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, type CalcMember } from "@/lib/fee-calculator";
-import { fmtWonFull, fmtDate, splitVatInclusive, addMonths, termDateRange } from "@/lib/utils";
+import { fmtWonFull, fmtDate, splitVatInclusive, addMonths } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
 import MoneyInput from "@/components/common/MoneyInput";
@@ -223,9 +223,14 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
     currentTerm,
     ...members.flatMap((m) => m.annualBudgets?.map((b) => b.termNumber) ?? [])
   );
-  // 당해시작일/당해종료일은 [수수료 청구 관리] 목록과 동일하게 "과제 시작일(1연차 기준일) + 현재 연차"로
-  // 파생 계산한다 — 과거에는 이 값을 draft.startDate/endDate로 직접 입력받아 목록의 계산값과 어긋났었다.
-  const draftTermRange = termDateRange(draft.startDate, draft.currentTerm ?? 1);
+  // 단계협약(STAGED)이면 과제 전체 기간(최초시작일/최종종료일)은 더 이상 따로 입력받지 않고,
+  // 협약구조 표의 1단계 시작일 · 마지막 단계 종료일에서 그대로 파생시킨다 — 일괄협약(BATCH)은
+  // 단계 표 자체가 없으므로 이전처럼 직접 입력받는다.
+  const isStaged = draft.agreementType === "STAGED";
+  const draftFirstStage = isStaged ? draft.stages?.[0] : undefined;
+  const draftLastStage = isStaged ? draft.stages?.[draft.stages.length - 1] : undefined;
+  const resolvedFirstStartDate = isStaged ? (draftFirstStage?.stageStartDate ?? draft.firstStartDate) : draft.firstStartDate;
+  const resolvedFinalEndDate = isStaged ? (draftLastStage?.stageEndDate ?? draft.finalEndDate) : draft.finalEndDate;
 
   function getCurrentTermBudget(m: ProjectMember): { cashBudget: number; inKindBudget: number } {
     const ab = m.annualBudgets?.find((a) => a.termNumber === currentTerm);
@@ -338,6 +343,8 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       agency: resolvedAgency,
       leadInstitutionName,
       totalBudget: annualBudget > 0 ? annualBudget : draft.totalBudget,
+      firstStartDate: resolvedFirstStartDate,
+      finalEndDate: resolvedFinalEndDate,
     });
     setSavedMsg(true);
     setTimeout(() => setSavedMsg(false), 2000);
@@ -576,34 +583,39 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             </div>
           </div>
 
-          {/* 과제 전체 기간 */}
-          <div className="grid grid-cols-4 gap-4">
+          {/* 과제 전체 기간 — 단계협약은 협약구조 표의 1단계 시작일·마지막 단계 종료일에서 자동
+              계산되고(직접 입력 불가), 일괄협약은 단계 표가 없으므로 그대로 직접 입력받는다. */}
+          <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">최초시작일</label>
-              <DateInput className="w-full" value={draft.firstStartDate ?? ""}
-                onChange={(v) => setDraft((p) => ({ ...p, firstStartDate: v }))} />
+              <label className="block text-xs font-medium text-slate-500 mb-1">
+                최초시작일 (과제 총 시작일){isStaged && " (1단계 시작일 자동계산)"}
+              </label>
+              {isStaged ? (
+                <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-white font-bold text-slate-700">
+                  {resolvedFirstStartDate ? fmtDate(resolvedFirstStartDate) : "협약구조에서 1단계 시작일을 입력해주세요"}
+                </div>
+              ) : (
+                <DateInput className="w-full" value={draft.firstStartDate ?? ""}
+                  onChange={(v) => setDraft((p) => ({ ...p, firstStartDate: v }))} />
+              )}
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">최종종료일</label>
-              <DateInput className="w-full" value={draft.finalEndDate ?? ""}
-                onChange={(v) => setDraft((p) => ({ ...p, finalEndDate: v }))} />
+              <label className="block text-xs font-medium text-slate-500 mb-1">
+                최종종료일 (과제 총 종료일){isStaged && " (마지막 단계 종료일 자동계산)"}
+              </label>
+              {isStaged ? (
+                <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-white font-bold text-slate-700">
+                  {resolvedFinalEndDate ? fmtDate(resolvedFinalEndDate) : "협약구조에서 마지막 단계 종료일을 입력해주세요"}
+                </div>
+              ) : (
+                <DateInput className="w-full" value={draft.finalEndDate ?? ""}
+                  onChange={(v) => setDraft((p) => ({ ...p, finalEndDate: v }))} />
+              )}
             </div>
           </div>
 
-          {/* 당해 기간 + 연차 + 과제구분 + 자율성트랙 */}
+          {/* 연차 + 과제구분 + 자율성트랙 */}
           <div className="grid grid-cols-3 gap-4">
-            <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">당해시작일 (자동계산)</label>
-              <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-white font-bold text-slate-700">
-                {fmtDate(draftTermRange.start)}
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">당해종료일 (자동계산)</label>
-              <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-white font-bold text-slate-700">
-                {fmtDate(draftTermRange.end)}
-              </div>
-            </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">과제 구분</label>
               <select className={`${sel} w-full`} value={draft.projectCategory ?? "연차상시"}

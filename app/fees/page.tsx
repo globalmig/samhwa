@@ -44,7 +44,7 @@ import { buildNoticeEmailHtml } from "@/lib/notice-email-html";
 import { useCanWrite } from "@/lib/permissions";
 import { getCurrentUser } from "@/lib/auth";
 import { resolveRdaAgencyId, isSettlementTerm } from "@/lib/fee-calculator";
-import { generateFeeInvoicePdfDataUrl } from "@/lib/fee-invoice-pdf";
+import { generateFeeInvoicePdfDataUrl, buildFeeInvoiceHtml, type FeeInvoiceTarget } from "@/lib/fee-invoice-pdf";
 
 // ── 타입 ──────────────────────────────────────────────────────
 type FeeRow = {
@@ -676,7 +676,7 @@ function StandardAttachmentsPanel() {
 }
 
 // ── DispatchModal (공문 발송 모달) ────────────────────────────
-type AttachmentRow = { name: string; checked: boolean; dataUrl?: string };
+type AttachmentRow = { name: string; checked: boolean; dataUrl?: string; previewHtml?: string };
 
 function DispatchModal({ target, onClose }: { target: DispatchTarget; onClose: () => void }) {
   const { standardAttachments, users, feeInvoiceTemplates } = useStore();
@@ -743,8 +743,53 @@ ${target.projectName} 과제의 ${termLabel} ${compact} 청구서를 첨부하�
 ${COMPANY_INFO.name} 드림`;
   }
 
+  // 청구서 문구/라벨은 하드코딩이 아니라 공문관리 > 수수료 청구서 양식(/notice-templates/invoices)에서
+  // 카테고리별로 등록해둔 대표양식을 그대로 쓴다 — 선택 UI 없이 항상 자동 적용. 역발행/기타는 연차상시/
+  // 위탁정산 어느 쪽이든 항상 REVERSE·OTHER 전용 대표양식을 쓴다(공문발송 드롭다운의 "역발행 수수료
+  // 공문"·"기타 공문"이 연차상시/위탁정산 구분 없이 하나뿐인 것과 대응).
+  function resolveInvoiceTemplateEntry(cat: "ANNUAL" | "SETTLEMENT") {
+    const category = target.kind === "REVERSE" ? "REVERSE" : target.kind === "OTHER" ? "OTHER" : cat;
+    return (
+      feeInvoiceTemplates.find((t) => t.category === category && t.isDefault)
+      ?? feeInvoiceTemplates.find((t) => t.category === category)
+    );
+  }
+
+  function resolveInvoiceTemplateContent(cat: "ANNUAL" | "SETTLEMENT") {
+    return resolveInvoiceTemplateEntry(cat)?.content ?? EMPTY_FEE_INVOICE_TEMPLATE;
+  }
+
+  function buildFeeInvoiceTargetData(cat: "ANNUAL" | "SETTLEMENT"): FeeInvoiceTarget {
+    return {
+      kind: target.kind,
+      projectNumber: target.projectNumber,
+      projectName: target.projectName,
+      leadInstitutionName: target.leadInstitutionName,
+      agencyShortName: target.agencyShortName,
+      agencyFullName: target.agencyFullName,
+      termYear: target.termYear,
+      termNumber: target.termNumber,
+      recipientName: target.recipientName,
+      feeCategory: cat,
+      supplyAmount: target.supplyAmount,
+      taxAmount: target.taxAmount,
+      totalAmount: target.totalAmount,
+      startDate: target.startDate,
+      endDate: target.endDate,
+      researchLead: target.researchLead,
+      participantCount: target.participantCount,
+      docNumber: target.docNumber,
+    };
+  }
+
   function buildAttachments(cat: "ANNUAL" | "SETTLEMENT"): AttachmentRow[] {
-    const invoiceAttachment = { name: `청구서_${target.projectNumber}_${termLabel}.pdf`, checked: true };
+    // previewHtml은 PDF 뷰어 유무와 상관없이 화면에서 바로 확인할 수 있도록, PDF와 같은 내용을
+    // html2canvas 없이 즉시(동기) 렌더링해둔 것 — 모달을 열자마자 "생성 중" 대기 없이 보여준다.
+    const invoiceAttachment = {
+      name: `청구서_${target.projectNumber}_${termLabel}.pdf`,
+      checked: true,
+      previewHtml: buildFeeInvoiceHtml(buildFeeInvoiceTargetData(cat), resolveInvoiceTemplateContent(cat)),
+    };
     const bizRegAttachmentRow = { name: bizRegAttachment?.name ?? "사업자등록증.pdf", checked: true, dataUrl: bizRegAttachment?.fileDataUrl };
     // 기타 공문도 청구서 PDF는 자동 생성해 붙이되(대표양식은 OTHER 전용), 위탁정산내역서처럼 특정
     // 카테고리 전용 서류는 붙이지 않는다 — "기타"는 정형화된 카테고리가 아니라서 그 판단까지 자동화하지 않는다.
@@ -766,47 +811,20 @@ ${COMPANY_INFO.name} 드림`;
   const [sendError,    setSendError]    = useState("");
   const [showStandardPanel, setShowStandardPanel] = useState(false);
   const [invoiceGenerating, setInvoiceGenerating] = useState(false);
+  const [previewAttachment, setPreviewAttachment] = useState<AttachmentRow | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const replaceIndexRef = useRef<number | null>(null);
 
   const invoiceFileName = `청구서_${target.projectNumber}_${termLabel}.pdf`;
-
-  // 청구서 문구/라벨은 하드코딩이 아니라 공문관리 > 수수료 청구서 양식(/notice-templates/invoices)에서
-  // 카테고리별로 등록해둔 대표양식을 그대로 쓴다 — 선택 UI 없이 항상 자동 적용. 역발행/기타는 연차상시/
-  // 위탁정산 어느 쪽이든 항상 REVERSE·OTHER 전용 대표양식을 쓴다(공문발송 드롭다운의 "역발행 수수료
-  // 공문"·"기타 공문"이 연차상시/위탁정산 구분 없이 하나뿐인 것과 대응).
-  const invoiceTemplateCategory =
-    target.kind === "REVERSE" ? "REVERSE" : target.kind === "OTHER" ? "OTHER" : feeCategory;
-  const invoiceTemplateEntry =
-    feeInvoiceTemplates.find((t) => t.category === invoiceTemplateCategory && t.isDefault)
-    ?? feeInvoiceTemplates.find((t) => t.category === invoiceTemplateCategory);
-  const invoiceTemplateContent = invoiceTemplateEntry?.content ?? EMPTY_FEE_INVOICE_TEMPLATE;
+  const activeInvoiceTemplateEntry = resolveInvoiceTemplateEntry(feeCategory);
 
   // 청구서(위탁정산/연차상시/역발행/기타) PDF는 반출용 파일이라 모달을 열 때, 그리고 구분(위탁정산↔
-  // 연차상시)을 바꿀 때마다 값에 맞춰 새로 생성해 첨부에 자동으로 끼워 넣는다.
+  // 연차상시)을 바꿀 때마다 값에 맞춰 새로 생성해 첨부에 자동으로 끼워 넣는다. (화면 미리보기는
+  // previewHtml로 이미 즉시 보이므로, 여기서는 메일 발송용 실제 PDF 파일만 비동기로 준비한다.)
   useEffect(() => {
     let cancelled = false;
     setInvoiceGenerating(true);
-    generateFeeInvoicePdfDataUrl({
-      kind: target.kind,
-      projectNumber: target.projectNumber,
-      projectName: target.projectName,
-      leadInstitutionName: target.leadInstitutionName,
-      agencyShortName: target.agencyShortName,
-      agencyFullName: target.agencyFullName,
-      termYear: target.termYear,
-      termNumber: target.termNumber,
-      recipientName: target.recipientName,
-      feeCategory,
-      supplyAmount: target.supplyAmount,
-      taxAmount: target.taxAmount,
-      totalAmount: target.totalAmount,
-      startDate: target.startDate,
-      endDate: target.endDate,
-      researchLead: target.researchLead,
-      participantCount: target.participantCount,
-      docNumber: target.docNumber,
-    }, invoiceTemplateContent)
+    generateFeeInvoicePdfDataUrl(buildFeeInvoiceTargetData(feeCategory), resolveInvoiceTemplateContent(feeCategory))
       .then((dataUrl) => {
         if (cancelled) return;
         setAttachments((prev) => prev.map((a) => (a.name === invoiceFileName ? { ...a, dataUrl } : a)));
@@ -821,7 +839,7 @@ ${COMPANY_INFO.name} 드림`;
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [feeCategory, invoiceTemplateEntry?.id]);
+  }, [feeCategory, activeInvoiceTemplateEntry?.id]);
 
   // 역발행 공문은 과제가 연차상시/위탁정산 중 어느 쪽인지 자동으로 구분할 수 있는 필드가
   // 없어(발행 시 매번 사람이 고르는 구조) 모달에서 직접 선택하게 하고, 고르면 제목/본문/
@@ -1044,9 +1062,20 @@ ${COMPANY_INFO.name} 드림`;
                   onChange={() => toggleAttach(i)}
                   className="rounded"
                 />
-                <span className={`flex-1 text-xs truncate ${a.checked ? "text-slate-700" : "text-slate-300 line-through"}`}>
-                  {a.name}
-                </span>
+                {a.dataUrl || a.previewHtml ? (
+                  <button
+                    type="button"
+                    onClick={() => setPreviewAttachment(a)}
+                    title="미리보기"
+                    className={`flex-1 text-left text-xs truncate hover:underline ${a.checked ? "text-teal-700" : "text-slate-300 line-through"}`}
+                  >
+                    {a.name}
+                  </button>
+                ) : (
+                  <span className={`flex-1 text-xs truncate ${a.checked ? "text-slate-700" : "text-slate-300 line-through"}`}>
+                    {a.name}
+                  </span>
+                )}
                 {!a.dataUrl && a.name === invoiceFileName && invoiceGenerating ? (
                   <span className="text-[10px] text-slate-400 whitespace-nowrap">생성 중…</span>
                 ) : !a.dataUrl ? (
@@ -1106,6 +1135,20 @@ ${COMPANY_INFO.name} 드림`;
           {sending ? "발송 중..." : "발송"}
         </button>
       </div>
+
+      {previewAttachment && (previewAttachment.previewHtml || previewAttachment.dataUrl) && (
+        <Modal title={previewAttachment.name} onClose={() => setPreviewAttachment(null)} size="xl">
+          {previewAttachment.previewHtml ? (
+            // 브라우저의 내장 PDF 뷰어 유무와 무관하게 항상 보이도록, PDF와 동일한 내용을 HTML로 직접
+            // 렌더링한다 (실제 발송되는 PDF는 별도로 html2canvas가 이 HTML을 캡처해서 만든 것이라 내용은 같다).
+            <div className="bg-slate-100 p-4">
+              <div dangerouslySetInnerHTML={{ __html: previewAttachment.previewHtml }} />
+            </div>
+          ) : (
+            <iframe src={previewAttachment.dataUrl} title={previewAttachment.name} className="w-full h-[80vh]" />
+          )}
+        </Modal>
+      )}
     </div>
   );
 }
