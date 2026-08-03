@@ -487,7 +487,7 @@ export default function NoticeLetterPreview({
 
       {/* 발신 서명 */}
       <div className="pt-6 border-t border-dashed border-slate-300 flex justify-end">
-        <div className="flex flex-col items-end gap-2">
+        <div className="flex flex-col items-start gap-2">
           <p className="text-xl font-bold tracking-widest">{spaced(COMPANY_INFO.name)}</p>
           <div className="flex items-center gap-3">
             <p className="text-xl font-bold">대표이사 {COMPANY_INFO.ceoName}</p>

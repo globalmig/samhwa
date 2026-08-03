@@ -29,6 +29,7 @@ const ENTITY_NAMES: Record<string, string> = {
   projectMember:"참여기관",
   user:         "사용자",
   feePolicy:    "수수료정책",
+  feeInvoiceTemplate: "수수료 청구서 양식",
 };
 
 const ACTION_COLOR: Record<string, string> = {

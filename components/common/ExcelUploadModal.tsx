@@ -115,6 +115,12 @@ interface MemberAggregate {
   // 엑셀에 등급 컬럼이 없거나 값이 비어 있으면 undefined — 기존에 입력돼 있던 등급을 실수로
   // "일반"으로 덮어쓰지 않기 위해, "값이 아예 없었다"와 "일반으로 명시됨"을 구분해서 담아둔다.
   institutionGrade?: InstitutionGrade;
+  // "연차별기관별"(현재 진행중인 연차 실적) 시트에서 이미 값을 받았는지 — "단계기관별" 시트는
+  // 단계 전체의 정산 시점 스냅샷이라 지난 단계의 오래된 역할·정산형태·등급을 담고 있을 수 있어서,
+  // 연차별 시트에 값이 있으면 그걸 우선하고 단계기관별 값으론 덮어쓰지 않는다.
+  roleFromAnnual: boolean;
+  settlementFromAnnual: boolean;
+  gradeFromAnnual: boolean;
   budgetsByTerm: Map<number, AggregatedBudget>;
   totalCashBudgetFallback: number;
 }
@@ -207,12 +213,29 @@ function toDateStr(raw: string): string {
 
 // "연차별기관별"(연차·예산) + "단계기관별"(정산형태·역할) 시트를 과제+기관 단위로 합산해
 // 참여기관(ProjectMember) 등록에 쓸 데이터를 만든다. 이게 있어야 등록 시 연차 수수료가 자동 계산된다.
-function buildMemberAggregates(sheets: ParsedSheet[]): {
+// existingProjects/stageAggregates: 단계협약 과제는 "연차별기관별" 시트의 "연차" 값이 그 단계 안에서
+// 1부터 다시 세는 상대값으로 입력되는 경우가 많아("2단계 1연차"), 과제 전체 기준 절대연차로 바꾸는 데 쓴다.
+function buildMemberAggregates(
+  sheets: ParsedSheet[],
+  existingProjects: Project[],
+  stageAggregates: Map<string, ProjectStageInfo>
+): {
   members: MemberAggregate[];
   projectMaxTerm: Map<string, number>;
 } {
   const memberMap = new Map<string, MemberAggregate>();
   const projectMaxTerm = new Map<string, number>();
+  // 프로젝트별 "단계 내 상대연차 → 절대연차" 오프셋 — 같은 과제가 여러 행에 걸쳐 나오므로 한 번만 계산해 재사용한다.
+  const offsetsByProject = new Map<string, Map<number, number>>();
+  function getStageOffsets(normNum: string): Map<number, number> {
+    let offsets = offsetsByProject.get(normNum);
+    if (!offsets) {
+      const existing = existingProjects.find((p) => normProjectNum(p.projectNumber) === normNum);
+      offsets = computeStageOffsets(stageAggregates.get(normNum), existing?.stages);
+      offsetsByProject.set(normNum, offsets);
+    }
+    return offsets;
+  }
 
   for (const sheet of sheets) {
     const get = (field: string, row: Record<string, string>) => {
@@ -238,6 +261,9 @@ function buildMemberAggregates(sheets: ParsedSheet[]): {
           role: "PARTICIPANT",
           settlementType: "위탁정산",
           institutionGrade: undefined,
+          roleFromAnnual: false,
+          settlementFromAnnual: false,
+          gradeFromAnnual: false,
           budgetsByTerm: new Map(),
           totalCashBudgetFallback: 0,
         };
@@ -245,20 +271,51 @@ function buildMemberAggregates(sheets: ParsedSheet[]): {
       }
 
       const roleStr = get("institutionRole", row);
-      if (roleStr.includes("주관")) agg.role = "LEAD";
-      else if (roleStr.includes("위탁")) agg.role = "ENTRUSTED";
-
       const settlementStr = get("settlementType", row);
-      if (settlementStr) agg.settlementType = settlementStr.includes("자체") ? "자체정산" : "위탁정산";
-
       const gradeStr = get("institutionGrade", row);
       const parsedGrade = parseGrade(gradeStr);
-      if (parsedGrade) agg.institutionGrade = parsedGrade;
+
+      if (sheet.def.key === "annual") {
+        if (roleStr.includes("주관")) agg.role = "LEAD";
+        else if (roleStr.includes("위탁")) agg.role = "ENTRUSTED";
+        if (roleStr) agg.roleFromAnnual = true;
+
+        if (settlementStr) {
+          agg.settlementType = settlementStr.includes("자체") ? "자체정산" : "위탁정산";
+          agg.settlementFromAnnual = true;
+        }
+
+        if (parsedGrade) {
+          agg.institutionGrade = parsedGrade;
+          agg.gradeFromAnnual = true;
+        }
+      } else {
+        // "단계기관별"은 정산 시점 스냅샷이라 지난 단계의 값을 담고 있을 수 있음 — 연차별 시트가
+        // 이미 채워둔 필드는 그대로 두고, 비어 있는 필드만 이걸로 보충한다.
+        if (!agg.roleFromAnnual) {
+          if (roleStr.includes("주관")) agg.role = "LEAD";
+          else if (roleStr.includes("위탁")) agg.role = "ENTRUSTED";
+        }
+        if (!agg.settlementFromAnnual && settlementStr) {
+          agg.settlementType = settlementStr.includes("자체") ? "자체정산" : "위탁정산";
+        }
+        if (!agg.gradeFromAnnual && parsedGrade) {
+          agg.institutionGrade = parsedGrade;
+        }
+      }
 
       if (sheet.def.key === "annual") {
         // rcms-columns.ts 상 field명은 "termYear"지만 실제로는 "연차"(회차) 값이고,
         // 달력상 실제 연도는 "supportYear"(지원연도) 컬럼이 담당한다.
-        const termNumber = parseInt(get("termYear", row), 10) || 1;
+        // 단계협약 과제는 이 "연차"가 그 단계 안에서 1부터 다시 세는 상대값으로 입력되는 경우가
+        // 대부분이라("2단계 1연차"), "단계" 컬럼이 있으면 오프셋을 더해 과제 전체 기준 절대연차로
+        // 바꾼다. "단계"가 비어 있으면(일괄협약 등) 기존처럼 그대로 절대값으로 취급한다.
+        const rawTermNumber = parseInt(get("termYear", row), 10) || 1;
+        const rawStageNumber = parseInt(get("term", row), 10);
+        const stageOffset = Number.isFinite(rawStageNumber) && rawStageNumber > 0
+          ? getStageOffsets(normNum).get(rawStageNumber) ?? 0
+          : 0;
+        const termNumber = stageOffset + rawTermNumber;
         const supportYear = parseInt(get("supportYear", row), 10) || new Date().getFullYear();
         // "연차_기관_총사업비(현금/현물)"처럼 이 연차 전용 컬럼이 있으면 그쪽을 우선한다 —
         // 일부 RCMS 파일엔 과제 전체 누적 총액 컬럼("현금사업비 총액")도 같이 있어서 그걸 그대로
@@ -425,24 +482,75 @@ function buildStageAggregates(sheets: ParsedSheet[]): Map<string, ProjectStageIn
   return map;
 }
 
-// ProjectStageInfo → Project.agreementType/stages. 단계번호가 0만 관측되면(일괄협약 표기) undefined 반환.
+// "단계기관별" 시트의 정산대상시작/종료연차는 그 단계 안에서 1부터 다시 세는 상대값으로 적히는
+// 경우가 대부분이다(예: 2단계도 "1~2연차"로 표기). 이를 과제 전체 기준 절대연차로 바꾸려면 이전
+// 단계들의 길이를 누적한 오프셋이 필요하다 — offset(단계번호) + 상대값 = 절대값.
+// 이미 등록된 과제의 stages(기존에 확정된 절대 길이)를 우선 반영하고, 이번 파일에서 더 넓은 범위가
+// 관측되면 그걸로 갱신한다(실적 데이터가 더 최신·정확하므로).
+function computeStageOffsets(
+  info: ProjectStageInfo | undefined,
+  existingStages: Project["stages"] | undefined
+): Map<number, number> {
+  const lengthByStage = new Map<number, number>();
+  for (const s of existingStages ?? []) {
+    lengthByStage.set(s.stageNumber, s.endTermNumber - s.startTermNumber + 1);
+  }
+  if (info) {
+    for (const [n, r] of info.ranges) {
+      if (n === 0) continue; // 0단계(일괄협약 표기)는 단계 오프셋 체계와 무관
+      const observedLength = r.end - r.start + 1;
+      lengthByStage.set(n, Math.max(observedLength, lengthByStage.get(n) ?? 0));
+    }
+  }
+  const stageNumbers = [...lengthByStage.keys()].sort((a, b) => a - b);
+  const offsets = new Map<number, number>();
+  let cumulative = 0;
+  for (const n of stageNumbers) {
+    offsets.set(n, cumulative);
+    cumulative += lengthByStage.get(n)!;
+  }
+  return offsets;
+}
+
+// ProjectStageInfo(+기존 stages) → Project.agreementType/stages. 이번 파일에 단계 정보가 전혀
+// 없으면(일괄협약이거나 단계기관별 시트가 없으면) 기존 stages를 그대로 보존해서 반환한다.
 // batchEndTerm: 단계=0(일괄협약)으로 관측된 종료연차 — STAGED 여부와 무관하게 총연차 추정에 쓴다.
 // (전에는 stages가 undefined인 일괄협약 과제의 경우 이 값이 통째로 버려져서, 여러 해짜리 과제를
 // "연차_기관_총사업비" 행이 1개뿐이면 1년짜리 과제로 잘못 등록하는 원인이 됐었다.)
-function resolveStageStructure(info: ProjectStageInfo | undefined): {
+function resolveStageStructure(
+  info: ProjectStageInfo | undefined,
+  existingStages: Project["stages"] | undefined
+): {
   agreementType: Project["agreementType"];
   stages: Project["stages"];
   batchEndTerm: number;
 } {
-  if (!info) return { agreementType: undefined, stages: undefined, batchEndTerm: 0 };
-  const batchEndTerm = info.ranges.get(0)?.end ?? 0;
-  const stageNumbers = [...info.ranges.keys()].filter((n) => n !== 0).sort((a, b) => a - b);
-  if (stageNumbers.length === 0) return { agreementType: undefined, stages: undefined, batchEndTerm };
+  const batchEndTerm = info?.ranges.get(0)?.end ?? 0;
+  const stageNumbersInFile = info ? [...info.ranges.keys()].filter((n) => n !== 0) : [];
+  if (stageNumbersInFile.length === 0) {
+    // 이번 파일엔 새 단계 정보가 없음 — 기존 단계 구조를 그대로 보존(잘못 지워지지 않게)
+    return {
+      agreementType: existingStages && existingStages.length > 0 ? "STAGED" : undefined,
+      stages: existingStages,
+      batchEndTerm,
+    };
+  }
+  const offsets = computeStageOffsets(info, existingStages);
+  const allStageNumbers = [...offsets.keys()].sort((a, b) => a - b);
   return {
     agreementType: "STAGED",
-    stages: stageNumbers.map((n) => {
-      const r = info.ranges.get(n)!;
-      return { stageNumber: n, startTermNumber: r.start, endTermNumber: r.end };
+    stages: allStageNumbers.map((n) => {
+      const r = info?.ranges.get(n);
+      const existing = existingStages?.find((s) => s.stageNumber === n);
+      const length = r ? r.end - r.start + 1 : existing ? existing.endTermNumber - existing.startTermNumber + 1 : 1;
+      const d = info?.dateRanges.get(n);
+      return {
+        stageNumber: n,
+        startTermNumber: offsets.get(n)! + 1,
+        endTermNumber: offsets.get(n)! + length,
+        stageStartDate: d?.start ?? existing?.stageStartDate,
+        stageEndDate: d?.end ?? existing?.stageEndDate,
+      };
     }),
     batchEndTerm,
   };
@@ -453,16 +561,25 @@ function resolveStageStructure(info: ProjectStageInfo | undefined): {
 function computeProjectUpdates(
   projects: Project[],
   memberAggregates: MemberAggregate[],
-  projectMaxTerm: Map<string, number>
+  projectMaxTerm: Map<string, number>,
+  stageAggregates: Map<string, ProjectStageInfo>
 ): ProjectUpdateInfo[] {
   const normNums = new Set(memberAggregates.map((m) => normProjectNum(m.projectNumber)));
+  // 단계기관별 시트만 있고 연차별기관별 시트엔 해당 과제 행이 없는 업로드도 잡아내기 위해,
+  // 단계 정보로만 알려진 과제번호도 비교 대상에 포함한다.
+  for (const normNum of stageAggregates.keys()) normNums.add(normNum);
   const updates: ProjectUpdateInfo[] = [];
   for (const normNum of normNums) {
     const existing = projects.find((p) => normProjectNum(p.projectNumber) === normNum);
     if (!existing) continue; // 신규 과제는 별도 처리
     const currentTerm = existing.currentTerm ?? 1;
     // 엑셀에 연차 정보가 없으면(단계기관별 시트만 있는 경우 등) 동일 연차로 보수적으로 취급해
-    // 사용자 확인 없이 조용히 반영되지 않게 한다.
+    // 사용자 확인 없이 조용히 반영되지 않게 한다. projectMaxTerm은 이미 단계 오프셋이 반영된
+    // 절대연차이므로(buildMemberAggregates 참고) 그대로 비교하면 된다.
+    // 주의: 여기서 그 단계의 "선언된 전체 길이"(단계기관별 시트의 정산대상시작/종료연차, 예:
+    // 1단계=1~3연차)를 섞어 쓰면 안 된다 — 그 값은 그 단계가 몇 연차까지 계약돼 있는지를 나타낼
+    // 뿐, 실제로 몇 연차까지 업로드됐는지와 무관해서, 이미 다 알고 있는 단계의 중간 연차(예:
+    // 1단계 2연차)만 재업로드해도 곧장 그 단계의 마지막 연차로 건너뛰는 오류가 생긴다.
     const excelTerm = projectMaxTerm.get(normNum) ?? currentTerm;
     const status: ProjectUpdateStatus = excelTerm > currentTerm ? "next" : excelTerm === currentTerm ? "same" : "behind";
     updates.push({
@@ -1181,22 +1298,23 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
   const [previewBackStep, setPreviewBackStep] = useState<Step>("mapping");
   const [projectUpdateChoices, setProjectUpdateChoices] = useState<Record<string, boolean>>({});
 
+  // "단계기관별" 시트의 정산대상시작/종료단계·연차 값으로 과제별 단계 구조(Project.stages)를 추정
+  // — 아래 buildMemberAggregates가 "연차별기관별" 시트의 상대연차를 절대연차로 바꾸는 데 이 결과가 필요하므로 먼저 계산한다.
+  const stageAggregates = useMemo(() => buildStageAggregates(parsedSheets), [parsedSheets]);
+
   // "연차별기관별" + "단계기관별" 시트를 과제+기관 단위로 합산 — 참여기관(ProjectMember) 등록에 사용
   const { members: memberAggregates, projectMaxTerm } = useMemo(
-    () => buildMemberAggregates(parsedSheets),
-    [parsedSheets]
+    () => buildMemberAggregates(parsedSheets, projects, stageAggregates),
+    [parsedSheets, projects, stageAggregates]
   );
-
-  // "단계기관별" 시트의 정산대상시작/종료단계·연차 값으로 과제별 단계 구조(Project.stages)를 추정
-  const stageAggregates = useMemo(() => buildStageAggregates(parsedSheets), [parsedSheets]);
 
   // 과제담당자·자율성트랙·과제코드·연구책임자 등 과제 레벨 단일값 — 여러 행에 값이 갈리면 등록하지 않고 이슈로 남긴다
   const scalarAggregates = useMemo(() => buildProjectScalarAggregates(parsedSheets), [parsedSheets]);
 
   // 이미 등록된 과제 중 이번 엑셀이 다음/동일/과거 연차 중 무엇에 해당하는지 판단
   const projectUpdates = useMemo(
-    () => computeProjectUpdates(projects, memberAggregates, projectMaxTerm),
-    [projects, memberAggregates, projectMaxTerm]
+    () => computeProjectUpdates(projects, memberAggregates, projectMaxTerm, stageAggregates),
+    [projects, memberAggregates, projectMaxTerm, stageAggregates]
   );
 
   function toggleProjectUpdate(normNum: string, next: boolean) {
@@ -1405,6 +1523,10 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
     // setTermOtherFirmHandled는 projectNumber "원문"으로 TermFee를 찾으므로, 신규/기존/이름변경 과제
     // 구분 없이 파일에 처음 등장한 원문 과제번호를 normNum마다 하나씩 기록해둔다.
     const projectNumberByNormNum = new Map<string, string>();
+    // 이번 실행에서 각 과제(normNum)에 최종 확정한 절대연차 기준 단계 구조 — 아래 회계법인 자동
+    // 반영 단계에서 "그 단계의 절대연차 범위"를 다시 찾을 때 재사용한다(등록 직후엔 projects
+    // 스냅샷이 갱신되지 않아 store에서 다시 조회할 수 없으므로).
+    const resolvedStagesByProject = new Map<string, Project["stages"]>();
     for (const row of previewRows) {
       const n = normProjectNum(row.projectNumber);
       if (n && !projectNumberByNormNum.has(n)) projectNumberByNormNum.set(n, row.projectNumber);
@@ -1460,8 +1582,25 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       if (row.willRegister.project && normNum && !registeredProjects.has(normNum)) {
         const agencyId = registeredAgencies.get(row.agencyName) ?? "";
         const startDateStr = row.startDate || today;
+
+        // 과제담당자·과제코드·연구책임자·자율성트랙 — 같은 과제의 여러 행에서 값이 하나로 모아질 때만 채택.
+        // 값이 갈리면(예: 같은 과제인데 코드가 다르게 찍힘) 여기서 비워두고, 아래에서 이슈로 남겨 확인을 요청한다.
+        const scalarInfo = scalarAggregates.get(normNum);
+        const assignedManager = scalarInfo?.assignedManagers.size === 1 ? [...scalarInfo.assignedManagers][0] : undefined;
+        const projectCode = scalarInfo?.projectCodes.size === 1 ? [...scalarInfo.projectCodes][0] : undefined;
+        const researchLead = scalarInfo?.researchLeads.size === 1 ? [...scalarInfo.researchLeads][0] : undefined;
+
+        // 새로 만들기 전에 "과제번호만 바뀐 기존 과제"인지 먼저 확인한다 — RCMS에서 과제번호가
+        // 재부여되는 경우가 있어, 문자열이 달라도 과제코드나 (과제명+기간)이 같으면 같은 과제로 본다.
+        // 아래 단계 구조를 상대연차→절대연차로 바꿀 때 "이 과제가 이미 어디까지 진행됐는지"가
+        // 기준이 되므로, 단계 계산보다 먼저 판단해야 한다.
+        const { project: renamedFrom, ambiguousCandidates } = resolveRenamedProject(
+          row.projectName || "미입력", startDateStr, row.endDate || today, projectCode, projects
+        );
+
         const stageInfo = stageAggregates.get(normNum);
-        const { agreementType, stages, batchEndTerm } = resolveStageStructure(stageInfo);
+        const { agreementType, stages, batchEndTerm } = resolveStageStructure(stageInfo, renamedFrom?.stages);
+        resolvedStagesByProject.set(normNum, stages);
         const maxStageEndTerm = stages ? Math.max(...stages.map((s) => s.endTermNumber)) : batchEndTerm;
         const totalTerms = Math.max(1, projectMaxTerm.get(normNum) ?? 1, maxStageEndTerm);
         const currentTerm = computeCurrentTerm(startDateStr, totalTerms, today);
@@ -1473,21 +1612,19 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         const currentStage = stages?.find((s) => currentTerm >= s.startTermNumber && currentTerm <= s.endTermNumber);
         const stageDateRange = currentStage ? stageInfo?.dateRanges.get(currentStage.stageNumber) : undefined;
 
+        // 최초시작일/최종종료일 — 관측된 모든 단계(일괄협약이면 0단계 하나)의 날짜 범위를 합쳐
+        // 가장 이른 시작일·가장 늦은 종료일을 과제 전체 기간으로 잡는다. 이 값은 excel 재업로드 때마다
+        // 갱신되므로, 개별 단계 날짜가 나중에 정정되면 여기도 같이 정정된다.
+        const allStageDateRanges = stageInfo ? [...stageInfo.dateRanges.values()] : [];
+        const overallStartDate = allStageDateRanges.length
+          ? allStageDateRanges.reduce((min, d) => (d.start < min ? d.start : min), allStageDateRanges[0].start)
+          : undefined;
+        const overallEndDate = allStageDateRanges.length
+          ? allStageDateRanges.reduce((max, d) => (d.end > max ? d.end : max), allStageDateRanges[0].end)
+          : undefined;
+
         // 연차상시/정산 — 방금 계산한 단계 구조·총연차 기준으로 판정(다른 화면과 동일 기준)
         const projectCategory = isSettlementTerm({ agreementType, stages, totalTerms }, currentTerm) ? "정산" : "연차상시";
-
-        // 과제담당자·과제코드·연구책임자·자율성트랙 — 같은 과제의 여러 행에서 값이 하나로 모아질 때만 채택.
-        // 값이 갈리면(예: 같은 과제인데 코드가 다르게 찍힘) 여기서 비워두고, 아래에서 이슈로 남겨 확인을 요청한다.
-        const scalarInfo = scalarAggregates.get(normNum);
-        const assignedManager = scalarInfo?.assignedManagers.size === 1 ? [...scalarInfo.assignedManagers][0] : undefined;
-        const projectCode = scalarInfo?.projectCodes.size === 1 ? [...scalarInfo.projectCodes][0] : undefined;
-        const researchLead = scalarInfo?.researchLeads.size === 1 ? [...scalarInfo.researchLeads][0] : undefined;
-
-        // 새로 만들기 전에 "과제번호만 바뀐 기존 과제"인지 먼저 확인한다 — RCMS에서 과제번호가
-        // 재부여되는 경우가 있어, 문자열이 달라도 과제코드나 (과제명+기간)이 같으면 같은 과제로 본다.
-        const { project: renamedFrom, ambiguousCandidates } = resolveRenamedProject(
-          row.projectName || "미입력", startDateStr, row.endDate || today, projectCode, projects
-        );
 
         if (ambiguousCandidates.length > 0) {
           // 후보가 여러 개라 자동으로 판단할 수 없음 — 등록하지 않고 아래에서 이슈로 남긴다
@@ -1532,6 +1669,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             privateInKind: privateInKind > 0 ? privateInKind : renamedFrom.privateInKind,
             stageStartDate: stageDateRange?.start ?? renamedFrom.stageStartDate,
             stageEndDate: stageDateRange?.end ?? renamedFrom.stageEndDate,
+            firstStartDate: overallStartDate ?? renamedFrom.firstStartDate,
+            finalEndDate: overallEndDate ?? renamedFrom.finalEndDate,
             assignedManager: assignedManager ?? renamedFrom.assignedManager,
             projectCode: nextProjectCode,
             previousProjectCodes: nextPreviousCodes,
@@ -1566,6 +1705,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             privateInKind: privateInKind > 0 ? privateInKind : undefined,
             stageStartDate: stageDateRange?.start,
             stageEndDate: stageDateRange?.end,
+            firstStartDate: overallStartDate,
+            finalEndDate: overallEndDate,
             assignedManager,
             projectCode,
             researchLead,
@@ -1672,15 +1813,40 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       }
     }
 
-    // 다음 연차로 진행된 것으로 승인된 과제는 진행연차(및 필요 시 총연차)를 갱신한다.
+    // 승인된 과제 갱신 — 진행연차/총연차뿐 아니라 단계 구조(stages)·단계일자·과제구분까지 함께
+    // 갱신한다. (예전엔 "다음 연차"로 판정된 것만, 그마저 currentTerm/totalTerms만 갱신해서, 단계협약
+    // 과제를 단계·연차별로 개별 재업로드하면 새 단계 구조가 반영될 방법이 없었다. 승인 대상도
+    // "next" 상태로 한정하지 않는다 — "과거 연차" 등으로 표시돼도 사용자가 체크박스로 명시 승인하면
+    // 그 판단을 신뢰해서 반영한다.)
     for (const info of projectUpdates) {
-      if (info.status !== "next" || !isApprovedUpdate(info.normNum)) continue;
+      if (!isApprovedUpdate(info.normNum)) continue;
       const existingProject = projects.find((p) => p.id === info.projectId);
       if (!existingProject) continue;
       touchedProjectIds.add(info.projectId);
+
+      const stageInfo = stageAggregates.get(info.normNum);
+      const { agreementType, stages, batchEndTerm } = resolveStageStructure(stageInfo, existingProject.stages);
+      resolvedStagesByProject.set(info.normNum, stages);
+      const maxStageEndTerm = stages ? Math.max(...stages.map((s) => s.endTermNumber)) : batchEndTerm;
+      const nextTotalTerms = Math.max(existingProject.totalTerms, info.excelTerm, maxStageEndTerm);
+      const nextCurrentTerm = info.excelTerm;
+      const currentStage = stages?.find((s) => nextCurrentTerm >= s.startTermNumber && nextCurrentTerm <= s.endTermNumber);
+      const stageDateRange = currentStage ? stageInfo?.dateRanges.get(currentStage.stageNumber) : undefined;
+      const nextAgreementType = agreementType ?? existingProject.agreementType;
+      const nextStages = stages ?? existingProject.stages;
+      const projectCategory = isSettlementTerm(
+        { agreementType: nextAgreementType, stages: nextStages, totalTerms: nextTotalTerms },
+        nextCurrentTerm
+      ) ? "정산" : "연차상시";
+
       updateProject(info.projectId, {
-        currentTerm: info.excelTerm,
-        totalTerms: Math.max(existingProject.totalTerms, info.excelTerm),
+        currentTerm: nextCurrentTerm,
+        totalTerms: nextTotalTerms,
+        agreementType: nextAgreementType,
+        stages: nextStages,
+        stageStartDate: stageDateRange?.start ?? existingProject.stageStartDate,
+        stageEndDate: stageDateRange?.end ?? existingProject.stageEndDate,
+        projectCategory,
       });
     }
 
@@ -1730,11 +1896,25 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       if (!projectNumber) continue;
       const startDate = newProjectStartDate.get(normNum) ?? projects.find((p) => p.id === projectId)?.startDate;
       if (!startDate) continue;
+      // 이번 실행에서 새로 확정한 단계 구조가 있으면 그걸, 없으면(승인 안 된 갱신 등) 기존에 등록된
+      // 단계 구조를 사용해 "단계번호 → 절대연차 범위"를 찾는다.
+      const resolvedStages = resolvedStagesByProject.get(normNum) ?? projects.find((p) => p.id === projectId)?.stages;
 
       for (const [stageNumber, range] of stageInfo.ranges) {
         const auditFirm = stageInfo.auditFirmByStage.get(stageNumber);
         if (!auditFirm || !isOtherFirmName(auditFirm)) continue;
-        for (let termNumber = range.start; termNumber <= range.end; termNumber++) {
+        // 0단계(일괄협약 표기)는 단계 오프셋 개념이 없어 파일에 적힌 값이 곧 절대연차다. 그 외
+        // 단계는 정산대상시작/종료연차가 그 단계 안에서 다시 세는 상대값이므로, 절대연차로 변환된
+        // stages에서 그 단계의 실제 범위를 찾아야 한다.
+        let absStart = range.start;
+        let absEnd = range.end;
+        if (stageNumber !== 0) {
+          const abs = resolvedStages?.find((s) => s.stageNumber === stageNumber);
+          if (!abs) continue; // 절대연차 범위를 확정하지 못했으면 잘못 표시하지 않고 건너뜀
+          absStart = abs.startTermNumber;
+          absEnd = abs.endTermNumber;
+        }
+        for (let termNumber = absStart; termNumber <= absEnd; termNumber++) {
           const termYear = computeTermYear(startDate, termNumber);
           setTermOtherFirmHandled(projectNumber, termYear, termNumber, true);
         }

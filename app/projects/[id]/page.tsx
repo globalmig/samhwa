@@ -588,16 +588,6 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               <DateInput className="w-full" value={draft.finalEndDate ?? ""}
                 onChange={(v) => setDraft((p) => ({ ...p, finalEndDate: v }))} />
             </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">단계시작일</label>
-              <DateInput className="w-full" value={draft.stageStartDate ?? ""}
-                onChange={(v) => setDraft((p) => ({ ...p, stageStartDate: v }))} />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">단계종료일</label>
-              <DateInput className="w-full" value={draft.stageEndDate ?? ""}
-                onChange={(v) => setDraft((p) => ({ ...p, stageEndDate: v }))} />
-            </div>
           </div>
 
           {/* 당해 기간 + 연차 + 과제구분 + 자율성트랙 */}
@@ -3145,15 +3135,21 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   }
 
   const noticeAgency = fundingAgencies.find((a) => a.id === project.agencyId);
+  // agencyNoticeTemplates는 이제 정산절차 안내 공문 전용이다 — 수수료 청구서 양식은 feeInvoiceTemplates로 분리됐다.
   const noticeAgencyTemplates = noticeAgency
     ? agencyNoticeTemplates.filter((t) => t.agencyShortName === noticeAgency.shortName)
     : [];
   const leadMember = projectMembers.find((m) => m.projectId === project.id && m.role === "LEAD");
   const coInstitutionCount = projectMembers.filter((m) => m.projectId === project.id && m.role !== "LEAD").length;
+  // 단계별 시작/종료일은 이제 협약 구조(stages) 표에서 단계마다 입력받으므로, 현재 연차가
+  // 속한 단계의 날짜를 우선 쓰고 없으면 옛 방식(과제 단위 단일 필드)으로 대체한다.
+  const currentStage = project.stages?.find((s) => project.currentTerm >= s.startTermNumber && project.currentTerm <= s.endTermNumber);
+  const currentStageStartDate = currentStage?.stageStartDate ?? project.stageStartDate ?? project.startDate;
+  const currentStageEndDate = currentStage?.stageEndDate ?? project.stageEndDate ?? project.endDate;
   const noticeStatusRows: NoticeStatusRow[] = [
     { label: "과제번호 (RCMS)", value: project.projectCode || project.projectNumber },
     { label: "과제명", value: project.projectName },
-    { label: "단계연구개발기간", value: `${fmtDate(project.stageStartDate ?? project.startDate)} ~ ${fmtDate(project.stageEndDate ?? project.endDate)}` },
+    { label: "단계연구개발기간", value: `${fmtDate(currentStageStartDate)} ~ ${fmtDate(currentStageEndDate)}` },
     { label: "대상기간", value: `${fmtDate(project.firstStartDate ?? project.startDate)} ~ ${fmtDate(project.finalEndDate ?? project.endDate)}` },
     { label: "정산구분", value: leadMember?.settlementType ?? "위탁정산" },
     { label: "주관연구개발기관", value: project.leadInstitutionName },

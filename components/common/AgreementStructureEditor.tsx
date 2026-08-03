@@ -1,11 +1,14 @@
 "use client";
 
 import { FiPlus, FiTrash2 } from "react-icons/fi";
+import DateInput from "@/components/common/DateInput";
 
 export interface Stage {
   stageNumber: number;
   startTermNumber: number;
   endTermNumber: number;
+  stageStartDate?: string;
+  stageEndDate?: string;
 }
 
 interface Props {
@@ -45,6 +48,10 @@ export default function AgreementStructureEditor({ agreementType, stages, totalT
     onChange(type, rows.map((s, idx) => (idx === i ? { ...s, [field]: value } : s)));
   }
 
+  function setDateField(i: number, field: "stageStartDate" | "stageEndDate", value: string) {
+    onChange(type, rows.map((s, idx) => (idx === i ? { ...s, [field]: value || undefined } : s)));
+  }
+
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
@@ -72,6 +79,8 @@ export default function AgreementStructureEditor({ agreementType, stages, totalT
                 <th className="text-left px-3 py-2 font-medium text-slate-500">단계</th>
                 <th className="text-left px-3 py-2 font-medium text-slate-500">시작 연차</th>
                 <th className="text-left px-3 py-2 font-medium text-slate-500">종료 연차 (정산연차)</th>
+                <th className="text-left px-3 py-2 font-medium text-slate-500">단계시작일</th>
+                <th className="text-left px-3 py-2 font-medium text-slate-500">단계종료일</th>
                 <th className="w-8 px-2 py-2" />
               </tr>
             </thead>
@@ -88,6 +97,12 @@ export default function AgreementStructureEditor({ agreementType, stages, totalT
                     <input type="number" min={1} value={s.endTermNumber}
                       onChange={(e) => setField(i, "endTermNumber", Number(e.target.value))}
                       className="w-20 border border-slate-200 rounded px-2 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                  </td>
+                  <td className="px-3 py-1.5">
+                    <DateInput value={s.stageStartDate ?? ""} onChange={(v) => setDateField(i, "stageStartDate", v)} className="w-28" />
+                  </td>
+                  <td className="px-3 py-1.5">
+                    <DateInput value={s.stageEndDate ?? ""} onChange={(v) => setDateField(i, "stageEndDate", v)} className="w-28" />
                   </td>
                   <td className="px-2 py-1.5 text-center">
                     <button type="button" onClick={() => removeStage(i)} className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors">

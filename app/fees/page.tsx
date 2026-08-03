@@ -30,6 +30,7 @@ import {
   type AgencyNoticeTemplateEntry,
   type SystemUser,
   EMPTY_NOTICE_TEMPLATE,
+  EMPTY_FEE_INVOICE_TEMPLATE,
   COMPANY_INFO,
 } from "@/lib/mock";
 import { fmtWon, fmtDate, splitVatInclusive, addMonths, termDateRange } from "@/lib/utils";
@@ -43,6 +44,7 @@ import { buildNoticeEmailHtml } from "@/lib/notice-email-html";
 import { useCanWrite } from "@/lib/permissions";
 import { getCurrentUser } from "@/lib/auth";
 import { resolveRdaAgencyId, isSettlementTerm } from "@/lib/fee-calculator";
+import { generateFeeInvoicePdfDataUrl } from "@/lib/fee-invoice-pdf";
 
 // ── 타입 ──────────────────────────────────────────────────────
 type FeeRow = {
@@ -677,7 +679,7 @@ function StandardAttachmentsPanel() {
 type AttachmentRow = { name: string; checked: boolean; dataUrl?: string };
 
 function DispatchModal({ target, onClose }: { target: DispatchTarget; onClose: () => void }) {
-  const { standardAttachments, users } = useStore();
+  const { standardAttachments, users, feeInvoiceTemplates } = useStore();
   const bizRegAttachment = standardAttachments.find((a) => a.id === "sa-biz-reg");
   // getCurrentUser()는 로그인 시점 스냅샷이라 이후 등록된 하이웍스 계정 정보가 반영되지 않으므로,
   // 실시간 store에서 같은 id의 사용자 레코드를 다시 찾아 발신 계정으로 사용한다.
@@ -742,10 +744,14 @@ ${COMPANY_INFO.name} 드림`;
   }
 
   function buildAttachments(cat: "ANNUAL" | "SETTLEMENT"): AttachmentRow[] {
-    if (isOther) return [];
+    const invoiceAttachment = { name: `청구서_${target.projectNumber}_${termLabel}.pdf`, checked: true };
+    const bizRegAttachmentRow = { name: bizRegAttachment?.name ?? "사업자등록증.pdf", checked: true, dataUrl: bizRegAttachment?.fileDataUrl };
+    // 기타 공문도 청구서 PDF는 자동 생성해 붙이되(대표양식은 OTHER 전용), 위탁정산내역서처럼 특정
+    // 카테고리 전용 서류는 붙이지 않는다 — "기타"는 정형화된 카테고리가 아니라서 그 판단까지 자동화하지 않는다.
+    if (isOther) return [invoiceAttachment, bizRegAttachmentRow];
     return [
-      { name: `청구서_${target.projectNumber}_${termLabel}.pdf`, checked: true },
-      { name: bizRegAttachment?.name ?? "사업자등록증.pdf", checked: true, dataUrl: bizRegAttachment?.fileDataUrl },
+      invoiceAttachment,
+      bizRegAttachmentRow,
       ...(cat === "SETTLEMENT" ? [{ name: "위탁정산내역서.pdf", checked: true }] : []),
     ];
   }
@@ -759,8 +765,63 @@ ${COMPANY_INFO.name} 드림`;
   const [sent,         setSent]         = useState(false);
   const [sendError,    setSendError]    = useState("");
   const [showStandardPanel, setShowStandardPanel] = useState(false);
+  const [invoiceGenerating, setInvoiceGenerating] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const replaceIndexRef = useRef<number | null>(null);
+
+  const invoiceFileName = `청구서_${target.projectNumber}_${termLabel}.pdf`;
+
+  // 청구서 문구/라벨은 하드코딩이 아니라 공문관리 > 수수료 청구서 양식(/notice-templates/invoices)에서
+  // 카테고리별로 등록해둔 대표양식을 그대로 쓴다 — 선택 UI 없이 항상 자동 적용. 역발행/기타는 연차상시/
+  // 위탁정산 어느 쪽이든 항상 REVERSE·OTHER 전용 대표양식을 쓴다(공문발송 드롭다운의 "역발행 수수료
+  // 공문"·"기타 공문"이 연차상시/위탁정산 구분 없이 하나뿐인 것과 대응).
+  const invoiceTemplateCategory =
+    target.kind === "REVERSE" ? "REVERSE" : target.kind === "OTHER" ? "OTHER" : feeCategory;
+  const invoiceTemplateEntry =
+    feeInvoiceTemplates.find((t) => t.category === invoiceTemplateCategory && t.isDefault)
+    ?? feeInvoiceTemplates.find((t) => t.category === invoiceTemplateCategory);
+  const invoiceTemplateContent = invoiceTemplateEntry?.content ?? EMPTY_FEE_INVOICE_TEMPLATE;
+
+  // 청구서(위탁정산/연차상시/역발행/기타) PDF는 반출용 파일이라 모달을 열 때, 그리고 구분(위탁정산↔
+  // 연차상시)을 바꿀 때마다 값에 맞춰 새로 생성해 첨부에 자동으로 끼워 넣는다.
+  useEffect(() => {
+    let cancelled = false;
+    setInvoiceGenerating(true);
+    generateFeeInvoicePdfDataUrl({
+      kind: target.kind,
+      projectNumber: target.projectNumber,
+      projectName: target.projectName,
+      leadInstitutionName: target.leadInstitutionName,
+      agencyShortName: target.agencyShortName,
+      agencyFullName: target.agencyFullName,
+      termYear: target.termYear,
+      termNumber: target.termNumber,
+      recipientName: target.recipientName,
+      feeCategory,
+      supplyAmount: target.supplyAmount,
+      taxAmount: target.taxAmount,
+      totalAmount: target.totalAmount,
+      startDate: target.startDate,
+      endDate: target.endDate,
+      researchLead: target.researchLead,
+      participantCount: target.participantCount,
+      docNumber: target.docNumber,
+    }, invoiceTemplateContent)
+      .then((dataUrl) => {
+        if (cancelled) return;
+        setAttachments((prev) => prev.map((a) => (a.name === invoiceFileName ? { ...a, dataUrl } : a)));
+      })
+      .catch((err) => {
+        console.error("청구서 PDF 생성 실패", err);
+      })
+      .finally(() => {
+        if (!cancelled) setInvoiceGenerating(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [feeCategory, invoiceTemplateEntry?.id]);
 
   // 역발행 공문은 과제가 연차상시/위탁정산 중 어느 쪽인지 자동으로 구분할 수 있는 필드가
   // 없어(발행 시 매번 사람이 고르는 구조) 모달에서 직접 선택하게 하고, 고르면 제목/본문/
@@ -956,11 +1017,9 @@ ${COMPANY_INFO.name} 드림`;
         <div className="flex items-center justify-between">
           <label className="text-xs font-medium text-slate-600">첨부파일</label>
           <div className="flex items-center gap-3">
-            {!isOther && (
-              <button type="button" onClick={() => setShowStandardPanel((v) => !v)} className="text-[11px] text-slate-400 hover:text-teal-600 transition-colors">
-                기본파일 일괄 수정
-              </button>
-            )}
+            <button type="button" onClick={() => setShowStandardPanel((v) => !v)} className="text-[11px] text-slate-400 hover:text-teal-600 transition-colors">
+              기본파일 일괄 수정
+            </button>
             <button
               type="button"
               onClick={() => { replaceIndexRef.current = null; fileInputRef.current?.click(); }}
@@ -988,11 +1047,13 @@ ${COMPANY_INFO.name} 드림`;
                 <span className={`flex-1 text-xs truncate ${a.checked ? "text-slate-700" : "text-slate-300 line-through"}`}>
                   {a.name}
                 </span>
-                {!a.dataUrl && (
+                {!a.dataUrl && a.name === invoiceFileName && invoiceGenerating ? (
+                  <span className="text-[10px] text-slate-400 whitespace-nowrap">생성 중…</span>
+                ) : !a.dataUrl ? (
                   <span className="text-[10px] text-amber-500 whitespace-nowrap" title="실제 파일이 등록되지 않아 발송 시 첨부되지 않습니다">
                     파일 없음
                   </span>
-                )}
+                ) : null}
                 <button
                   type="button"
                   onClick={() => { replaceIndexRef.current = i; fileInputRef.current?.click(); }}
@@ -2407,10 +2468,13 @@ export default function FeesPage() {
       const templates = agency ? agencyNoticeTemplates.filter((t) => t.agencyShortName === agency.shortName) : [];
       const leadMember = projectMembers.find((m) => m.projectId === projectId && m.role === "LEAD");
       const coInstitutionCount = projectMembers.filter((m) => m.projectId === projectId && m.role !== "LEAD").length;
+      const currentStage = project.stages?.find((s) => project.currentTerm >= s.startTermNumber && project.currentTerm <= s.endTermNumber);
+      const currentStageStartDate = currentStage?.stageStartDate ?? project.stageStartDate ?? project.startDate;
+      const currentStageEndDate = currentStage?.stageEndDate ?? project.stageEndDate ?? project.endDate;
       const statusRows: NoticeStatusRow[] = [
         { label: "과제번호 (RCMS)", value: project.projectCode || project.projectNumber },
         { label: "과제명", value: project.projectName },
-        { label: "단계연구개발기간", value: `${fmtDate(project.stageStartDate ?? project.startDate)} ~ ${fmtDate(project.stageEndDate ?? project.endDate)}` },
+        { label: "단계연구개발기간", value: `${fmtDate(currentStageStartDate)} ~ ${fmtDate(currentStageEndDate)}` },
         { label: "대상기간", value: `${fmtDate(project.firstStartDate ?? project.startDate)} ~ ${fmtDate(project.finalEndDate ?? project.endDate)}` },
         { label: "정산구분", value: leadMember?.settlementType ?? "위탁정산" },
         { label: "주관연구개발기관", value: project.leadInstitutionName },

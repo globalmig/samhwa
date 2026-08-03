@@ -17,6 +17,7 @@ import {
   projectIssues as initialIssues,
   fundingAgencies as initialFundingAgencies,
   agencyNoticeTemplates as initialAgencyNoticeTemplates,
+  feeInvoiceTemplates as initialFeeInvoiceTemplates,
   notices as initialNotices,
   standardAttachments as initialStandardAttachments,
   type Institution,
@@ -37,6 +38,8 @@ import {
   type AgencyGuideTab,
   type AgencyNoticeTemplate,
   type AgencyNoticeTemplateEntry,
+  type FeeInvoiceTemplate,
+  type FeeInvoiceTemplateEntry,
   type Notice,
   type StandardAttachment,
 } from "./mock";
@@ -75,6 +78,7 @@ export const ENTITY_NAMES: Record<string, string> = {
   projectIssue: "이슈/메모",
   notice: "공지사항",
   standardAttachment: "표준 첨부서류",
+  feeInvoiceTemplate: "수수료 청구서 양식",
 };
 
 // ============================================================
@@ -101,6 +105,7 @@ interface StoreState {
   auditLog: AuditEntry[];
   agencyGuides: Record<string, AgencyGuideTab[]>;
   agencyNoticeTemplates: AgencyNoticeTemplateEntry[];
+  feeInvoiceTemplates: FeeInvoiceTemplateEntry[];
   standardAttachments: StandardAttachment[];
 }
 
@@ -241,6 +246,7 @@ let _state: StoreState = {
   auditLog: [...INITIAL_AUDIT_LOG],
   agencyGuides: {},
   agencyNoticeTemplates: [...initialAgencyNoticeTemplates],
+  feeInvoiceTemplates: [...initialFeeInvoiceTemplates],
   standardAttachments: [...initialStandardAttachments],
 };
 
@@ -1081,6 +1087,57 @@ export function deleteAgencyNoticeTemplate(id: string): void {
   if (!item) return;
   _state = { ..._state, agencyNoticeTemplates: _state.agencyNoticeTemplates.filter((t) => t.id !== id) };
   record("fundingAgency", item.agencyShortName, `${item.agencyShortName} 공문 템플릿 삭제 (${item.name})`, "DELETE");
+  notify();
+}
+
+// ============================================================
+// FEE INVOICE TEMPLATES (수수료 청구서 양식)
+// ============================================================
+
+export function addFeeInvoiceTemplate(
+  category: FeeInvoiceTemplateEntry["category"],
+  name: string,
+  content: FeeInvoiceTemplate
+): FeeInvoiceTemplateEntry {
+  const item: FeeInvoiceTemplateEntry = { id: genId("fit"), category, name, isDefault: false, content };
+  _state = { ..._state, feeInvoiceTemplates: [..._state.feeInvoiceTemplates, item] };
+  record("feeInvoiceTemplate", item.id, name, "CREATE");
+  notify();
+  return item;
+}
+
+export function updateFeeInvoiceTemplate(
+  id: string,
+  data: Partial<Pick<FeeInvoiceTemplateEntry, "name" | "content">>
+): void {
+  const before = _state.feeInvoiceTemplates.find((t) => t.id === id);
+  if (!before) return;
+  const after = { ...before, ...data };
+  _state = { ..._state, feeInvoiceTemplates: _state.feeInvoiceTemplates.map((t) => (t.id === id ? after : t)) };
+  record("feeInvoiceTemplate", id, `${after.name} 수정`, "UPDATE");
+  notify();
+}
+
+// 대표양식(isDefault)은 카테고리마다 항상 최소 1개 있어야 발송(DispatchModal) 흐름이 깨지지 않으므로
+// 삭제를 거부한다 — 다른 템플릿을 먼저 대표로 지정한 뒤에만 지울 수 있다.
+export function deleteFeeInvoiceTemplate(id: string): void {
+  const item = _state.feeInvoiceTemplates.find((t) => t.id === id);
+  if (!item || item.isDefault) return;
+  _state = { ..._state, feeInvoiceTemplates: _state.feeInvoiceTemplates.filter((t) => t.id !== id) };
+  record("feeInvoiceTemplate", id, `${item.name} 삭제`, "DELETE");
+  notify();
+}
+
+export function setDefaultFeeInvoiceTemplate(id: string): void {
+  const item = _state.feeInvoiceTemplates.find((t) => t.id === id);
+  if (!item) return;
+  _state = {
+    ..._state,
+    feeInvoiceTemplates: _state.feeInvoiceTemplates.map((t) =>
+      t.category === item.category ? { ...t, isDefault: t.id === id } : t
+    ),
+  };
+  record("feeInvoiceTemplate", id, `${item.name} 대표양식으로 지정`, "UPDATE");
   notify();
 }
 

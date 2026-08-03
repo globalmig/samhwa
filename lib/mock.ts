@@ -712,7 +712,7 @@ export interface Project {
   billingType?: "정발행" | "역발행요청" | "역발행" | "대상아님" | "면제"; // 발행구분 (없으면 계산서 유무로 자동 판별)
   // 협약 구조
   agreementType?: "BATCH" | "STAGED"; // 일괄협약(0단계) | 단계협약
-  stages?: { stageNumber: number; startTermNumber: number; endTermNumber: number }[];
+  stages?: { stageNumber: number; startTermNumber: number; endTermNumber: number; stageStartDate?: string; stageEndDate?: string }[];
   projectType?: "GENERAL" | "AUTONOMY_TRACK"; // 일반과제 | 자율성트랙과제
   // 자율성트랙 과제 전체에 적용되는 정산구분 — 참여기관별 ProjectMember.settlementType과는 별개다.
   // 자율성트랙은 일반과제와 수수료 계산 방식 자체가 달라서, 참여기관별로 나뉠 수 있는 값을 그대로
@@ -3233,11 +3233,39 @@ export interface AgencyNoticeTemplate {
   attachments: NoticeAttachment[];
 }
 // 전담기관 하나에 여러 개의 템플릿을 등록해두고 발송 시 선택할 수 있도록 리스트로 관리한다.
+// (수수료 청구서 양식은 FeeInvoiceTemplateEntry로 별도 관리한다 — 전담기관 스코프도, 표 구조도 달라 여기 섞지 않는다.)
 export interface AgencyNoticeTemplateEntry {
   id: string;
   agencyShortName: string; // FundingAgency.shortName (KEIT 등)
   name: string;            // 템플릿 이름 (목록에서 선택할 때 표시)
   content: AgencyNoticeTemplate;
+}
+
+// ─── 수수료 청구서 템플릿 ──────────────────────────────────────
+// 전담기관 공문(AgencyNoticeTemplate)과 달리 전담기관으로 스코프하지 않고 유형(feeCategory)별로만
+// 관리한다 — 기관마다 문구가 갈릴 일이 없고, 기관명이 들어가는 자리는 {agency} 자리표시자로 저장해두면
+// 발송 시 실제 전담기관 정식명칭(FeeInvoiceTarget.agencyFullName)으로 자동 치환된다.
+export interface FeeInvoiceTemplate {
+  title: string;            // 제목. 예: "{agency} 전담과제 연차상시점검 수수료 청구의 건"
+  bodyIntro: string[];      // 본문 안내문 2줄
+  periodLabel: string;      // 대상과제현황 표의 기간 행 라벨. 예: "당해사업연도" | "정산대상기간"
+  feeSectionTitle: string;  // "■ ..." 수수료 표 섹션 제목
+  feeStdLabel: string;      // 수수료 표준액 행 라벨
+  surchargeLabel: string;   // 가산금 행 라벨
+  feeTotalLabel: string;    // 합계 행 라벨
+}
+// 카테고리(category) 안에 여러 템플릿을 등록할 수 있되, isDefault로 표시된 하나만 발송 시 자동
+// 적용되는 대표양식이다 — 카테고리마다 정확히 1개씩 있어야 한다. ANNUAL/SETTLEMENT는 TermFee 등
+// 다른 곳의 feeCategory와 같은 뜻(연차상시/위탁정산)이지만, REVERSE(역발행)·OTHER(기타)는 그 축과
+// 별개로 "청구서 문서 자체를 어떤 문구로 관리할지"만 가리는 축이다 — 역발행/기타는 연차상시·위탁정산
+// 어느 쪽이든 항상 이 템플릿 하나를 쓴다(공문발송 드롭다운의 "역발행 수수료 공문"·"기타 공문"이
+// 연차상시/위탁정산 구분 없이 하나뿐인 이유).
+export interface FeeInvoiceTemplateEntry {
+  id: string;
+  category: "ANNUAL" | "SETTLEMENT" | "REVERSE" | "OTHER";
+  name: string;
+  isDefault: boolean;
+  content: FeeInvoiceTemplate;
 }
 
 export const EMPTY_NOTICE_TEMPLATE: AgencyNoticeTemplate = {
@@ -3381,6 +3409,95 @@ export const agencyNoticeTemplates: AgencyNoticeTemplateEntry[] = [
       attachments: [
         { name: "임업기술개발사업 운영요령" },
       ],
+    },
+  },
+];
+
+export const EMPTY_FEE_INVOICE_TEMPLATE: FeeInvoiceTemplate = {
+  title: "",
+  bodyIntro: ["귀 기관의 일익 번창하심을 기원합니다.", ""],
+  periodLabel: "당해사업연도",
+  feeSectionTitle: "",
+  feeStdLabel: "수수료 표준액",
+  surchargeLabel: "가산금",
+  feeTotalLabel: "",
+};
+
+// 수수료 청구서 발송(app/fees/page.tsx의 DispatchModal)이 항상 카테고리별 대표양식을 찾아 쓰므로,
+// ANNUAL·SETTLEMENT·REVERSE 각각 최소 1개(isDefault: true)는 항상 있어야 한다. ANNUAL/SETTLEMENT 문구는
+// 과거 lib/fee-invoice-pdf.ts에 하드코딩돼 있던 내용을 그대로 옮긴 것 — 아무것도 편집하지 않으면 기존과
+// 동일한 청구서가 나간다.
+export const feeInvoiceTemplates: FeeInvoiceTemplateEntry[] = [
+  {
+    id: "fit-annual-default",
+    category: "ANNUAL",
+    name: "연차상시점검 수수료 청구서 (기본)",
+    isDefault: true,
+    content: {
+      title: "{agency} 전담과제 연차상시점검 수수료 청구의 건",
+      bodyIntro: [
+        "귀 기관의 일익 번창하심을 기원합니다.",
+        "당 회계법인은 {agency}과 체결한 \"사업비 위탁정산업무 협약\"에 따라 사업비 연차상시점검 수수료를 아래와 같이 청구하오니 기한내 처리하여 주시고 사업비 사용실적에 반영하여주시기 바랍니다.",
+      ],
+      periodLabel: "당해사업연도",
+      feeSectionTitle: "연차상시점검 수수료",
+      feeStdLabel: "수수료 표준액",
+      surchargeLabel: "가산금",
+      feeTotalLabel: "연차상시점검 수수료",
+    },
+  },
+  {
+    id: "fit-settlement-default",
+    category: "SETTLEMENT",
+    name: "위탁정산 수수료 청구서 (기본)",
+    isDefault: true,
+    content: {
+      title: "{agency} 전담과제 위탁정산수수료 청구의 건",
+      bodyIntro: [
+        "귀 기관의 일익 번창하심을 기원합니다.",
+        "당 회계법인은 {agency}과 체결한 \"사업비 위탁정산업무 협약\"에 따라 사업비 위탁정산수수료를 아래와 같이 청구하오니 기한내 처리하여 주시고 사업비 사용실적에 반영하여주시기 바랍니다.",
+      ],
+      periodLabel: "정산대상기간",
+      feeSectionTitle: "위탁정산수수료(VAT 포함 금액)",
+      feeStdLabel: "정산수수료 표준액",
+      surchargeLabel: "가산금",
+      feeTotalLabel: "정산수수료",
+    },
+  },
+  {
+    id: "fit-reverse-default",
+    category: "REVERSE",
+    name: "역발행 수수료 청구서 (기본)",
+    isDefault: true,
+    content: {
+      title: "{agency} 전담과제 수수료 역발행 요청의 건",
+      bodyIntro: [
+        "귀 기관의 일익 번창하심을 기원합니다.",
+        "당 회계법인은 {agency}과 체결한 \"사업비 위탁정산업무 협약\"에 따라 아래 수수료에 대한 역발행을 요청드리오니 기한내 처리하여 주시기 바랍니다.",
+      ],
+      periodLabel: "당해사업연도",
+      feeSectionTitle: "역발행 수수료",
+      feeStdLabel: "수수료 표준액",
+      surchargeLabel: "가산금",
+      feeTotalLabel: "역발행 수수료",
+    },
+  },
+  {
+    id: "fit-other-default",
+    category: "OTHER",
+    name: "기타 수수료 청구서 (기본)",
+    isDefault: true,
+    content: {
+      title: "{agency} 전담과제 수수료 청구의 건",
+      bodyIntro: [
+        "귀 기관의 일익 번창하심을 기원합니다.",
+        "당 회계법인은 {agency}과 체결한 \"사업비 위탁정산업무 협약\"에 따라 아래 수수료를 청구하오니 기한내 처리하여 주시기 바랍니다.",
+      ],
+      periodLabel: "당해사업연도",
+      feeSectionTitle: "수수료",
+      feeStdLabel: "수수료 표준액",
+      surchargeLabel: "가산금",
+      feeTotalLabel: "수수료",
     },
   },
 ];

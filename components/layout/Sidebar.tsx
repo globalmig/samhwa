@@ -1,12 +1,18 @@
 "use client";
 
+import { useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { FiChevronDown } from "react-icons/fi";
+import { LuPanelLeft } from "react-icons/lu";
 import { useAuth } from "@/lib/auth";
 import { allowedRolesForPath } from "@/lib/permissions";
 
 type Role = "ADMIN" | "ACCOUNTANT" | "SETTLEMENT" | "VIEWER";
-type NavGroup = { label?: string; hidden?: boolean; items: { label: string; href: string; hidden?: boolean; icon: React.ReactNode }[] };
+type NavChild = { label: string; href: string; hidden?: boolean };
+type NavItem = { label: string; href: string; hidden?: boolean; icon: React.ReactNode; children?: NavChild[] };
+type NavGroup = { label?: string; hidden?: boolean; items: NavItem[] };
 
 const navGroups: NavGroup[] = [
   // ── 대시보드 ───────────────────────────────────────────────
@@ -83,6 +89,10 @@ const navGroups: NavGroup[] = [
             <path fillRule="evenodd" d="M4 2a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7.414A2 2 0 0 0 13.414 6L10 2.586A2 2 0 0 0 8.586 2H4zm1 9a1 1 0 0 0 0 2h6a1 1 0 1 0 0-2H5zm0 4a1 1 0 1 0 0 2h4a1 1 0 1 0 0-2H5zm0-8a1 1 0 0 0 0 2h2a1 1 0 1 0 0-2H5z" clipRule="evenodd" />
           </svg>
         ),
+        children: [
+          { label: "절차 안내 공문", href: "/notice-templates/documents" },
+          { label: "수수료 청구서 양식", href: "/notice-templates/invoices" },
+        ],
       },
     ],
   },
@@ -183,10 +193,52 @@ const ROLE_LABELS: Record<string, string> = {
   VIEWER: "조회 전용",
 };
 
+// 사이드바 최소화 상태에서 아이콘에 마우스를 올리면 옆에 띄우는 라벨.
+// 사이드바(nav)는 세로 스크롤 때문에 overflow가 걸려 있어, 일반적인 absolute 배치로는
+// 툴팁이 사이드바 오른쪽 경계에서 잘려 보인다 — document.body로 포탈해서 화면 좌표(fixed)로
+// 직접 그리면 어떤 조상의 overflow와도 무관하게 항상 온전히 보인다.
+function IconTooltip({ label, children }: { label: string; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  return (
+    <div
+      ref={ref}
+      className="relative shrink-0"
+      onMouseEnter={() => {
+        const r = ref.current?.getBoundingClientRect();
+        if (r) setPos({ top: r.top + r.height / 2, left: r.right + 8 });
+      }}
+      onMouseLeave={() => setPos(null)}
+    >
+      {children}
+      {pos &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <span
+            style={{ top: pos.top, left: pos.left }}
+            className="pointer-events-none fixed z-50 -translate-y-1/2 whitespace-nowrap rounded-lg bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-white shadow-lg"
+          >
+            {label}
+          </span>,
+          document.body
+        )}
+    </div>
+  );
+}
+
 export default function Sidebar() {
   const pathname = usePathname();
   const { user } = useAuth();
   const role = user?.role as Role | undefined;
+  // 하위메뉴(children)가 있는 항목의 펼침/접힘 상태 — 수동으로 토글하기 전엔 하위 경로 중 하나가
+  // 현재 활성 경로일 때 기본으로 펼쳐진다 (아래 expanded 계산부 참고).
+  const [manualExpanded, setManualExpanded] = useState<Record<string, boolean>>({});
+  // 그룹(예: "수수료 규정 관리") 단위 접기/펼치기 — 기본은 항상 펼쳐진 상태이고, 사용자가 직접
+  // 접은 그룹만 기억한다.
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  // 사이드바 전체 최소화(아이콘만 남기기) — 켜져 있으면 그룹 접기 상태와 무관하게 항상 아이콘만 보여준다.
+  const [collapsed, setCollapsed] = useState(false);
 
   const isActive = (href: string) => {
     if (href === "/") return pathname === "/";
@@ -197,69 +249,164 @@ export default function Sidebar() {
     .filter((group) => !group.hidden)
     .map((group) => ({
       ...group,
-      items: group.items.filter((item) => {
-        if (item.hidden) return false;
-        const allowed = allowedRolesForPath(item.href);
-        return !role || allowed.includes(role);
-      }),
+      items: group.items
+        .filter((item) => {
+          if (item.hidden) return false;
+          const allowed = allowedRolesForPath(item.href);
+          return !role || allowed.includes(role);
+        })
+        .map((item) => ({
+          ...item,
+          children: item.children?.filter((c) => !c.hidden),
+        })),
     }))
     .filter((group) => group.items.length > 0);
 
   return (
-    <aside className="flex flex-col w-60 shrink-0 bg-slate-900 text-slate-300 overflow-y-auto">
-      {/* 로고 */}
-      <div className="flex items-center gap-2.5 px-5 py-5 border-b border-slate-700/50">
-        <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-blue-600">
-          <svg viewBox="0 0 20 20" fill="white" className="w-4 h-4">
-            <path d="M2 4a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4zm9 0a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1V4zm0 7a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1v-5zM2 13a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1v-3z" />
-          </svg>
-        </div>
-        <div>
-          <p className="text-sm font-semibold text-white">Samhwa ERP</p>
-          <p className="text-[10px] text-slate-400 leading-tight">수수료 통합관리</p>
-        </div>
+    <aside className={`flex flex-col shrink-0 bg-slate-900 text-slate-300 transition-[width] duration-150 ${collapsed ? "w-16" : "w-60"}`}>
+      {/* 로고 (+ 사이드바 최소화 토글) */}
+      <div className={`flex items-center gap-2.5 py-5 border-b border-slate-700/50 ${collapsed ? "justify-center px-2" : "px-5"}`}>
+        {collapsed ? (
+          // 접힌 상태에선 로고 자리를 그대로 토글 버튼으로 쓴다 — 평소엔 로고, 마우스를 올리면
+          // 펼치기 아이콘으로 바뀐다.
+          <button
+            type="button"
+            onClick={() => setCollapsed(false)}
+            title="사이드바 펼치기"
+            className="group relative flex items-center justify-center w-8 h-8 rounded-lg bg-blue-600 shrink-0"
+          >
+            <svg viewBox="0 0 20 20" fill="white" className="w-4 h-4 transition-opacity group-hover:opacity-0">
+              <path d="M2 4a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4zm9 0a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1V4zm0 7a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1v-5zM2 13a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1v-3z" />
+            </svg>
+            <LuPanelLeft size={16} className="absolute inset-0 m-auto text-white opacity-0 transition-opacity group-hover:opacity-100" />
+          </button>
+        ) : (
+          <>
+            <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-blue-600 shrink-0">
+              <svg viewBox="0 0 20 20" fill="white" className="w-4 h-4">
+                <path d="M2 4a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4zm9 0a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1V4zm0 7a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1v-5zM2 13a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1v-3z" />
+              </svg>
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-white truncate">Samhwa ERP</p>
+              <p className="text-[10px] text-slate-400 leading-tight truncate">수수료 통합관리</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setCollapsed(true)}
+              title="사이드바 최소화"
+              className="flex items-center justify-center w-7 h-7 rounded-md text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition-colors shrink-0"
+            >
+              <LuPanelLeft size={16} />
+            </button>
+          </>
+        )}
       </div>
 
       {/* 네비게이션 */}
-      <nav className="flex-1 px-3 py-4 space-y-5">
-        {visibleGroups.map((group, gi) => (
+      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
+        {visibleGroups.map((group, gi) => {
+          const groupCollapsed = group.label ? !collapsed && (collapsedGroups[group.label] ?? false) : false;
+          return (
           <div key={gi}>
-            {group.label && (
-              <p className="px-2 mb-1 text-[10px] font-semibold tracking-widest uppercase text-slate-500">
-                {group.label}
-              </p>
+            {group.label && !collapsed && (
+              <button
+                type="button"
+                onClick={() => setCollapsedGroups((p) => ({ ...p, [group.label!]: !groupCollapsed }))}
+                className="w-full flex items-center gap-1 px-2 mb-1 text-[10px] font-semibold tracking-widest uppercase text-slate-500 hover:text-slate-300 transition-colors"
+              >
+                <span className="flex-1 text-left">{group.label}</span>
+                <FiChevronDown size={11} className={`shrink-0 transition-transform ${groupCollapsed ? "-rotate-90" : ""}`} />
+              </button>
             )}
+            {!groupCollapsed && (
             <ul className="space-y-0.5">
-              {group.items.map((item) => (
-                <li key={item.href}>
-                  <Link
-                    href={item.href}
-                    className={`flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm transition-colors ${
-                      isActive(item.href)
-                        ? "bg-blue-600 text-white"
-                        : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"
-                    }`}
-                  >
-                    <span className="shrink-0">{item.icon}</span>
-                    <span>{item.label}</span>
-                  </Link>
-                </li>
-              ))}
+              {group.items.map((item) => {
+                const hasChildren = !!item.children?.length && !collapsed;
+                if (!hasChildren) {
+                  const link = (
+                    <Link
+                      href={item.href}
+                      className={`flex items-center gap-2.5 py-2 rounded-md text-sm transition-colors ${collapsed ? "justify-center px-0" : "px-2.5"} ${
+                        isActive(item.href)
+                          ? "bg-blue-600 text-white"
+                          : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+                      }`}
+                    >
+                      <span className="shrink-0">{item.icon}</span>
+                      {!collapsed && <span>{item.label}</span>}
+                    </Link>
+                  );
+                  return (
+                    <li key={item.href}>
+                      {collapsed ? <IconTooltip label={item.label}>{link}</IconTooltip> : link}
+                    </li>
+                  );
+                }
+                const childActive = item.children!.some((c) => isActive(c.href));
+                const expanded = manualExpanded[item.href] ?? childActive;
+                return (
+                  <li key={item.href}>
+                    <button
+                      type="button"
+                      onClick={() => setManualExpanded((p) => ({ ...p, [item.href]: !expanded }))}
+                      className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm transition-colors ${
+                        childActive ? "text-slate-200" : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+                      }`}
+                    >
+                      <span className="shrink-0">{item.icon}</span>
+                      <span className="flex-1 text-left">{item.label}</span>
+                      <FiChevronDown size={13} className={`shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`} />
+                    </button>
+                    {expanded && (
+                      <ul className="mt-0.5 ml-3.75 pl-3 space-y-0.5 border-l border-slate-700/60">
+                        {item.children!.map((child) => (
+                          <li key={child.href}>
+                            <Link
+                              href={child.href}
+                              className={`block px-2.5 py-1.5 rounded-md text-sm transition-colors ${
+                                isActive(child.href)
+                                  ? "bg-blue-600 text-white"
+                                  : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+                              }`}
+                            >
+                              {child.label}
+                            </Link>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
+            )}
           </div>
-        ))}
+          );
+        })}
       </nav>
 
       {/* 하단 사용자 */}
       <div className="px-3 py-4 border-t border-slate-700/50">
-        <div className="flex items-center gap-2.5 px-2.5 py-2">
-          <div className="flex items-center justify-center w-7 h-7 rounded-full bg-slate-600 text-xs text-white font-medium shrink-0">
-            {user?.name?.[0] ?? "?"}
-          </div>
+        <div className={`flex items-center gap-2.5 py-2 ${collapsed ? "justify-center px-0" : "px-2.5"}`}>
+          {(() => {
+            const avatar = (
+              <div className="flex items-center justify-center w-7 h-7 rounded-full bg-slate-600 text-xs text-white font-medium shrink-0">
+                {user?.name?.[0] ?? "?"}
+              </div>
+            );
+            return collapsed ? (
+              <IconTooltip label={`${user?.name ?? "-"} · ${ROLE_LABELS[user?.role ?? ""] ?? "-"}`}>{avatar}</IconTooltip>
+            ) : (
+              avatar
+            );
+          })()}
+          {!collapsed && (
           <div className="min-w-0">
             <p className="text-xs font-medium text-slate-300 truncate">{user?.name ?? "-"}</p>
             <p className="text-[10px] text-slate-500 truncate">{ROLE_LABELS[user?.role ?? ""] ?? "-"}</p>
           </div>
+          )}
         </div>
       </div>
     </aside>
