@@ -30,7 +30,6 @@ const EMPTY: Omit<Institution, "id"> = {
   contactName: "",
   contactEmail: "",
   contactPhone: "",
-  projectCount: 0,
   registeredAt: new Date().toISOString().slice(0, 10),
   status: "ACTIVE",
   note: "",
@@ -219,6 +218,16 @@ export default function InstitutionsPage() {
     return map;
   }, [fundingAgencies, projectMembers, projects]);
 
+  // Institution.projectCount는 저장만 되고 갱신되지 않는 죽은 필드였다 — 항상 참여기관
+  // 목록(projectMembers)에서 실시간으로 계산해 화면과 실제 데이터가 어긋나지 않게 한다.
+  const projectCountByInstitution = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const member of projectMembers) {
+      map.set(member.institutionId, (map.get(member.institutionId) ?? 0) + 1);
+    }
+    return map;
+  }, [projectMembers]);
+
   const classificationOptions = useMemo(() => {
     const options = new Map<string, string>();
     for (const items of classificationByInstitution.values()) {
@@ -253,7 +262,9 @@ export default function InstitutionsPage() {
   }
 
   function handleDelete(id: string, name: string) {
-    if (confirm(`"${name}" 기관을 삭제하시겠습니까?`)) deleteInstitution(id);
+    if (!confirm(`"${name}" 기관을 삭제하시겠습니까?`)) return;
+    const blockedReason = deleteInstitution(id);
+    if (blockedReason) alert(blockedReason);
   }
 
   const activeCount = institutions.filter((i) => i.status === "ACTIVE").length;
@@ -364,7 +375,7 @@ export default function InstitutionsPage() {
                   <td className="px-4 py-4 text-xs text-slate-500 font-mono whitespace-nowrap">{inst.bizNumber}</td>
                   <td className="px-4 py-4 text-sm text-slate-700 whitespace-nowrap">{inst.contactName}</td>
                   <td className="px-4 py-4 text-xs text-slate-500 whitespace-nowrap">{inst.contactEmail}</td>
-                  <td className="px-4 py-4 text-center text-sm font-medium text-slate-700">{inst.projectCount}건</td>
+                  <td className="px-4 py-4 text-center text-sm font-medium text-slate-700">{projectCountByInstitution.get(inst.id) ?? 0}건</td>
                   <td className="px-4 py-4 text-center text-xs text-slate-500 whitespace-nowrap">{fmtDate(inst.registeredAt)}</td>
                   <td className="px-4 py-4 text-center">
                     <StatusBadge label={inst.status === "ACTIVE" ? "활성" : "비활성"} color={inst.status === "ACTIVE" ? "green" : "slate"} />

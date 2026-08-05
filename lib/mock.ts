@@ -11,214 +11,6 @@
 // ============================================================
 
 // ============================================================
-// 대시보드 데이터
-// ============================================================
-
-export interface ProjectFeeRow {
-  projectNumber: string;
-  projectName: string;
-  agency: string; // 지원기관 (정부)
-  leadInstitutionName: string; // 주관기관
-  termYear: number;
-  termNumber: number;
-  memberCount: number; // 참여기관 수 (주관 포함)
-  totalBudget: number;
-  calculatedFee: number; // 산정 수수료
-  appliedFee: number; // 적용 수수료
-  billedFee: number;
-  unclaimedFee: number;
-  receivable: number;
-  status: "BILLED" | "CONFIRMED" | "DRAFT" | "UNCLAIMED" | "OVERDUE";
-}
-
-export interface InstitutionSummaryRow {
-  name: string;
-  type: string;
-  projectCount: number;
-  totalBudget: number;
-  totalFee: number;
-  unclaimed: number;
-  receivable: number;
-  settlement: number;
-}
-
-export const projectFeeRows: ProjectFeeRow[] = [
-  {
-    projectNumber: "RS-2024-00214837",
-    projectName: "초정밀 광학 센서 모듈 개발 및 양산화",
-    agency: "한국산업기술기획평가원",
-    leadInstitutionName: "삼화전자(주)",
-    termYear: 2024,
-    termNumber: 2,
-    memberCount: 4,
-    totalBudget: 2_800_000_000,
-    calculatedFee: 65_000_000,
-    appliedFee: 52_000_000,
-    billedFee: 52_000_000,
-    unclaimedFee: 4_000_000,
-    receivable: 0,
-    status: "BILLED",
-  },
-  {
-    projectNumber: "RS-2024-00198321",
-    projectName: "차세대 이차전지 양극재 소재 국산화",
-    agency: "한국에너지기술평가원",
-    leadInstitutionName: "(주)에너텍솔루션",
-    termYear: 2024,
-    termNumber: 1,
-    memberCount: 6,
-    totalBudget: 4_500_000_000,
-    calculatedFee: 112_500_000,
-    appliedFee: 112_500_000,
-    billedFee: 112_500_000,
-    unclaimedFee: 0,
-    receivable: 112_500_000,
-    status: "OVERDUE",
-  },
-  {
-    projectNumber: "RS-2024-00201547",
-    projectName: "스마트 제조공정 AI 품질예측 시스템",
-    agency: "정보통신기획평가원",
-    leadInstitutionName: "나노소재기술(주)",
-    termYear: 2024,
-    termNumber: 3,
-    memberCount: 3,
-    totalBudget: 1_200_000_000,
-    calculatedFee: 24_000_000,
-    appliedFee: 22_000_000,
-    billedFee: 22_000_000,
-    unclaimedFee: 2_000_000,
-    receivable: 0,
-    status: "CONFIRMED",
-  },
-  {
-    projectNumber: "RS-2023-00187652",
-    projectName: "바이오 플라스틱 생분해성 소재 개발",
-    agency: "한국임업진흥원",
-    leadInstitutionName: "연세대학교",
-    termYear: 2024,
-    termNumber: 2,
-    memberCount: 5,
-    totalBudget: 3_100_000_000,
-    calculatedFee: 77_500_000,
-    appliedFee: 77_500_000,
-    billedFee: 77_500_000,
-    unclaimedFee: 0,
-    receivable: 38_750_000,
-    status: "BILLED",
-  },
-  {
-    projectNumber: "RS-2024-00225198",
-    projectName: "고효율 수소 연료전지 스택 성능 향상",
-    agency: "한국에너지기술평가원",
-    leadInstitutionName: "한국과학기술연구원",
-    termYear: 2024,
-    termNumber: 1,
-    memberCount: 2,
-    totalBudget: 2_200_000_000,
-    calculatedFee: 58_000_000,
-    appliedFee: 0,
-    billedFee: 0,
-    unclaimedFee: 58_000_000,
-    receivable: 0,
-    status: "UNCLAIMED",
-  },
-  {
-    projectNumber: "RS-2024-00231087",
-    projectName: "반도체 패키징 열관리 신소재 연구",
-    agency: "한국산업기술기획평가원",
-    leadInstitutionName: "(주)미래반도체",
-    termYear: 2024,
-    termNumber: 1,
-    memberCount: 3,
-    totalBudget: 980_000_000,
-    calculatedFee: 19_600_000,
-    appliedFee: 19_600_000,
-    billedFee: 19_600_000,
-    unclaimedFee: 0,
-    receivable: 0,
-    status: "BILLED",
-  },
-  {
-    projectNumber: "RS-2023-00176431",
-    projectName: "도심항공모빌리티(UAM) 경량화 구조재 개발",
-    agency: "농촌진흥청",
-    leadInstitutionName: "(주)한국항공우주",
-    termYear: 2024,
-    termNumber: 3,
-    memberCount: 7,
-    totalBudget: 5_800_000_000,
-    calculatedFee: 145_000_000,
-    appliedFee: 145_000_000,
-    billedFee: 145_000_000,
-    unclaimedFee: 0,
-    receivable: 0,
-    status: "BILLED",
-  },
-  {
-    projectNumber: "RS-2024-00219874",
-    projectName: "의료용 생체흡수성 임플란트 소재 개발",
-    agency: "농촌진흥청",
-    leadInstitutionName: "그린바이오텍(주)",
-    termYear: 2024,
-    termNumber: 2,
-    memberCount: 3,
-    totalBudget: 1_650_000_000,
-    calculatedFee: 33_000_000,
-    appliedFee: 0,
-    billedFee: 0,
-    unclaimedFee: 33_000_000,
-    receivable: 0,
-    status: "DRAFT",
-  },
-];
-
-export const institutionSummaryRows: InstitutionSummaryRow[] = [
-  { name: "삼화전자(주)", type: "중소기업", projectCount: 4, totalBudget: 6_800_000_000, totalFee: 136_000_000, unclaimed: 18_000_000, receivable: 52_000_000, settlement: 420_000_000 },
-  { name: "한국과학기술연구원", type: "정부출연연구소", projectCount: 6, totalBudget: 12_500_000_000, totalFee: 312_500_000, unclaimed: 45_000_000, receivable: 98_750_000, settlement: 780_000_000 },
-  { name: "(주)에너텍솔루션", type: "중견기업", projectCount: 3, totalBudget: 4_200_000_000, totalFee: 84_000_000, unclaimed: 0, receivable: 36_000_000, settlement: 210_000_000 },
-  { name: "연세대학교", type: "대학", projectCount: 5, totalBudget: 8_900_000_000, totalFee: 178_000_000, unclaimed: 62_000_000, receivable: 0, settlement: 560_000_000 },
-  { name: "나노소재기술(주)", type: "스타트업", projectCount: 2, totalBudget: 980_000_000, totalFee: 14_700_000, unclaimed: 4_150_000, receivable: 0, settlement: 98_000_000 },
-];
-
-export const summary = {
-  totalFee: 583_100_000,
-  billedFee: 428_600_000,
-  unclaimed: 97_000_000,
-  receivable: 151_250_000,
-  collected: 277_350_000,
-  totalFeeChange: "+12.4%",
-  billedChange: "+8.5%",
-  unclaimedChange: "+5.3%",
-  receivableChange: "+3.1%",
-  collectedChange: "+15.2%",
-};
-
-export const agencyBreakdown = [
-  { name: "한국산업기술기획평가원", fee: 213_200_000, rate: 37 },
-  { name: "한국에너지기술평가원", fee: 156_500_000, rate: 27 },
-  { name: "한국임업진흥원", fee: 92_800_000, rate: 16 },
-  { name: "정보통신기획평가원", fee: 58_400_000, rate: 10 },
-  { name: "기타", fee: 62_200_000, rate: 10 },
-];
-
-export interface AgencyFeeRow {
-  name: string;
-  issuedAmount: number;
-  collectedAmount: number;
-  issuedCount: number;
-  collectedCount: number;
-}
-
-export const agencyFeeRows: AgencyFeeRow[] = [
-  { name: "한국산업기술기획평가원", issuedAmount: 71_600_000, collectedAmount: 71_600_000, issuedCount: 2, collectedCount: 2 },
-  { name: "한국에너지기술평가원", issuedAmount: 112_500_000, collectedAmount: 0, issuedCount: 1, collectedCount: 0 },
-  { name: "한국임업진흥원", issuedAmount: 77_500_000, collectedAmount: 38_750_000, issuedCount: 1, collectedCount: 0 },
-  { name: "정보통신기획평가원", issuedAmount: 22_000_000, collectedAmount: 22_000_000, issuedCount: 1, collectedCount: 1 },
-  { name: "기타", issuedAmount: 145_000_000, collectedAmount: 145_000_000, issuedCount: 1, collectedCount: 1 },
-];
-
-// ============================================================
 // 기관 관리 (통합 — 기업/대학/연구소 구분 없이 동일 엔티티)
 // ============================================================
 
@@ -243,7 +35,6 @@ export interface Institution {
   contactName: string;
   contactEmail: string;
   contactPhone: string;
-  projectCount: number;
   registeredAt: string;
   status: "ACTIVE" | "INACTIVE";
   note?: string; // 기관 특이사항 메모 (이슈/메모 기능과 별개) — 수행기관 상세 화면에 표시
@@ -263,7 +54,6 @@ export const institutions: Institution[] = [
     contactName: "이영수",
     contactEmail: "lee.ys@samhwa.co.kr",
     contactPhone: "02-1234-5678",
-    projectCount: 4,
     registeredAt: "2022-01-15",
     status: "ACTIVE",
   },
@@ -276,7 +66,6 @@ export const institutions: Institution[] = [
     contactName: "최수진",
     contactEmail: "choi.sj@kist.re.kr",
     contactPhone: "02-958-5000",
-    projectCount: 6,
     registeredAt: "2022-01-15",
     status: "ACTIVE",
   },
@@ -289,7 +78,6 @@ export const institutions: Institution[] = [
     contactName: "김민준",
     contactEmail: "kim.mj@enertech.co.kr",
     contactPhone: "031-456-7890",
-    projectCount: 3,
     registeredAt: "2022-03-20",
     status: "ACTIVE",
   },
@@ -302,7 +90,6 @@ export const institutions: Institution[] = [
     contactName: "박지혜",
     contactEmail: "park.jh@yonsei.ac.kr",
     contactPhone: "02-2123-2000",
-    projectCount: 5,
     registeredAt: "2022-01-15",
     status: "ACTIVE",
   },
@@ -315,7 +102,6 @@ export const institutions: Institution[] = [
     contactName: "강현우",
     contactEmail: "kang.hw@nanomat.co.kr",
     contactPhone: "042-867-1234",
-    projectCount: 2,
     registeredAt: "2023-02-10",
     status: "ACTIVE",
   },
@@ -328,7 +114,6 @@ export const institutions: Institution[] = [
     contactName: "윤서진",
     contactEmail: "yoon.sj@kaitech.co.kr",
     contactPhone: "042-870-2000",
-    projectCount: 3,
     registeredAt: "2022-07-05",
     status: "ACTIVE",
   },
@@ -341,7 +126,6 @@ export const institutions: Institution[] = [
     contactName: "신현철",
     contactEmail: "shin.hc@pusan.ac.kr",
     contactPhone: "051-510-1000",
-    projectCount: 2,
     registeredAt: "2022-06-01",
     status: "ACTIVE",
   },
@@ -354,7 +138,6 @@ export const institutions: Institution[] = [
     contactName: "임수아",
     contactEmail: "lim.sa@greenbiotech.co.kr",
     contactPhone: "031-789-4567",
-    projectCount: 2,
     registeredAt: "2023-09-01",
     status: "ACTIVE",
   },
@@ -367,7 +150,6 @@ export const institutions: Institution[] = [
     contactName: "최재원",
     contactEmail: "choi.jw@futuresemi.co.kr",
     contactPhone: "031-300-5678",
-    projectCount: 1,
     registeredAt: "2024-01-20",
     status: "ACTIVE",
   },
@@ -380,7 +162,6 @@ export const institutions: Institution[] = [
     contactName: "장하늘",
     contactEmail: "jang.hn@cleanenergy.co.kr",
     contactPhone: "02-555-1234",
-    projectCount: 2,
     registeredAt: "2022-11-30",
     status: "INACTIVE",
   },
@@ -393,7 +174,6 @@ export const institutions: Institution[] = [
     contactName: "송지은",
     contactEmail: "song.je@hightechmat.co.kr",
     contactPhone: "051-444-7890",
-    projectCount: 1,
     registeredAt: "2024-03-15",
     status: "ACTIVE",
   },
@@ -407,7 +187,6 @@ export const institutions: Institution[] = [
     contactName: "장현우",
     contactEmail: "jang.hw@dasompnf.co.kr",
     contactPhone: "063-271-8800",
-    projectCount: 1,
     registeredAt: "2021-02-10",
     status: "ACTIVE",
   },
@@ -420,7 +199,6 @@ export const institutions: Institution[] = [
     contactName: "임서연",
     contactEmail: "lim.sy@jbnu.ac.kr",
     contactPhone: "063-270-1114",
-    projectCount: 1,
     registeredAt: "2021-02-10",
     status: "ACTIVE",
   },
@@ -433,7 +211,6 @@ export const institutions: Institution[] = [
     contactName: "한지민",
     contactEmail: "han.jm@kfri.re.kr",
     contactPhone: "063-219-9000",
-    projectCount: 1,
     registeredAt: "2021-02-10",
     status: "ACTIVE",
   },
@@ -446,7 +223,6 @@ export const institutions: Institution[] = [
     contactName: "오민석",
     contactEmail: "oh.ms@cheongbo.co.kr",
     contactPhone: "061-333-2200",
-    projectCount: 1,
     registeredAt: "2021-02-10",
     status: "ACTIVE",
   },
@@ -461,7 +237,6 @@ export const institutions: Institution[] = [
     contactName: "배시설",
     contactEmail: "bae.ss@korea.kr",
     contactPhone: "063-238-6600",
-    projectCount: 1,
     registeredAt: "2024-01-05",
     status: "ACTIVE",
   },
@@ -474,7 +249,6 @@ export const institutions: Institution[] = [
     contactName: "김서준",
     contactEmail: "kim.sj@cnu.ac.kr",
     contactPhone: "042-821-5114",
-    projectCount: 1,
     registeredAt: "2024-01-05",
     status: "ACTIVE",
   },
@@ -487,7 +261,6 @@ export const institutions: Institution[] = [
     contactName: "최유진",
     contactEmail: "choi.yj@krei.re.kr",
     contactPhone: "061-820-2000",
-    projectCount: 1,
     registeredAt: "2024-01-05",
     status: "ACTIVE",
   },
@@ -500,7 +273,6 @@ export const institutions: Institution[] = [
     contactName: "안도현",
     contactEmail: "ahn.dh@saessakfarm.co.kr",
     contactPhone: "063-451-7700",
-    projectCount: 1,
     registeredAt: "2024-01-05",
     status: "ACTIVE",
   },
@@ -516,7 +288,6 @@ export const institutions: Institution[] = [
     contactName: "문지훈",
     contactEmail: "moon.jh@powersemi.co.kr",
     contactPhone: "042-330-1200",
-    projectCount: 1,
     registeredAt: "2024-01-05",
     status: "ACTIVE",
   },
@@ -529,7 +300,6 @@ export const institutions: Institution[] = [
     contactName: "오세훈",
     contactEmail: "oh.sh@jnu.ac.kr",
     contactPhone: "062-530-1114",
-    projectCount: 1,
     registeredAt: "2024-01-05",
     status: "ACTIVE",
   },
@@ -542,7 +312,6 @@ export const institutions: Institution[] = [
     contactName: "유하은",
     contactEmail: "yoo.he@etri.re.kr",
     contactPhone: "042-860-1000",
-    projectCount: 1,
     registeredAt: "2024-01-05",
     status: "ACTIVE",
   },
@@ -555,7 +324,6 @@ export const institutions: Institution[] = [
     contactName: "배지원",
     contactEmail: "bae.jw@smartfactory.co.kr",
     contactPhone: "052-217-3300",
-    projectCount: 1,
     registeredAt: "2024-01-05",
     status: "ACTIVE",
   },
@@ -792,7 +560,7 @@ export const projects: Project[] = [
     status: "ACTIVE",
     researchLead: "박민준",
     projectCode: "SMTECH-2024-001",
-    projectDivision: "공동",
+    projectDivision: "위탁",
     assignedManager: "김관리",
     registeredAt: "2022-06-10",
   },
@@ -932,7 +700,7 @@ export const projects: Project[] = [
     status: "COMPLETED",
     researchLead: "전병욱",
     projectCode: "KIAT-2022-001",
-    projectDivision: "공동",
+    projectDivision: "위탁",
     billingType: "대상아님",
   },
   // p-011: KETEP 단계협약 예시 — "과제 구성 예시(P001·A과제)" 템플릿을 별도 과제로 재현
@@ -1007,7 +775,7 @@ export const projects: Project[] = [
     ],
     researchLead: "김검증",
     projectCode: "RDA1-VERIFY-001",
-    projectDivision: "공동",
+    projectDivision: "위탁",
     assignedManager: "박담당",
     registeredAt: "2021-03-05",
   },
@@ -1031,7 +799,7 @@ export const projects: Project[] = [
     stages: [{ stageNumber: 1, startTermNumber: 1, endTermNumber: 3 }],
     researchLead: "윤다솜",
     projectCode: "RDA1-P001-A",
-    projectDivision: "공동",
+    projectDivision: "위탁",
     assignedManager: "박담당",
     registeredAt: "2021-01-05",
   },
@@ -1081,7 +849,7 @@ export const projects: Project[] = [
     stages: [{ stageNumber: 1, startTermNumber: 1, endTermNumber: 3 }],
     researchLead: "고파워",
     projectCode: "KEIT-P001-A",
-    projectDivision: "공동",
+    projectDivision: "위탁",
     assignedManager: "이회계",
     registeredAt: "2024-01-05",
   },
@@ -1096,6 +864,12 @@ export interface AnnualBudget {
   termNumber: number;
   cashBudget: number;
   inKindBudget: number;
+  // 이 연차의 실제 시작/종료일 — 엑셀 업로드에서 값이 있으면 총개발시작일+연차번호로 자동계산하는
+  // 대신 이 값을 쓴다(autoGenerateTermFees가 생성하는 TermFee.termStartDate/termEndDate로 이어짐).
+  termStartDate?: string;
+  termEndDate?: string;
+  // 이 연차를 담당한 회계법인(엑셀 "회계법인") — autoGenerateTermFees가 생성하는 TermFee.auditFirm으로 이어진다.
+  auditFirm?: string;
 }
 
 export interface GradeOverride {
@@ -1106,6 +880,13 @@ export interface GradeOverride {
 export interface SettlementTypeOverride {
   termNumber: number;
   settlementType: "위탁정산" | "자체정산";
+}
+
+export interface RecipientOverride {
+  termNumber: number;
+  recipientName?: string;
+  recipientEmail?: string;
+  recipientPhone?: string;
 }
 
 export interface ProjectMember {
@@ -1127,6 +908,9 @@ export interface ProjectMember {
   contactName?: string;
   contactEmail?: string;
   contactPhone?: string;
+  // 연차별 공문 수신자 — 담당자가 연차 중간에 바뀌는 경우가 많아(특히 RDA2처럼 기관별로 공문을
+  // 따로 보내는 과제) 특정 연차만 다르게 기록한다. 없는 연차는 contactName/Email/Phone을 그대로 쓴다.
+  recipientOverrides?: RecipientOverride[];
   // 수수료 산정 필드
   cashBudget?: number;         // 총 현금사업비
   inKindBudget?: number;       // 총 현물사업비
@@ -1274,14 +1058,22 @@ export interface FeePolicy {
   createdBy: string;
   // 수수료 산정 파라미터
   feeRateBrackets: FeeRateBracket[];
-  coInstAddonMethod: "TIERED" | "FLAT"; // TIERED: 1개10%+추가5%, FLAT: 전체10%×N
-  exemptGrades: string[];              // 면제기관 등급 ["S","A~C"] or ["S"] or []
-  // DISCOUNT: 면제등급도 산정기준액에 포함해 계산한 뒤 85%만 적용 (KEIT/KETEP)
+  coInstAddonMethod: "TIERED" | "FLAT" | "CUSTOM"; // TIERED: 1개10%+추가5%, FLAT: 전체10%×N, CUSTOM: 아래 두 필드로 직접 지정
+  coInstFirstRate?: number;            // CUSTOM일 때만 사용 — 1번째 공동기관 가산율 (비율, 0.10=10%)
+  coInstAdditionalRate?: number;       // CUSTOM일 때만 사용 — 이후 공동기관 1개당 가산율 (비율, 0.05=5%)
+  exemptGrades: string[];              // 면제기관 등급 — "S"/"A"/"B"/"C" 개별 조합 (예: ["S","A"]) or []
+  // DISCOUNT: 면제등급도 산정기준액에 포함해 계산한 뒤 연차상시청구비율(annualBillingRate)만 적용 (KEIT/KETEP)
   // EXCLUDE: 면제등급을 산정기준액에서 완전히 제외 — 연차상시도 수행하지 않음 (IITP/RDA1/RDA2)
-  exemptionMode: "DISCOUNT" | "EXCLUDE";
+  // CUSTOM: DISCOUNT와 동일하게 산정기준액엔 포함하되, 일반 기관의 연차상시청구비율과는 별도로
+  // exemptCustomRate를 면제기관에만 적용한다 — 예: 일반기관은 85%인데 면제기관만 70%로 낮추고 싶은 경우.
+  exemptionMode: "DISCOUNT" | "EXCLUDE" | "CUSTOM";
+  // exemptionMode가 "CUSTOM"일 때만 쓰는, 면제등급 기관 전용 연차상시 청구비율(0~1) — 미지정 시
+  // annualBillingRate를 그대로 쓴다. 정산 연차의 위탁정산(100%) 규칙은 이 값과 무관하게 그대로 적용된다.
+  exemptCustomRate?: number;
   // 면제기관(정산면제 등급)의 정산구분이 참여기관 화면에서 개별 지정되지 않았을 때 적용할 기본값.
   // 정산구분은 연차상시(ANNUAL)에는 영향이 없고 정산 연차(SETTLEMENT)에만 영향을 준다 —
-  // 위탁정산=정산 연차 100%, 자체정산=정산 연차에도 85% 유지.
+  // 위탁정산=정산 연차 100%, 자체정산=정산 연차에도 면제기관 청구비율(annualBillingRate 또는
+  // exemptCustomRate) 유지.
   defaultSettlementType?: "위탁정산" | "자체정산";
   feeBasis: "CASH" | "CASH_PLUS_INKIND"; // CASH_PLUS_INKIND: RDA1/RDA2 — 현금+현물 합산 기준
   hasAutonomyTrack: boolean;           // 자율성트랙 과제 존재 여부
@@ -1316,7 +1108,9 @@ export const KETEP_BRACKETS: FeeRateBracket[] = [
   { minAmount: 30_000_000_000,  maxAmount: null,            baseFee: 2_637_000 },
 ];
 
-// KOFPI: 최대 50억 10구간, 50억 초과는 별도 협의
+// KOFPI: 최대 50억까지 10구간, 50억 이상은 마지막 구간(250만원) 요율이 그대로 적용된다.
+// 실제로 50억을 크게 초과하는 이례적인 과제는 자동 산정값을 그대로 청구하지 말고
+// 참여기관 목록/연차수수료 화면에서 수동조정(manualOverride)으로 별도 협의된 금액을 입력할 것.
 export const KOFPI_BRACKETS: FeeRateBracket[] = [
   { minAmount: 0,              maxAmount: 50_000_000,    baseFee: 700_000   },
   { minAmount: 50_000_000,     maxAmount: 100_000_000,   baseFee: 900_000   },
@@ -1327,7 +1121,7 @@ export const KOFPI_BRACKETS: FeeRateBracket[] = [
   { minAmount: 1_000_000_000,  maxAmount: 2_000_000_000, baseFee: 1_900_000 },
   { minAmount: 2_000_000_000,  maxAmount: 3_000_000_000, baseFee: 2_100_000 },
   { minAmount: 3_000_000_000,  maxAmount: 4_000_000_000, baseFee: 2_300_000 },
-  { minAmount: 4_000_000_000,  maxAmount: 5_000_000_000, baseFee: 2_500_000 },
+  { minAmount: 4_000_000_000,  maxAmount: null,           baseFee: 2_500_000 },
 ];
 
 // IITP: KEIT 대비 5천만원 미만 구간이 추가로 있음
@@ -1380,7 +1174,7 @@ export const feePolicies: FeePolicy[] = [
     createdBy: "김관리",
     feeRateBrackets: KEIT_BRACKETS,
     coInstAddonMethod: "TIERED" as const,
-    exemptGrades: ["S", "A~C"],
+    exemptGrades: ["S", "A", "B", "C"],
     exemptionMode: "DISCOUNT" as const,
     feeBasis: "CASH" as const,
     hasAutonomyTrack: true,
@@ -1400,7 +1194,7 @@ export const feePolicies: FeePolicy[] = [
     createdBy: "김관리",
     feeRateBrackets: KEIT_BRACKETS,
     coInstAddonMethod: "TIERED" as const,
-    exemptGrades: ["S", "A~C"],
+    exemptGrades: ["S", "A", "B", "C"],
     exemptionMode: "DISCOUNT" as const,
     feeBasis: "CASH" as const,
     hasAutonomyTrack: true,
@@ -1420,7 +1214,7 @@ export const feePolicies: FeePolicy[] = [
     createdBy: "이회계",
     feeRateBrackets: KEIT_BRACKETS,
     coInstAddonMethod: "TIERED" as const,
-    exemptGrades: ["S", "A~C"],
+    exemptGrades: ["S", "A", "B", "C"],
     exemptionMode: "DISCOUNT" as const,
     feeBasis: "CASH" as const,
     hasAutonomyTrack: true,
@@ -1441,7 +1235,7 @@ export const feePolicies: FeePolicy[] = [
     createdBy: "김관리",
     feeRateBrackets: KEIT_BRACKETS,
     coInstAddonMethod: "TIERED" as const,
-    exemptGrades: ["S", "A~C"],
+    exemptGrades: ["S", "A", "B", "C"],
     exemptionMode: "DISCOUNT" as const,
     defaultSettlementType: "자체정산" as const,
     feeBasis: "CASH" as const,
@@ -1462,7 +1256,7 @@ export const feePolicies: FeePolicy[] = [
     createdBy: "이회계",
     feeRateBrackets: KEIT_BRACKETS,
     coInstAddonMethod: "TIERED" as const,
-    exemptGrades: ["S", "A~C"],
+    exemptGrades: ["S", "A", "B", "C"],
     exemptionMode: "DISCOUNT" as const,
     defaultSettlementType: "자체정산" as const,
     feeBasis: "CASH" as const,
@@ -1644,10 +1438,22 @@ export interface TermFee {
    *  회계법인이 바뀐 경우). true면 화면에서 85% 청구액 등 금액 정보를 숨기고 타회계법인이
    *  진행했다는 안내만 표시한다 — 시스템관리자/회계담당자만 체크 가능. */
   otherFirmHandled?: boolean;
+  // 이 연차를 담당한 회계법인명 — 엑셀 업로드("회계법인" 열)로 반영되며, ProjectMember.annualBudgets의
+  // auditFirm에서 autoGenerateTermFees가 그대로 옮겨온다. 삼화가 아니면 otherFirmHandled가 자동으로 켜진다.
+  auditFirm?: string;
   // 서류요청일/회신일(공문발송일) — 기관별로 관리한다(RDA2 등 기관별로 계산서·공문·수금을 따로
   // 진행하는 과제는 기관마다 날짜가 다를 수 있어 Project 레벨이 아니라 여기 둔다).
   docRequestDate?: string;
   docReplyDate?: string;
+  // 이 연차의 실제 시작/종료일 — 엑셀 업로드에서 받은 값이 있으면(ProjectMember.annualBudgets의
+  // termStartDate/termEndDate) autoGenerateTermFees가 그대로 옮겨 담는다. 없으면 화면에서
+  // 총개발시작일+연차번호로 자동계산한 값을 대신 쓴다.
+  termStartDate?: string;
+  termEndDate?: string;
+  // 이 연차의 세금계산서 발행구분 — 정발행/역발행요청/역발행/대상아님/면제. 과제마다 한 번 정해지는
+  // 값이 아니라 연차별로 다르게 발행될 수 있어(예: 이번 연차만 역발행 요청) Project가 아니라 여기 둔다.
+  // 비어 있으면 Project.billingType(엑셀 업로드 등으로 들어온 과제 단위 기본값)을 대신 쓴다.
+  billingType?: "정발행" | "역발행요청" | "역발행" | "대상아님" | "면제";
 }
 
 // 전담기관(6곳)당 1건씩만 남긴 더미 — 발송대상(noticeRecipientScope) 차이를 바로 확인할 수 있도록
@@ -2708,6 +2514,9 @@ export const taxInvoices: TaxInvoice[] = [
 export interface NoticeSnapshot {
   template: AgencyNoticeTemplate;
   statusRows: { label: string; value: string }[];
+  // 해당 과제·해당 연차 산정액/청구액 요약(■ 수수료 섹션에 자동 첨부) — 옵셔널인 건 이 필드가
+  // 생기기 전에 발송된 과거 이력에는 값이 없기 때문.
+  feeRows?: { label: string; value: string }[];
   docNumber: string;
   issuedDate: string;
 }
@@ -3126,7 +2935,7 @@ export const termFeeCalcs: TermFeeCalc[] = [
     exemptFeeTotal: 514_500,
     exemptBreakdown: [
       { institutionId: "inst-002", institutionName: "한국과학기술연구원", grade: "S", cashBudget: 100_000_000, standardFee: 343_000, calculatedFee: 291_550, billingFee: 247_818, unclaimedFee: 43_733 },
-      { institutionId: "inst-004", institutionName: "연세대학교", grade: "A~C", cashBudget: 50_000_000, standardFee: 171_500, calculatedFee: 145_775, billingFee: 123_909, unclaimedFee: 21_866 },
+      { institutionId: "inst-004", institutionName: "연세대학교", grade: "A", cashBudget: 50_000_000, standardFee: 171_500, calculatedFee: 145_775, billingFee: 123_909, unclaimedFee: 21_866 },
     ],
     calculatedFee: 1_740_825,
     generalCalcFee: 1_303_500,
@@ -3162,7 +2971,7 @@ export const termFeeCalcs: TermFeeCalc[] = [
     exemptFeeTotal: 309_900,
     exemptBreakdown: [
       { institutionId: "inst-002", institutionName: "한국과학기술연구원", grade: "S", cashBudget: 150_000_000, standardFee: 185_940, calculatedFee: 158_049, billingFee: 134_342, unclaimedFee: 23_707 },
-      { institutionId: "inst-004", institutionName: "연세대학교", grade: "A~C", cashBudget: 100_000_000, standardFee: 123_960, calculatedFee: 105_366, billingFee: 89_561, unclaimedFee: 15_805 },
+      { institutionId: "inst-004", institutionName: "연세대학교", grade: "A", cashBudget: 100_000_000, standardFee: 123_960, calculatedFee: 105_366, billingFee: 89_561, unclaimedFee: 15_805 },
     ],
     calculatedFee: 1_929_915,
     generalCalcFee: 1_666_500,
@@ -3206,6 +3015,10 @@ export interface StandardAttachment {
   name: string;          // 첨부파일명 (예: 사업자등록증.pdf)
   fileDataUrl?: string;  // 업로드된 실제 파일 (data URL) — 없으면 이름만 있는 자리표시자
   updatedAt: string;
+  // 유형(연차상시/위탁정산/역발행/기타)별로 이 파일을 발송 시 자동 첨부할지 여부 — 카테고리 키가
+  // 없으면(처음 만든 항목 등) 기본값은 true(첨부)다. 예: 사업자등록증은 위탁정산에만 필요하고
+  // 역발행엔 불필요한 경우처럼, 유형마다 다르게 켜고 끌 수 있다.
+  enabledByCategory?: Partial<Record<"ANNUAL" | "SETTLEMENT" | "REVERSE" | "OTHER", boolean>>;
 }
 
 export const standardAttachments: StandardAttachment[] = [
@@ -3260,12 +3073,20 @@ export interface FeeInvoiceTemplate {
 // 별개로 "청구서 문서 자체를 어떤 문구로 관리할지"만 가리는 축이다 — 역발행/기타는 연차상시·위탁정산
 // 어느 쪽이든 항상 이 템플릿 하나를 쓴다(공문발송 드롭다운의 "역발행 수수료 공문"·"기타 공문"이
 // 연차상시/위탁정산 구분 없이 하나뿐인 이유).
+// 카테고리별로 발송 시 항상 같이 붙는 기본 첨부파일(예: 위탁정산내역서) — name만 있으면 아직 실제
+// 파일이 등록되지 않은 자리표시자이고, fileDataUrl(업로드된 파일)이 있어야 발송 시 실제로 첨부된다.
+export interface FeeInvoiceDefaultAttachment {
+  id: string;
+  name: string;
+  fileDataUrl?: string;
+}
 export interface FeeInvoiceTemplateEntry {
   id: string;
   category: "ANNUAL" | "SETTLEMENT" | "REVERSE" | "OTHER";
   name: string;
   isDefault: boolean;
   content: FeeInvoiceTemplate;
+  defaultAttachments?: FeeInvoiceDefaultAttachment[];
 }
 
 export const EMPTY_NOTICE_TEMPLATE: AgencyNoticeTemplate = {
@@ -3463,6 +3284,7 @@ export const feeInvoiceTemplates: FeeInvoiceTemplateEntry[] = [
       surchargeLabel: "가산금",
       feeTotalLabel: "정산수수료",
     },
+    defaultAttachments: [{ id: "fia-settlement-detail", name: "위탁정산내역서.pdf" }],
   },
   {
     id: "fit-reverse-default",

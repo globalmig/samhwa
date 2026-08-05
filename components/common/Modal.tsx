@@ -6,12 +6,15 @@ interface Props {
   title: string;
   onClose: () => void;
   size?: "sm" | "md" | "lg" | "xl";
+  // true면 내용 길이와 무관하게 높이를 고정한다(85vh) — 여러 단계/탭을 오가며 내용 길이가
+  // 들쭉날쭉한 마법사형 모달에서, 단계를 넘길 때마다 모달 크기가 늘었다 줄었다 하지 않게 한다.
+  fixedHeight?: boolean;
   children: React.ReactNode;
 }
 
 const sizeClass = { sm: "max-w-md", md: "max-w-xl", lg: "max-w-2xl", xl: "max-w-4xl" };
 
-export default function Modal({ title, onClose, size = "md", children }: Props) {
+export default function Modal({ title, onClose, size = "md", fixedHeight = false, children }: Props) {
   useEffect(() => {
     function handler(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
@@ -25,7 +28,7 @@ export default function Modal({ title, onClose, size = "md", children }: Props) 
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className={`bg-white rounded-2xl shadow-2xl w-full ${sizeClass[size]} flex flex-col max-h-[90vh] overflow-hidden`}>
+      <div className={`bg-white rounded-2xl shadow-2xl w-full ${sizeClass[size]} flex flex-col overflow-hidden ${fixedHeight ? "h-[85vh]" : "max-h-[90vh]"}`}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 shrink-0">
           <h2 className="text-base font-semibold text-slate-800">{title}</h2>
           <button
@@ -37,7 +40,10 @@ export default function Modal({ title, onClose, size = "md", children }: Props) 
             </svg>
           </button>
         </div>
-        <div className="overflow-y-auto flex-1">{children}</div>
+        {/* fixedHeight일 때는 본문 자체를 스크롤시키지 않는다 — 안에서 헤더(진행 표시 등)는 고정,
+            콘텐츠 영역만 자체적으로 스크롤되게 위임해야, 내용이 길어져도 하단 버튼이 밀려서
+            스크롤해야 보이는 일이 없다(퍼센트 높이 계산에 진행 표시 높이가 안 끼어들도록). */}
+        <div className={fixedHeight ? "flex-1 min-h-0 flex flex-col overflow-hidden" : "overflow-y-auto flex-1"}>{children}</div>
       </div>
     </div>
   );

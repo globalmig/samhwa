@@ -5,6 +5,7 @@ import Link from "next/link";
 import { FiChevronDown, FiChevronUp, FiExternalLink } from "react-icons/fi";
 import { useStore, AuditEntry, ENTITY_NAMES } from "@/lib/store";
 import type { Project } from "@/lib/mock";
+import { fmtValue, fieldLabel } from "@/lib/audit-log-format";
 import StatusBadge from "@/components/common/StatusBadge";
 
 const ACTION_MAP: Record<AuditEntry["action"], { label: string; color: "blue" | "amber" | "red" }> = {
@@ -12,86 +13,6 @@ const ACTION_MAP: Record<AuditEntry["action"], { label: string; color: "blue" | 
   UPDATE: { label: "수정", color: "amber" },
   DELETE: { label: "삭제", color: "red" },
 };
-
-const FIELD_LABELS: Record<string, string> = {
-  status:              "상태",
-  priority:            "우선순위",
-  content:             "내용",
-  projectName:         "과제명",
-  leadInstitutionId:   "주관기관 ID",
-  leadInstitutionName: "주관기관명",
-  agencyId:            "전담기관 ID",
-  agency:              "전담기관명",
-  startDate:           "시작일",
-  endDate:             "종료일",
-  totalTerms:          "총연차",
-  currentTerm:         "현재연차",
-  govGrant:            "정부출연금",
-  privateCash:         "민간현금",
-  privateInKind:       "민간현물",
-  totalBudget:         "총사업비",
-  feeRate:             "수수료율",
-  calculatedFee:       "산정수수료",
-  appliedFee:          "적용수수료",
-  paidAmount:          "납부금액",
-  receivableAmount:    "미수금",
-  carriedOver:         "이월처리",
-  institutionGrade:    "기관등급",
-  budget:              "배정예산",
-  name:                "이름",
-  role:                "역할",
-  dueDate:             "납기일",
-  issuedAt:            "발행일",
-  supplyAmount:        "공급가액",
-  taxAmount:           "부가세",
-  totalAmount:         "합계금액",
-  projectCategory:     "과제구분",
-  usageReportDeadline: "사용실적제출기한",
-  internalAssignedAt:  "내부배정일",
-  agencyAssignedAt:    "전담기관배정일",
-};
-
-const VALUE_LABELS: Record<string, string> = {
-  OPEN:        "미처리",
-  IN_PROGRESS: "진행중",
-  RESOLVED:    "완료",
-  HIGH:        "높음",
-  MEDIUM:      "보통",
-  LOW:         "낮음",
-  ACTIVE:      "진행중",
-  COMPLETED:   "완료",
-  SUSPENDED:   "중단",
-  DRAFT:       "초안",
-  CONFIRMED:   "확정",
-  BILLED:      "청구완료",
-  PAID:        "완납",
-  PARTIAL:     "일부납부",
-  OVERDUE:     "미수",
-  PENDING:     "미납/대기",
-  CARRIED_OVER:"이월됨",
-  ISSUED:      "발행",
-  MODIFIED:    "수정발행",
-  CANCELED:    "취소",
-  LEAD:        "주관",
-  PARTICIPANT: "참여",
-  true:        "예",
-  false:       "아니오",
-  "A~C":       "우수(A~C)",
-  S:           "최우수(S)",
-  일반:        "일반",
-};
-
-function fmtValue(raw: unknown): string {
-  if (raw === null || raw === undefined) return "-";
-  const str = String(raw);
-  if (VALUE_LABELS[str]) return VALUE_LABELS[str];
-  if (typeof raw === "number") return raw.toLocaleString("ko-KR") + (raw > 9999 ? "원" : "");
-  return str;
-}
-
-function fieldLabel(key: string): string {
-  return FIELD_LABELS[key] ?? key;
-}
 
 function getEntityUrl(
   entityType: string,
@@ -400,8 +321,8 @@ export default function AuditLogPage() {
                           <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-2">변경 상세</p>
                           <div className="space-y-2">
                             {Object.entries(entry.changedFields).map(([field, change]) => {
-                              const before = fmtValue(change.before);
-                              const after = fmtValue(change.after);
+                              const before = fmtValue(change.before, entry.entityType, field);
+                              const after = fmtValue(change.after, entry.entityType, field);
                               return (
                                 <div key={field} className="flex items-center gap-3 text-xs">
                                   <span className="text-slate-500 font-medium w-32 shrink-0">

@@ -18,7 +18,7 @@ const colorMap: Record<BadgeColor, string> = {
 
 export default function StatusBadge({ label, color }: Props) {
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${colorMap[color]}`}>
+    <span className={`inline-flex items-center whitespace-nowrap px-2 py-0.5 rounded-full text-xs font-medium ${colorMap[color]}`}>
       {label}
     </span>
   );

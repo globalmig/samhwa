@@ -123,6 +123,7 @@ type FieldSetter = <K extends keyof AgencyNoticeTemplate>(key: K, value: AgencyN
 export default function NoticeLetterPreview({
   template,
   statusRows,
+  feeRows,
   docNumber,
   issuedDate,
   previewMode = false,
@@ -131,6 +132,9 @@ export default function NoticeLetterPreview({
 }: {
   template: AgencyNoticeTemplate;
   statusRows?: NoticeStatusRow[];
+  // 해당 과제·해당 연차의 산정액/청구액 등 — 과제별로 자동 치환되는 값이라 statusRows와 마찬가지로
+  // 항상 읽기 전용이며 별도의 켜고 끄는 버튼 없이, 값이 있으면(연차 데이터를 찾았으면) 그대로 보여준다.
+  feeRows?: NoticeStatusRow[];
   docNumber?: string;
   issuedDate?: string;
   // true면 아직 실제 값으로 채워지지 않은, 과제별로 자동 치환될 영역을 회색으로 표시하고 안내 문구를 덧붙인다.
@@ -382,7 +386,25 @@ export default function NoticeLetterPreview({
 
       {/* 수수료 안내 */}
       <div className="mb-5">
-        <p className="font-bold mb-1.5">■ 수수료</p>
+        <div className="flex items-center justify-between mb-1.5">
+          <p className="font-bold">■ 수수료</p>
+          {previewMode && <span className="text-xs text-slate-400">해당 과제·연차 산정 내역이 자동으로 추가됩니다</span>}
+        </div>
+        {/* 해당 과제·해당 연차 산정 내역 — 과제별로 자동 치환되는 영역(템플릿 값이 아니므로 항상 읽기 전용) */}
+        {feeRows && feeRows.length > 0 && (
+          <div className={`mb-2 border border-slate-400 ${previewMode ? "bg-slate-100" : ""}`}>
+            {feeRows.map((row, i) => (
+              <div key={row.label} className={`flex ${i > 0 ? "border-t border-dashed border-slate-400" : ""}`}>
+                <div className={`w-48 shrink-0 px-2 py-3 text-sm font-medium text-slate-700 border-r border-dashed border-slate-400 ${previewMode ? "" : "bg-slate-50"}`}>
+                  <span className="block" style={{ textAlign: "justify", textAlignLast: "justify" }}>
+                    {spacedLabel(row.label)}
+                  </span>
+                </div>
+                <div className="flex-1 px-3 py-3 text-slate-800 text-center flex items-center justify-center">{row.value}</div>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="bg-slate-100 px-3 py-3 space-y-2">
           {editable ? (
             <InlineInput value={template.feeIntro} onChange={(v) => setField("feeIntro", v)} className="font-medium" />

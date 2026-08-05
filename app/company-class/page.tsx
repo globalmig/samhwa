@@ -6,6 +6,7 @@ import {
   useStore,
   addFeePolicy,
   updateFeePolicy,
+  deleteFeePolicy,
   addFundingAgency,
   updateFundingAgency,
   deleteFundingAgency,
@@ -22,11 +23,25 @@ import { fmtDate, fmtWonFull } from "@/lib/utils";
 // ─── 공통 스타일 ────────────────────────────────────────────────
 const inputCls = "w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400";
 
+// "수수료 산정 특성" 표의 값 글자 색 — neutral(기본값)과 그 외(정책이 기본값과 달라지는 지점)를
+// 색으로 구분해 한눈에 "이 전담기관이 뭐가 특이한지"만 훑어볼 수 있게 한다.
+const FEATURE_TONE_CLS: Record<string, string> = {
+  neutral: "text-slate-700",
+  emerald: "text-emerald-700",
+  amber: "text-amber-700",
+  purple: "text-purple-700",
+  fuchsia: "text-fuchsia-700",
+  orange: "text-orange-700",
+  sky: "text-sky-700",
+};
+
 // ─── 등급 상수 ──────────────────────────────────────────────────
 const GRADE_BADGE: Record<string, string> = {
   일반: "bg-slate-100 text-slate-600",
   S: "bg-yellow-100 text-yellow-700",
-  "A~C": "bg-blue-100 text-blue-700",
+  A: "bg-blue-100 text-blue-700",
+  B: "bg-blue-100 text-blue-700",
+  C: "bg-blue-100 text-blue-700",
   자율성트랙: "bg-purple-100 text-purple-700",
 };
 
@@ -114,8 +129,11 @@ function makePolicyEmpty(agencyId: string | null, templatePolicy: FeePolicy | nu
     createdBy: "김관리",
     feeRateBrackets: templatePolicy?.feeRateBrackets ?? KEIT_BRACKETS,
     coInstAddonMethod: templatePolicy?.coInstAddonMethod ?? "TIERED",
-    exemptGrades: templatePolicy?.exemptGrades ?? ["S", "A~C"],
+    coInstFirstRate: templatePolicy?.coInstFirstRate ?? 0.1,
+    coInstAdditionalRate: templatePolicy?.coInstAdditionalRate ?? 0.05,
+    exemptGrades: templatePolicy?.exemptGrades ?? ["S", "A", "B", "C"],
     exemptionMode: templatePolicy?.exemptionMode ?? "DISCOUNT",
+    exemptCustomRate: templatePolicy?.exemptCustomRate ?? 0.85,
     defaultSettlementType: templatePolicy?.defaultSettlementType ?? "자체정산",
     feeBasis: templatePolicy?.feeBasis ?? "CASH",
     hasAutonomyTrack: templatePolicy?.hasAutonomyTrack ?? true,
@@ -130,13 +148,16 @@ function makePolicyEmpty(agencyId: string | null, templatePolicy: FeePolicy | nu
 
 // ─── 요율표 편집기 ───────────────────────────────────────────────
 function BracketEditor({ brackets, onChange }: { brackets: FeeRateBracket[]; onChange: (b: FeeRateBracket[]) => void }) {
-  function add() {
-    const last = brackets[brackets.length - 1];
-    onChange([...brackets, { minAmount: last ? (last.maxAmount ?? 0) : 0, maxAmount: null, baseFee: 0 }]);
+  // "이상"은 항상 바로 앞 구간의 "미만"과 이어져야(빈틈 없이) 하므로 직접 입력받지 않고 항상
+  // 자동으로 맞춘다 — 예전엔 행마다 따로 입력받아서, 앞 구간을 고쳐도 다음 구간 "이상"이 안 따라와
+  // 구간 사이에 빈틈이 생길 수 있었다(getBaseFee는 minAmount만 보고 구간을 찾으므로 실제 계산도 어긋남).
+  function normalize(list: FeeRateBracket[]): FeeRateBracket[] {
+    return list.map((b, i) => ({ ...b, minAmount: i === 0 ? 0 : (list[i - 1].maxAmount ?? 0) }));
   }
-  function remove(i: number) { onChange(brackets.filter((_, idx) => idx !== i)); }
-  function set(i: number, k: keyof FeeRateBracket, v: number | null) {
-    onChange(brackets.map((b, idx) => idx === i ? { ...b, [k]: v } : b));
+  function add() { onChange(normalize([...brackets, { minAmount: 0, maxAmount: null, baseFee: 0 }])); }
+  function remove(i: number) { onChange(normalize(brackets.filter((_, idx) => idx !== i))); }
+  function set(i: number, k: "maxAmount" | "baseFee", v: number | null) {
+    onChange(normalize(brackets.map((b, idx) => idx === i ? { ...b, [k]: v } : b)));
   }
   const fmtAmt = (n: number) => n.toLocaleString("ko-KR");
 
@@ -145,9 +166,9 @@ function BracketEditor({ brackets, onChange }: { brackets: FeeRateBracket[]; onC
       <div className="flex items-center justify-between mb-2">
         <label className="text-xs font-medium text-slate-700">현금사업비 구간별 기본수수료 (정액)</label>
         <div className="flex items-center gap-2">
-          <button type="button" onClick={() => onChange(KEIT_BRACKETS)} className="text-xs text-slate-500 hover:text-blue-600 border border-slate-200 rounded px-2 py-0.5 hover:border-blue-300 transition-colors">KEIT 기준</button>
-          <button type="button" onClick={() => onChange(KETEP_BRACKETS)} className="text-xs text-slate-500 hover:text-blue-600 border border-slate-200 rounded px-2 py-0.5 hover:border-blue-300 transition-colors">KETEP 기준</button>
-          <button type="button" onClick={() => onChange(KOFPI_BRACKETS)} className="text-xs text-slate-500 hover:text-blue-600 border border-slate-200 rounded px-2 py-0.5 hover:border-blue-300 transition-colors">KOFPI 기준</button>
+          <button type="button" onClick={() => onChange(normalize(KEIT_BRACKETS))} className="text-xs text-slate-500 hover:text-blue-600 border border-slate-200 rounded px-2 py-0.5 hover:border-blue-300 transition-colors">KEIT 기준</button>
+          <button type="button" onClick={() => onChange(normalize(KETEP_BRACKETS))} className="text-xs text-slate-500 hover:text-blue-600 border border-slate-200 rounded px-2 py-0.5 hover:border-blue-300 transition-colors">KETEP 기준</button>
+          <button type="button" onClick={() => onChange(normalize(KOFPI_BRACKETS))} className="text-xs text-slate-500 hover:text-blue-600 border border-slate-200 rounded px-2 py-0.5 hover:border-blue-300 transition-colors">KOFPI 기준</button>
           <button type="button" onClick={add} className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors">
             <FiPlus size={11} />행 추가
           </button>
@@ -160,16 +181,14 @@ function BracketEditor({ brackets, onChange }: { brackets: FeeRateBracket[]; onC
               <th className="text-left px-2 py-2 font-medium text-slate-500">이상 (원)</th>
               <th className="text-left px-2 py-2 font-medium text-slate-500">미만 (원, 비워두면 상한없음)</th>
               <th className="text-left px-2 py-2 font-medium text-slate-500">기본수수료 (원)</th>
-              <th className="text-left px-2 py-2 font-medium text-slate-500">구간 표시</th>
               <th className="w-6 px-2 py-2" />
             </tr>
           </thead>
           <tbody>
             {brackets.map((b, i) => (
               <tr key={i} className="border-b border-slate-100 last:border-0">
-                <td className="px-2 py-1.5">
-                  <MoneyInput className="w-32 text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
-                    value={b.minAmount} onFocus={(e) => e.target.select()} onChange={(v) => set(i, "minAmount", v)} />
+                <td className="px-2 py-1.5 text-slate-500">
+                  {fmtAmt(b.minAmount)}원
                 </td>
                 <td className="px-2 py-1.5">
                   <MoneyInput placeholder="(상한없음)" className="w-36 text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
@@ -179,9 +198,6 @@ function BracketEditor({ brackets, onChange }: { brackets: FeeRateBracket[]; onC
                   <MoneyInput className="w-28 text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
                     value={b.baseFee} onFocus={(e) => e.target.select()} onChange={(v) => set(i, "baseFee", v)} />
                 </td>
-                <td className="px-2 py-1.5 text-slate-400">
-                  {fmtAmt(b.minAmount)} ~ {b.maxAmount ? fmtAmt(b.maxAmount) : "∞"}
-                </td>
                 <td className="px-2 py-1.5 text-center">
                   <button type="button" onClick={() => remove(i)} className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors">
                     <FiTrash2 size={12} />
@@ -190,7 +206,7 @@ function BracketEditor({ brackets, onChange }: { brackets: FeeRateBracket[]; onC
               </tr>
             ))}
             {brackets.length === 0 && (
-              <tr><td colSpan={5} className="px-3 py-4 text-center text-slate-400">구간이 없습니다. 행 추가 또는 기준 버튼을 사용하세요.</td></tr>
+              <tr><td colSpan={4} className="px-3 py-4 text-center text-slate-400">구간이 없습니다. 행 추가 또는 기준 버튼을 사용하세요.</td></tr>
             )}
           </tbody>
         </table>
@@ -239,45 +255,94 @@ const AGENCY_SPECIAL_NOTES: Record<string, string[]> = {
 // ─── 전담기관 수수료 산정 특성 요약 ─────────────────────────
 function AgencyFeeModelSummary({ agency, policy }: { agency: { shortName: string; name: string } | undefined; policy: FeePolicy }) {
   const [showBrackets, setShowBrackets] = useState(false);
+  const [showNotes, setShowNotes] = useState(false);
   const staticNotes = agency ? (AGENCY_SPECIAL_NOTES[agency.shortName] ?? []) : [];
   const notes = policy.legacyTransitionNote ? [...staticNotes, policy.legacyTransitionNote] : staticNotes;
 
-  const addonLabel = policy.coInstAddonMethod === "TIERED"
-    ? "누진형 — 1번째 10% + 이후 추가 5%씩"
-    : "일률형 — 공동기관 수 × 10%";
-
-  const exemptLabel = policy.exemptGrades.length === 0
-    ? "없음 (모든 기관 일반 취급)"
+  // 각 항목을 값(짧은 배지)과 부가설명(작은 회색 텍스트)으로 분리한다 — 예전처럼 한 줄에
+  // "값 — 설명"을 다 욱여넣으면 항목마다 줄바꿈 위치가 들쭉날쭉해져 옆 항목과 나란히 읽기 어려웠다.
+  const exemptValue = policy.exemptGrades.length === 0 ? "없음" : `${policy.exemptGrades.join("·")} 등급`;
+  // 실제 적용 비율은 항상 annualBillingRate(DISCOUNT) 또는 exemptCustomRate(CUSTOM)에서 그대로
+  // 읽어와야 한다 — "85%"로 고정 텍스트를 쓰면 연차상시청구비율을 다른 값으로 바꿨을 때 화면
+  // 문구와 실제 계산이 서로 어긋나 보이는 문제가 있었다.
+  const exemptAppliedPct = policy.exemptionMode === "CUSTOM"
+    ? Math.round((policy.exemptCustomRate ?? policy.annualBillingRate) * 100)
+    : Math.round(policy.annualBillingRate * 100);
+  const exemptDetail = policy.exemptGrades.length === 0
+    ? "모든 기관 일반 취급"
     : policy.exemptionMode === "EXCLUDE"
-    ? policy.exemptGrades.join("·") + " 등급 — 산정기준액에서 완전 제외(연차상시도 안함)"
-    : policy.exemptGrades.join("·") + " 등급 (자체정산 선택 시 85%만 적용)";
+    ? "산정기준액에서 완전 제외 (연차상시도 안 함)"
+    : policy.exemptionMode === "CUSTOM"
+    ? `자체정산 선택 시 ${exemptAppliedPct}%만 적용 (일반 기관과 별도 비율)`
+    : `자체정산 선택 시 ${exemptAppliedPct}%만 적용`;
+  const exemptTone = policy.exemptGrades.length === 0 ? "neutral" : "amber";
 
-  const defaultSettlementLabel = (policy.defaultSettlementType ?? "자체정산") === "자체정산"
-    ? "자체정산 — 정산 연차에도 85% 유지"
-    : "위탁정산 — 정산 연차엔 100%";
+  const showDefaultSettlement = policy.exemptGrades.length > 0 &&
+    (policy.exemptionMode === "DISCOUNT" || policy.exemptionMode === "CUSTOM");
+  const isSelfSettleDefault = (policy.defaultSettlementType ?? "자체정산") === "자체정산";
+  const defaultSettlementValue = isSelfSettleDefault ? "자체정산" : "위탁정산";
+  const defaultSettlementDetail = isSelfSettleDefault ? `정산 연차에도 ${exemptAppliedPct}% 유지` : "정산 연차엔 100%";
 
-  const feeBasisLabel = policy.feeBasis === "CASH_PLUS_INKIND" ? "현금 + 현물 합산" : "현금사업비만";
+  const addonValue = policy.coInstAddonMethod === "TIERED" ? "누진형" : policy.coInstAddonMethod === "FLAT" ? "일률형" : "커스텀";
+  const addonDetail = policy.coInstAddonMethod === "TIERED"
+    ? "1번째 10% + 이후 추가 5%씩"
+    : policy.coInstAddonMethod === "FLAT"
+    ? "공동기관 수 × 10%"
+    : `1번째 ${Math.round((policy.coInstFirstRate ?? 0.1) * 100)}% + 이후 추가 ${Math.round((policy.coInstAdditionalRate ?? 0.05) * 100)}%씩`;
 
-  const billingLabel = policy.annualBillingRate >= 1
-    ? "100% — 연차상시·정산 모두 동일 (미청구 개념 없음)"
-    : `${Math.round(policy.annualBillingRate * 100)}% 연차상시 / 100% 정산`;
+  const feeBasisValue = policy.feeBasis === "CASH_PLUS_INKIND" ? "현금 + 현물 합산" : "현금사업비만";
 
-  const calcModeLabel = policy.calcMode === "PER_INSTITUTION"
-    ? "기관별 개별 산정 — 공동기관 구분 없이 각자의 사업비를 구간표에 대입"
-    : "과제 전체 사업비 기준 산정 후 배분";
+  const isFullBilling = policy.annualBillingRate >= 1;
+  const billingValue = isFullBilling ? "100%" : `${Math.round(policy.annualBillingRate * 100)}%`;
+  const billingDetail = isFullBilling ? "연차상시·정산 모두 동일 (미청구 개념 없음)" : "연차상시 기준 · 정산 연차는 100%";
 
-  const programTypeLabel = policy.programType === "ICT_FUND" ? "ICT 기금사업 전용" : "일반 R&D";
+  const isPerInstitution = policy.calcMode === "PER_INSTITUTION";
+  const calcModeValue = isPerInstitution ? "기관별 개별 산정" : "과제 전체 배분";
+  const calcModeDetail = isPerInstitution ? "공동기관 구분 없이 각자 사업비를 구간표에 대입" : "과제 전체 사업비 기준 산정 후 배분";
 
-  const minimumFeeLabel = policy.minimumFee && policy.minimumFee > 0
-    ? `${fmtWonFull(policy.minimumFee)} — 미만 시 이 금액 기준, 차액은 이월`
-    : "없음";
+  const isIctFund = policy.programType === "ICT_FUND";
+  const programTypeValue = isIctFund ? "ICT 기금사업" : "일반 R&D";
 
-  const excludeLeadLabel = policy.excludeLeadFromCalc
-    ? "주관기관을 산정기준액에서 완전 제외 (공동기관수 -1 보정)"
-    : "포함 (일반)";
+  const hasMinimumFee = !!policy.minimumFee && policy.minimumFee > 0;
+  const minimumFeeValue = hasMinimumFee ? fmtWonFull(policy.minimumFee!) : "없음";
+  const minimumFeeDetail = hasMinimumFee ? "미만 시 이 금액 기준, 차액은 이월" : undefined;
+
+  const excludeLeadValue = policy.excludeLeadFromCalc ? "제외" : "포함";
+  const excludeLeadDetail = policy.excludeLeadFromCalc ? "산정기준액에서 완전 제외 (공동기관수 -1 보정)" : "일반 기관과 동일하게 포함";
 
   const fmtAmt = (n: number) => n.toLocaleString("ko-KR");
   const fmtFee = fmtWonFull;
+
+  type FeatureItem = { label: string; value: string; detail?: string; tone: keyof typeof FEATURE_TONE_CLS };
+  const featureGroups: { title: string; items: FeatureItem[] }[] = [
+    {
+      title: "면제 · 정산 처리",
+      items: [
+        { label: "면제기관", value: exemptValue, detail: exemptDetail, tone: exemptTone },
+        ...(showDefaultSettlement
+          ? [{ label: "정산구분 기본값", value: defaultSettlementValue, detail: defaultSettlementDetail, tone: isSelfSettleDefault ? "emerald" as const : "amber" as const }]
+          : []),
+      ],
+    },
+    {
+      title: "산정 계산",
+      items: [
+        { label: "산정 기준액", value: feeBasisValue, tone: "neutral" },
+        { label: "산정 방식", value: calcModeValue, detail: calcModeDetail, tone: isPerInstitution ? "fuchsia" : "neutral" },
+        { label: "가산금 방식", value: addonValue, detail: addonDetail, tone: "neutral" },
+        { label: "주관기관 산정", value: excludeLeadValue, detail: excludeLeadDetail, tone: policy.excludeLeadFromCalc ? "orange" : "neutral" },
+        { label: "최소수수료", value: minimumFeeValue, detail: minimumFeeDetail, tone: hasMinimumFee ? "orange" : "neutral" },
+      ],
+    },
+    {
+      title: "청구 정책",
+      items: [
+        { label: "연차상시 청구", value: billingValue, detail: billingDetail, tone: isFullBilling ? "emerald" : "sky" },
+        { label: "자율성트랙", value: policy.hasAutonomyTrack ? "있음" : "없음", detail: policy.hasAutonomyTrack ? "해당 과제 전 연도 85% 청구" : undefined, tone: policy.hasAutonomyTrack ? "purple" : "neutral" },
+        { label: "사업 유형", value: programTypeValue, tone: isIctFund ? "fuchsia" : "neutral" },
+      ],
+    },
+  ];
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -285,65 +350,57 @@ function AgencyFeeModelSummary({ agency, policy }: { agency: { shortName: string
         <span className="text-xs font-bold text-slate-500 tracking-wide">수수료 산정 특성</span>
         {agency && <span className="text-xs text-slate-400">— {agency.name} ({agency.shortName})</span>}
       </div>
-      <div className="px-5 py-4 space-y-3">
-        {/* 핵심 파라미터 그리드 */}
-        <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-xs">
-          <div className="flex items-start gap-2">
-            <span className="shrink-0 w-24 text-slate-400 font-medium">면제기관</span>
-            <span className={`text-slate-700 ${policy.exemptGrades.length === 0 ? "text-slate-500 italic" : ""}`}>{exemptLabel}</span>
-          </div>
-          {policy.exemptGrades.length > 0 && policy.exemptionMode === "DISCOUNT" && (
-            <div className="flex items-start gap-2">
-              <span className="shrink-0 w-24 text-slate-400 font-medium">정산구분 기본값</span>
-              <span className={(policy.defaultSettlementType ?? "자체정산") === "자체정산" ? "text-emerald-700 font-medium" : "text-amber-700 font-medium"}>
-                {defaultSettlementLabel}
-              </span>
+      <div className="px-5 py-4 space-y-4">
+        {/* 핵심 파라미터 — 성격별로 묶고, 그룹 안에서는 한 행에 3항목씩 격자로 줄맞춤한다.
+            항목 하나당 표 한 줄(라벨|값)을 다 쓰면 세로로 너무 길어져서, 3열로 채워 넣어
+            그룹 하나가 차지하는 높이를 줄이면서도 격자 테두리로 항목 경계는 그대로 유지했다. */}
+        {featureGroups.map((group) => {
+          const cols = 3;
+          const totalRows = Math.ceil(group.items.length / cols);
+          return (
+            <div key={group.title}>
+              <p className="text-[11px] font-bold text-slate-500 tracking-wide mb-2">{group.title}</p>
+              <div className="border border-slate-200 rounded-lg overflow-hidden grid grid-cols-3">
+                {group.items.map((item, i) => {
+                  const rowIdx = Math.floor(i / cols);
+                  const isLastCol = i % cols === cols - 1 || i === group.items.length - 1;
+                  const isLastRow = rowIdx === totalRows - 1;
+                  return (
+                    <div
+                      key={item.label}
+                      className={`px-3.5 py-2.5 ${!isLastCol ? "border-r border-slate-200" : ""} ${!isLastRow ? "border-b border-slate-200" : ""}`}
+                    >
+                      <p className="text-xs text-slate-500 font-semibold mb-1">{item.label}</p>
+                      <span className={`text-sm font-bold ${FEATURE_TONE_CLS[item.tone]}`}>{item.value}</span>
+                      {item.detail && <p className="text-xs text-slate-500 mt-0.5 leading-snug">{item.detail}</p>}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
-          )}
-          <div className="flex items-start gap-2">
-            <span className="shrink-0 w-24 text-slate-400 font-medium">가산금 방식</span>
-            <span className="text-slate-700">{addonLabel}</span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="shrink-0 w-24 text-slate-400 font-medium">산정 기준액</span>
-            <span className="text-slate-700">{feeBasisLabel}</span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="shrink-0 w-24 text-slate-400 font-medium">자율성트랙</span>
-            <span className={policy.hasAutonomyTrack ? "text-purple-700 font-medium" : "text-slate-500 italic"}>
-              {policy.hasAutonomyTrack ? "있음 — 해당 과제 전 연도 85% 청구" : "없음"}
-            </span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="shrink-0 w-24 text-slate-400 font-medium">연차상시 청구</span>
-            <span className={policy.annualBillingRate >= 1 ? "text-emerald-700 font-medium" : "text-sky-700 font-medium"}>{billingLabel}</span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="shrink-0 w-24 text-slate-400 font-medium">산정 방식</span>
-            <span className={policy.calcMode === "PER_INSTITUTION" ? "text-fuchsia-700 font-medium" : "text-slate-700"}>{calcModeLabel}</span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="shrink-0 w-24 text-slate-400 font-medium">사업 유형</span>
-            <span className={policy.programType === "ICT_FUND" ? "text-fuchsia-700 font-medium" : "text-slate-700"}>{programTypeLabel}</span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="shrink-0 w-24 text-slate-400 font-medium">최소수수료</span>
-            <span className={policy.minimumFee ? "text-orange-700 font-medium" : "text-slate-500 italic"}>{minimumFeeLabel}</span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="shrink-0 w-24 text-slate-400 font-medium">주관기관 산정</span>
-            <span className={policy.excludeLeadFromCalc ? "text-orange-700 font-medium" : "text-slate-700"}>{excludeLeadLabel}</span>
-          </div>
-        </div>
+          );
+        })}
 
-        {/* 특이사항 노트 */}
+        {/* 특이사항 노트 — 기본은 접어두고(내용이 많아 늘 펼쳐두면 화면을 많이 차지함), 눌러야
+            펼쳐지게 했다. 색도 진한 amber 배경 대신 눈에 덜 피로한 회색 톤으로, 다이아몬드(◆)
+            불릿도 "-"로 바꿨다. */}
         {notes.length > 0 && (
-          <div className="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2.5 space-y-1">
-            {notes.map((note, i) => (
-              <p key={i} className="text-xs text-amber-800 flex items-start gap-1.5">
-                <span className="shrink-0 mt-0.5 text-amber-400">◆</span>{note}
-              </p>
-            ))}
+          <div className="border border-slate-200 rounded-lg overflow-hidden">
+            <button onClick={() => setShowNotes((v) => !v)}
+              className="w-full flex items-center gap-1.5 px-3.5 py-2.5 text-xs text-slate-500 hover:bg-slate-50 transition-colors">
+              <span className="font-medium text-slate-600">특이사항</span>
+              <span className="text-slate-400">{notes.length}건</span>
+              <span className="text-blue-500 ml-1">{showNotes ? "접기 ▲" : "펼치기 ▼"}</span>
+            </button>
+            {showNotes && (
+              <div className="border-t border-slate-200 bg-slate-50 px-3.5 py-2.5 space-y-1.5">
+                {notes.map((note, i) => (
+                  <p key={i} className="text-xs text-slate-600 flex items-start gap-1.5">
+                    <span className="shrink-0 text-slate-400">-</span>{note}
+                  </p>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -360,35 +417,37 @@ function AgencyFeeModelSummary({ agency, policy }: { agency: { shortName: string
             )}
             <span className="text-blue-500 ml-1">{showBrackets ? "접기 ▲" : "펼치기 ▼"}</span>
           </button>
-          {showBrackets && (
-            <div className="mt-2 overflow-x-auto">
-              <table className="w-full text-xs border border-slate-100 rounded-lg overflow-hidden">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-100 text-slate-400 font-medium">
-                    <th className="text-left px-3 py-1.5">현금사업비 구간</th>
-                    <th className="text-right px-3 py-1.5">기본수수료</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {policy.feeRateBrackets.map((b, i) => (
-                    <tr key={i} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/50">
-                      <td className="px-3 py-1.5 text-slate-600">
-                        {fmtAmt(b.minAmount)} 이상 ~ {b.maxAmount ? fmtAmt(b.maxAmount) + " 미만" : "이상"}
-                      </td>
-                      <td className="px-3 py-1.5 text-right font-mono text-slate-800">{fmtFee(b.baseFee)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          {showBrackets && (() => {
+            const cols = 2;
+            const totalRows = Math.ceil(policy.feeRateBrackets.length / cols);
+            return (
+              <div className="mt-2 border border-slate-200 rounded-lg overflow-hidden grid grid-cols-2 text-xs">
+                {policy.feeRateBrackets.map((b, i) => {
+                  const rowIdx = Math.floor(i / cols);
+                  const isLastCol = i % cols === cols - 1 || i === policy.feeRateBrackets.length - 1;
+                  const isLastRow = rowIdx === totalRows - 1;
+                  return (
+                    <div
+                      key={i}
+                      className={`px-3.5 py-2 flex items-center justify-between gap-3 ${!isLastCol ? "border-r border-slate-200" : ""} ${!isLastRow ? "border-b border-slate-200" : ""}`}
+                    >
+                      <span className="text-slate-500">
+                        {fmtAmt(b.minAmount)} 이상{b.maxAmount ? ` ~ ${fmtAmt(b.maxAmount)} 미만` : " (상한 없음)"}
+                      </span>
+                      <span className="font-mono font-semibold text-slate-800 shrink-0">{fmtFee(b.baseFee)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
         </div>
       </div>
     </div>
   );
 }
 
-const EXEMPT_GRADE_OPTIONS = ["S", "A~C"];
+const EXEMPT_GRADE_OPTIONS = ["S", "A", "B", "C"];
 
 function PolicyForm({ initial, onSubmit, onClose }: { initial: PolicyFormData; onSubmit: (d: PolicyFormData) => void; onClose: () => void }) {
   const [form, setForm] = useState<PolicyFormData>(initial);
@@ -439,21 +498,18 @@ function PolicyForm({ initial, onSubmit, onClose }: { initial: PolicyFormData; o
         </div>
       </div>
 
-      {/* 수수료 산정 파라미터 */}
-      <div className="rounded-lg border border-slate-200 p-4 space-y-4 bg-slate-50/50">
+      {/* 수수료 산정 파라미터 — 읽기 전용 요약 카드(AgencyFeeModelSummary)와 동일한 3개 그룹으로
+          나눠서, 저장 후 보게 될 요약 화면과 편집 화면의 구조가 서로 대응되게 했다. 예전엔 12개
+          넘는 항목이 구분 없이 한 덩어리로 쌓여 있어 지금 뭘 고치고 있는지 훑어보기 어려웠다. */}
+      <div className="rounded-lg border border-slate-200 p-4 space-y-5 bg-slate-50/50">
         <p className="text-xs font-semibold text-slate-700">수수료 산정 파라미터</p>
-        <div className="grid grid-cols-3 gap-4">
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">공동기관 가산금 방식</label>
-            <select className={inputCls} value={form.coInstAddonMethod ?? "TIERED"}
-              onChange={(e) => sf("coInstAddonMethod", e.target.value as "TIERED" | "FLAT")}>
-              <option value="TIERED">누진 (1개 10% + 추가 5%씩)</option>
-              <option value="FLAT">일률 (공동기관수 × 10%)</option>
-            </select>
-          </div>
+
+        {/* 면제 · 정산 처리 */}
+        <div className="space-y-3">
+          <p className="text-[11px] font-bold text-slate-500 tracking-wide">면제 · 정산 처리</p>
           <div>
             <label className="block text-xs font-medium text-slate-600 mb-2">정산면제 등급</label>
-            <div className="flex items-center gap-3 pt-1">
+            <div className="flex items-center gap-3">
               {EXEMPT_GRADE_OPTIONS.map((g) => (
                 <label key={g} className="flex items-center gap-1.5 cursor-pointer">
                   <input type="checkbox" checked={(form.exemptGrades ?? []).includes(g)}
@@ -464,109 +520,190 @@ function PolicyForm({ initial, onSubmit, onClose }: { initial: PolicyFormData; o
               ))}
             </div>
           </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-2">자율성트랙 과제 존재</label>
-            <div className="flex items-center gap-3 pt-1">
-              {([true, false] as const).map((v) => (
-                <label key={String(v)} className="flex items-center gap-1.5 cursor-pointer">
-                  <input type="radio" name="hasAutonomyTrack" checked={(form.hasAutonomyTrack ?? true) === v}
-                    onChange={() => sf("hasAutonomyTrack", v)}
-                    className="text-blue-600 focus:ring-blue-500" />
-                  <span className="text-xs text-slate-700">{v ? "있음" : "없음"}</span>
-                </label>
-              ))}
+          {(() => {
+            // 면제기관에 실제로 적용되는 비율 — DISCOUNT는 일반 기관과 같은 annualBillingRate,
+            // CUSTOM은 exemptCustomRate(미지정 시 annualBillingRate)를 쓴다. 아래 라벨들이 실제
+            // 값과 다르게 "85%"로 고정 표시되던 문제가 있어 항상 이 값으로 동적으로 표시한다.
+            const annualPct = Math.round((form.annualBillingRate ?? 0.85) * 100);
+            const exemptPct = form.exemptionMode === "CUSTOM"
+              ? Math.round((form.exemptCustomRate ?? form.annualBillingRate ?? 0.85) * 100)
+              : annualPct;
+            return (
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">면제기관 처리 방식</label>
+                  {/* 옵션 목록엔 숫자를 넣지 않는다 — "OO% 적용"처럼 드롭다운 항목 안에 실제 값을
+                      박아 넣으면, 이 항목을 고르는 게 그 %를 여기서 지정/고정하는 것처럼 보여서
+                      혼동을 준다(실제로는 그냥 "일반 기관과 같은 비율을 쓴다"는 모드 선택일 뿐이고,
+                      진짜 숫자는 아래 "연차상시 청구 비율" 필드가 정한다). 숫자는 옵션 밑에 별도
+                      안내문구로만 보여준다. */}
+                  <select className={inputCls} value={form.exemptionMode ?? "DISCOUNT"}
+                    onChange={(e) => sf("exemptionMode", e.target.value as "DISCOUNT" | "EXCLUDE" | "CUSTOM")}>
+                    <option value="DISCOUNT">일반 기관과 동일 비율 적용 (KEIT/KETEP)</option>
+                    <option value="EXCLUDE">완전 제외 — 연차상시도 안 함 (IITP/RDA)</option>
+                    <option value="CUSTOM">커스텀 — 면제기관에만 별도 비율 적용</option>
+                  </select>
+                  {form.exemptionMode === "DISCOUNT" && (
+                    <p className="mt-1.5 text-[11px] text-slate-400">
+                      면제기관도 아래 &quot;연차상시 청구 비율&quot;과 동일하게 적용됩니다 — 현재 <span className="font-semibold text-slate-500">{annualPct}%</span>
+                    </p>
+                  )}
+                  {form.exemptionMode === "CUSTOM" && (
+                    <div className="mt-2 flex items-center gap-2">
+                      <span className="text-xs text-slate-500 shrink-0">면제기관 전용 청구비율</span>
+                      <input type="number" min={0} max={100} step={5}
+                        value={Math.round((form.exemptCustomRate ?? form.annualBillingRate ?? 0.85) * 100)}
+                        onChange={(e) => sf("exemptCustomRate", Number(e.target.value) / 100)}
+                        className="w-20 text-sm border border-slate-200 rounded-lg px-2 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30" />
+                      <span className="text-xs text-slate-500">% (일반 기관은 {annualPct}% 그대로 유지)</span>
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-600 mb-1">
+                    면제기관 정산구분 기본값
+                    <span className="ml-1 text-slate-400 font-normal">· 참여기관별로 개별 지정 안 했을 때 적용</span>
+                  </label>
+                  <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-medium">
+                    <button type="button"
+                      onClick={() => sf("defaultSettlementType", "자체정산")}
+                      className={`flex-1 px-2 py-1.5 transition-colors ${
+                        (form.defaultSettlementType ?? "자체정산") === "자체정산" ? "bg-emerald-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"
+                      }`}>자체정산 (정산연차도 {exemptPct}%)</button>
+                    <button type="button"
+                      onClick={() => sf("defaultSettlementType", "위탁정산")}
+                      className={`flex-1 px-2 py-1.5 border-l border-slate-200 transition-colors ${
+                        form.defaultSettlementType === "위탁정산" ? "bg-amber-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"
+                      }`}>위탁정산 (정산연차 100%)</button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+
+        {/* 산정 계산 */}
+        <div className="space-y-3 pt-4 border-t border-slate-200">
+          <p className="text-[11px] font-bold text-slate-500 tracking-wide">산정 계산</p>
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">산정 기준액</label>
+              <select className={inputCls} value={form.feeBasis ?? "CASH"}
+                onChange={(e) => sf("feeBasis", e.target.value as "CASH" | "CASH_PLUS_INKIND")}>
+                <option value="CASH">현금사업비만</option>
+                <option value="CASH_PLUS_INKIND">현금 + 현물 합산 (RDA)</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">산정 방식</label>
+              <select className={inputCls} value={form.calcMode ?? "AGGREGATE"}
+                onChange={(e) => sf("calcMode", e.target.value as "AGGREGATE" | "PER_INSTITUTION")}>
+                <option value="AGGREGATE">과제 전체 사업비 기준 (기본)</option>
+                <option value="PER_INSTITUTION">기관별 개별 산정 (IITP ICT기금사업)</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">공동기관 가산금 방식</label>
+              <select className={inputCls} value={form.coInstAddonMethod ?? "TIERED"}
+                onChange={(e) => sf("coInstAddonMethod", e.target.value as "TIERED" | "FLAT" | "CUSTOM")}>
+                <option value="TIERED">누진 (1개 10% + 추가 5%씩)</option>
+                <option value="FLAT">일률 (공동기관수 × 10%)</option>
+                <option value="CUSTOM">커스텀 (직접 입력)</option>
+              </select>
             </div>
           </div>
-        </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">면제기관 처리 방식</label>
-            <select className={inputCls} value={form.exemptionMode ?? "DISCOUNT"}
-              onChange={(e) => sf("exemptionMode", e.target.value as "DISCOUNT" | "EXCLUDE")}>
-              <option value="DISCOUNT">85% 적용 — 산정기준액 포함 후 85%만 청구 (KEIT/KETEP)</option>
-              <option value="EXCLUDE">완전 제외 — 연차상시도 안 함 (IITP/RDA)</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">산정 기준액</label>
-            <select className={inputCls} value={form.feeBasis ?? "CASH"}
-              onChange={(e) => sf("feeBasis", e.target.value as "CASH" | "CASH_PLUS_INKIND")}>
-              <option value="CASH">현금사업비만</option>
-              <option value="CASH_PLUS_INKIND">현금 + 현물 합산 (RDA)</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">
-              면제기관 정산구분 기본값
-              <span className="ml-1 text-slate-400 font-normal">· 참여기관별로 개별 지정 안 했을 때 적용</span>
-            </label>
-            <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-medium">
-              <button type="button"
-                onClick={() => sf("defaultSettlementType", "자체정산")}
-                className={`flex-1 px-2 py-1.5 transition-colors ${
-                  (form.defaultSettlementType ?? "자체정산") === "자체정산" ? "bg-emerald-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"
-                }`}>자체정산 (정산연차도 85%)</button>
-              <button type="button"
-                onClick={() => sf("defaultSettlementType", "위탁정산")}
-                className={`flex-1 px-2 py-1.5 border-l border-slate-200 transition-colors ${
-                  form.defaultSettlementType === "위탁정산" ? "bg-amber-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"
-                }`}>위탁정산 (정산연차 100%)</button>
+
+          {form.coInstAddonMethod === "CUSTOM" && (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">1번째 공동기관 가산율 (%)</label>
+                <div className="flex items-center gap-2">
+                  <input type="number" min={0} max={100} step={0.5}
+                    value={Math.round((form.coInstFirstRate ?? 0.1) * 1000) / 10}
+                    onChange={(e) => sf("coInstFirstRate", Number(e.target.value) / 100)}
+                    className="w-24 text-sm border border-slate-200 rounded-lg px-2 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30" />
+                  <span className="text-xs text-slate-500">%</span>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">이후 공동기관 1개당 가산율 (%)</label>
+                <div className="flex items-center gap-2">
+                  <input type="number" min={0} max={100} step={0.5}
+                    value={Math.round((form.coInstAdditionalRate ?? 0.05) * 1000) / 10}
+                    onChange={(e) => sf("coInstAdditionalRate", Number(e.target.value) / 100)}
+                    className="w-24 text-sm border border-slate-200 rounded-lg px-2 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30" />
+                  <span className="text-xs text-slate-500">%</span>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">
-            연차상시 청구 비율 <span className="font-bold text-blue-700">{Math.round((form.annualBillingRate ?? 0.85) * 100)}%</span>
-            <span className="ml-2 text-slate-400 font-normal">(85% = KEIT/KETEP, 100% = KOFPI 등 미청구 없는 기관)</span>
-          </label>
-          <div className="flex items-center gap-3">
-            <input type="range" min={50} max={100} step={5}
-              value={Math.round((form.annualBillingRate ?? 0.85) * 100)}
-              onChange={(e) => sf("annualBillingRate", Number(e.target.value) / 100)}
-              className="flex-1 accent-blue-600" />
-            <input type="number" min={50} max={100} step={5}
-              value={Math.round((form.annualBillingRate ?? 0.85) * 100)}
-              onChange={(e) => sf("annualBillingRate", Number(e.target.value) / 100)}
-              className="w-20 text-sm border border-slate-200 rounded-lg px-2 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30" />
-            <span className="text-xs text-slate-500">%</span>
+          )}
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">최소수수료 (원)</label>
+              <MoneyInput className={inputCls} value={form.minimumFee ?? 0}
+                onChange={(v) => sf("minimumFee", v)} placeholder="0 = 없음" />
+              <p className="text-[10px] text-slate-400 mt-1">연차별 산정수수료가 이 금액 미만이면 이 금액을 기준으로 하고 차액은 이월 (RDA1/RDA2: 100,000원)</p>
+            </div>
+            <div>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={form.excludeLeadFromCalc ?? false}
+                  onChange={(e) => sf("excludeLeadFromCalc", e.target.checked)}
+                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                <span className="text-xs font-medium text-slate-700">주관기관을 산정기준액에서 완전 제외</span>
+              </label>
+              <p className="text-[10px] text-slate-400 mt-1 ml-6">주관기관이 산정에서 빠지고 공동기관수 -1 보정 후, 남은 기관에 사업비 비율로 배분 (RDA2: 주관기관이 농진청/소속기관인 경우)</p>
+            </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-4 pt-1 border-t border-slate-200">
+        {/* 청구 정책 */}
+        <div className="space-y-3 pt-4 border-t border-slate-200">
+          <p className="text-[11px] font-bold text-slate-500 tracking-wide">청구 정책</p>
           <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">최소수수료 (원)</label>
-            <MoneyInput className={inputCls} value={form.minimumFee ?? 0}
-              onChange={(v) => sf("minimumFee", v)} placeholder="0 = 없음" />
-            <p className="text-[10px] text-slate-400 mt-1">연차별 산정수수료가 이 금액 미만이면 이 금액을 기준으로 하고 차액은 이월 (RDA1/RDA2: 100,000원)</p>
+            <label className="block text-xs font-medium text-slate-600 mb-1">
+              연차상시 청구 비율 <span className="font-bold text-blue-700">{Math.round((form.annualBillingRate ?? 0.85) * 100)}%</span>
+              <span className="ml-2 text-slate-400 font-normal">(85% = KEIT/KETEP, 100% = KOFPI 등 미청구 없는 기관)</span>
+            </label>
+            <div className="flex items-center gap-3">
+              <input type="range" min={50} max={100} step={5}
+                value={Math.round((form.annualBillingRate ?? 0.85) * 100)}
+                onChange={(e) => sf("annualBillingRate", Number(e.target.value) / 100)}
+                className="flex-1 accent-blue-600" />
+              <input type="number" min={50} max={100} step={5}
+                value={Math.round((form.annualBillingRate ?? 0.85) * 100)}
+                onChange={(e) => sf("annualBillingRate", Number(e.target.value) / 100)}
+                className="w-20 text-sm border border-slate-200 rounded-lg px-2 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30" />
+              <span className="text-xs text-slate-500">%</span>
+            </div>
           </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">산정 방식</label>
-            <select className={inputCls} value={form.calcMode ?? "AGGREGATE"}
-              onChange={(e) => sf("calcMode", e.target.value as "AGGREGATE" | "PER_INSTITUTION")}>
-              <option value="AGGREGATE">과제 전체 사업비 기준 (기본)</option>
-              <option value="PER_INSTITUTION">기관별 개별 산정 (IITP ICT기금사업)</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">사업 유형</label>
-            <select className={inputCls} value={form.programType ?? "GENERAL"}
-              onChange={(e) => sf("programType", e.target.value as "GENERAL" | "ICT_FUND")}>
-              <option value="GENERAL">일반 R&D</option>
-              <option value="ICT_FUND">ICT 기금사업</option>
-            </select>
-            <p className="text-[10px] text-slate-400 mt-1">동일 전담기관에 사업 유형별로 별도 정책을 둘 수 있음</p>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-2">자율성트랙 과제 존재</label>
+              <div className="flex items-center gap-3 pt-1">
+                {([true, false] as const).map((v) => (
+                  <label key={String(v)} className="flex items-center gap-1.5 cursor-pointer">
+                    <input type="radio" name="hasAutonomyTrack" checked={(form.hasAutonomyTrack ?? true) === v}
+                      onChange={() => sf("hasAutonomyTrack", v)}
+                      className="text-blue-600 focus:ring-blue-500" />
+                    <span className="text-xs text-slate-700">{v ? "있음" : "없음"}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">사업 유형</label>
+              <select className={inputCls} value={form.programType ?? "GENERAL"}
+                onChange={(e) => sf("programType", e.target.value as "GENERAL" | "ICT_FUND")}>
+                <option value="GENERAL">일반 R&D</option>
+                <option value="ICT_FUND">ICT 기금사업</option>
+              </select>
+              <p className="text-[10px] text-slate-400 mt-1">동일 전담기관에 사업 유형별로 별도 정책을 둘 수 있음</p>
+            </div>
           </div>
         </div>
-        <div>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={form.excludeLeadFromCalc ?? false}
-              onChange={(e) => sf("excludeLeadFromCalc", e.target.checked)}
-              className="rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
-            <span className="text-xs font-medium text-slate-700">주관기관을 산정기준액에서 완전 제외</span>
-          </label>
-          <p className="text-[10px] text-slate-400 mt-1 ml-6">주관기관이 산정에서 빠지고 공동기관수 -1 보정 후, 남은 기관에 사업비 비율로 배분 (RDA2: 주관기관이 농진청/소속기관인 경우)</p>
-        </div>
-        <div>
+
+        <div className="pt-4 border-t border-slate-200">
           <label className="block text-xs font-medium text-slate-600 mb-1">경과조치 안내</label>
           <textarea className={`${inputCls} resize-y`} rows={2} value={form.legacyTransitionNote ?? ""}
             onChange={(e) => sf("legacyTransitionNote", e.target.value)}
@@ -776,6 +913,53 @@ function AgencyTable({ agencies, canEdit, onEdit, onDelete }: { agencies: Fundin
   );
 }
 
+// ─── 수수료 기준 이력 삭제 확인 모달 ────────────────────────────
+// 되돌릴 수 없는 데이터 삭제라서, 실수로 삭제 버튼을 눌러도 안전하도록 정해진 문구를 그대로
+// 입력해야만 삭제 버튼이 활성화된다.
+function PolicyDeleteConfirm({ policy, onConfirm, onClose }: { policy: FeePolicy; onConfirm: () => void; onClose: () => void }) {
+  const [typed, setTyped] = useState("");
+  const canConfirm = typed === DELETE_CONFIRM_TEXT;
+
+  return (
+    <div className="p-5 space-y-4">
+      <p className="text-sm text-slate-700">
+        <strong className="font-semibold">{policy.version} · {policy.name}</strong> 버전을 삭제하시겠습니까?
+      </p>
+      <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-700 space-y-1">
+        <p className="font-medium">삭제하면 되돌릴 수 없습니다</p>
+        <ul className="list-disc list-inside space-y-0.5">
+          <li>이 버전의 기준표(등급별 요율 등) 이력이 완전히 사라집니다</li>
+          {policy.status === "ACTIVE" && (
+            <li>지금 적용 중인(ACTIVE) 버전입니다 — 삭제 즉시 남은 버전 중 다음으로 적용되는 기준으로 관련 과제의 연차별 수수료가 자동 재산정됩니다</li>
+          )}
+        </ul>
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-slate-600 mb-1.5">
+          삭제를 원하시는 경우 <strong className="font-semibold text-red-600">&quot;{DELETE_CONFIRM_TEXT}&quot;</strong>라고 입력해야 삭제할 수 있습니다.
+        </label>
+        <input
+          autoFocus
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          placeholder={DELETE_CONFIRM_TEXT}
+          className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-400"
+        />
+      </div>
+      <div className="flex justify-end gap-2 pt-1">
+        <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
+        <button
+          onClick={onConfirm}
+          disabled={!canConfirm}
+          className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          삭제
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── 전담기관 관리 모달 ─────────────────────────────────────────
 type AgencyInner = null | { mode: "add" } | { mode: "edit"; target: FundingAgency };
 
@@ -793,7 +977,8 @@ function AgencyManageModal({ canEdit, onAgencyDeleted }: { canEdit: boolean; onA
 
   function handleDelete(agency: FundingAgency) {
     if (!confirm(`"${agency.shortName}" 전담기관을 삭제하시겠습니까?`)) return;
-    deleteFundingAgency(agency.id);
+    const blockedReason = deleteFundingAgency(agency.id);
+    if (blockedReason) { alert(blockedReason); return; }
     onAgencyDeleted(agency.id);
   }
 
@@ -827,7 +1012,10 @@ function AgencyManageModal({ canEdit, onAgencyDeleted }: { canEdit: boolean; onA
 type ModalState =
   | { kind: "policy-add" }
   | { kind: "policy-edit"; target: FeePolicy }
+  | { kind: "policy-delete"; target: FeePolicy }
   | { kind: "agency-manage" };
+
+const DELETE_CONFIRM_TEXT = "수수료 기준 삭제";
 
 // ─── 메인 페이지 ─────────────────────────────────────────────────
 export default function CompanyClassPage() {
@@ -988,6 +1176,11 @@ export default function CompanyClassPage() {
                           <FiEdit2 size={13} />
                         </button>
                       )}
+                      {canEdit && (
+                        <button onClick={() => setModal({ kind: "policy-delete", target: policy })} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-100 rounded transition-colors">
+                          <FiTrash2 size={13} />
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -1014,6 +1207,15 @@ export default function CompanyClassPage() {
                 : makePolicyEmpty(selectedAgencyId, getNewVersionTemplate())
             }
             onSubmit={handlePolicySubmit}
+            onClose={() => setModal(null)}
+          />
+        </Modal>
+      )}
+      {modal?.kind === "policy-delete" && (
+        <Modal title="수수료 기준 삭제" onClose={() => setModal(null)}>
+          <PolicyDeleteConfirm
+            policy={modal.target}
+            onConfirm={() => { deleteFeePolicy(modal.target.id); setModal(null); }}
             onClose={() => setModal(null)}
           />
         </Modal>

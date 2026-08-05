@@ -170,11 +170,11 @@ export default function UnissuedInvoicePage() {
                         {urgency && <span className={`ml-1.5 text-[10px] ${urgency.cls}`}>{urgency.label}</span>}
                       </td>
                       <td className="px-4 py-3 text-right font-bold text-amber-600 whitespace-nowrap">{fmtWonFull(g.amount)}</td>
-                      <td className={`px-4 py-3 text-center text-xs font-semibold ${ps?.cls ?? "text-slate-400"}`}>{ps?.label ?? "-"}</td>
-                      <td className="px-4 py-3 text-center">
+                      <td className={`px-4 py-3 text-center text-xs font-semibold whitespace-nowrap ${ps?.cls ?? "text-slate-400"}`}>{ps?.label ?? "-"}</td>
+                      <td className="px-4 py-3 text-center whitespace-nowrap">
                         <Link
                           href={`/projects/${g.projectId}`}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors"
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors whitespace-nowrap"
                           title="과제 상세에서 세금계산서 발행"
                         >
                           발행하기 <FiArrowRight size={12} />

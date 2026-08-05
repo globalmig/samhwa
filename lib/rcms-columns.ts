@@ -117,8 +117,73 @@ const annualColumns: ColumnDef[] = [
   {
     field: "settlementType",
     label: "정산형태",
-    aliases: ["정산형태", "정산형태구분", "정산구분"],
+    aliases: ["정산형태", "정산형태구분"],
     required: false,
+  },
+  {
+    field: "auditFirm",
+    label: "회계법인",
+    aliases: ["회계법인", "담당회계법인", "감사법인"],
+    required: false,
+    description: "이 연차를 담당한 회계법인 — 삼화가 아니면 그 연차를 타회계법인 진행으로 자동 표시. " +
+      "단계기관별 시트 값은 재업로드 때마다 갱신되지 않는 고정값이라 연차별로 바뀌는 실제 담당 회계법인을 반영 못해 여기로 옮김",
+  },
+  {
+    field: "projectCategory",
+    label: "과제구분",
+    aliases: ["정산구분", "과제구분"],
+    required: false,
+    description: "이 연차가 연차상시/정산 중 어느 쪽인지 — 비어 있으면 협약구조 기준으로 자동판정. " +
+      "\"정산형태\"(위탁정산/자체정산, 기관별 정산방식)와는 다른 값이니 헷갈리지 않게 주의",
+  },
+  {
+    field: "institutionLead",
+    label: "연구책임자",
+    aliases: ["연구책임자", "기관책임자"],
+    required: false,
+    description: "주관기관 행의 값을 과제의 연구책임자(Project.researchLead)로 등록",
+  },
+  {
+    field: "agencyAssignedAt",
+    label: "전문기관배정일",
+    aliases: ["전문기관배정일", "전담기관배정일"],
+    required: false,
+    description: "과제의 전담기관 배정일(Project.agencyAssignedAt)로 등록",
+  },
+  {
+    field: "internalAssignedAt",
+    label: "내부배정일",
+    aliases: ["내부배정일", "삼화배정일"],
+    required: false,
+    description: "과제의 삼화 내부 배정일(Project.internalAssignedAt)로 등록",
+  },
+  {
+    field: "termStartDate",
+    label: "연차시작일자",
+    aliases: ["연차시작일자", "연차시작일"],
+    required: false,
+    description: "이 연차의 실제 시작일 — 있으면 총개발시작일+연차번호 자동계산 대신 이 값을 쓴다",
+  },
+  {
+    field: "termEndDate",
+    label: "연차종료일자",
+    aliases: ["연차종료일자", "연차종료일"],
+    required: false,
+    description: "이 연차의 실제 종료일 — 있으면 총개발시작일+연차번호 자동계산 대신 이 값을 쓴다",
+  },
+  {
+    field: "stageStartDateAnnual",
+    label: "단계시작일자",
+    aliases: ["단계시작일자", "단계 시작일자"],
+    required: false,
+    description: "이 연차가 속한 단계의 시작일 — 단계기관별 시트가 없거나 비어 있을 때의 보조 수단",
+  },
+  {
+    field: "stageEndDateAnnual",
+    label: "단계종료일자",
+    aliases: ["단계종료일자", "단계 종료일자"],
+    required: false,
+    description: "이 연차가 속한 단계의 종료일 — 단계기관별 시트가 없거나 비어 있을 때의 보조 수단",
   },
   {
     field: "cashBudget",
@@ -167,12 +232,6 @@ const annualColumns: ColumnDef[] = [
     aliases: ["연차_기관_민간부담금(현물)"],
     required: false,
     description: "현재 연차 기준으로 합산해 과제의 당해 민간현물로 등록",
-  },
-  {
-    field: "isTarget",
-    label: "배정대상",
-    aliases: ["배정대상", "이번배정대상", "배정 대상"],
-    required: false,
   },
 ];
 
@@ -250,15 +309,15 @@ const stageColumns: ColumnDef[] = [
   },
   {
     field: "stageStartDate",
-    label: "정산대상개발시작일자",
-    aliases: ["정산대상개발시작일자"],
+    label: "단계시작일자",
+    aliases: ["단계시작일자", "정산대상개발시작일자"],
     required: false,
     description: "현재 단계의 단계시작일(Project.stageStartDate)로 등록",
   },
   {
     field: "stageEndDate",
-    label: "정산대상개발종료일자",
-    aliases: ["정산대상개발종료일자"],
+    label: "단계종료일자",
+    aliases: ["단계종료일자", "정산대상개발종료일자"],
     required: false,
     description: "현재 단계의 단계종료일(Project.stageEndDate)로 등록",
   },
@@ -303,8 +362,8 @@ const stageColumns: ColumnDef[] = [
   },
   {
     field: "institutionLead",
-    label: "기관책임자",
-    aliases: ["기관책임자", "책임자", "연구책임자"],
+    label: "연구책임자",
+    aliases: ["연구책임자", "기관책임자", "책임자"],
     required: false,
     description: "주관기관 행의 값을 과제의 연구책임자(Project.researchLead)로 등록",
   },
@@ -316,10 +375,11 @@ const stageColumns: ColumnDef[] = [
     description: "참여기관별 사업비 — 연차 수수료 자동 산정에 사용",
   },
   {
-    field: "auditFirm",
-    label: "회계법인",
-    aliases: ["회계법인", "담당회계법인", "감사법인"],
+    field: "totalInKindBudget",
+    label: "기관_총사업비(현물)",
+    aliases: ["기관_총사업비(현물)", "총사업비(현물)", "현물사업비"],
     required: false,
+    description: "참여기관별 현물사업비 — 있으면 참여기관 현물예산으로 등록",
   },
 ];
 

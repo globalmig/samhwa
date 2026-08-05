@@ -4,7 +4,7 @@ import { useState, useMemo, useRef, useEffect, type CSSProperties } from "react"
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import * as XLSX from "xlsx";
-import { FiPlus, FiChevronDown, FiChevronUp, FiChevronRight, FiMail, FiSend, FiDownload, FiX } from "react-icons/fi";
+import { FiPlus, FiChevronDown, FiChevronUp, FiChevronRight, FiMail, FiSend, FiDownload, FiX, FiSearch, FiSliders, FiCalendar } from "react-icons/fi";
 import ExcelUploadModal, { downloadExcelTemplate } from "@/components/common/ExcelUploadModal";
 import {
   useStore,
@@ -13,6 +13,7 @@ import {
   updateProject,
   updateProjectMember,
   updateTermFee,
+  setTermBillingType,
   addTaxInvoice,
   updateTaxInvoice,
   addEmailDispatch,
@@ -33,7 +34,7 @@ import {
   EMPTY_FEE_INVOICE_TEMPLATE,
   COMPANY_INFO,
 } from "@/lib/mock";
-import { fmtWon, fmtDate, splitVatInclusive, addMonths, termDateRange } from "@/lib/utils";
+import { fmtWon, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange } from "@/lib/utils";
 import Modal from "@/components/common/Modal";
 import DateInput from "@/components/common/DateInput";
 import InstitutionQuickAdd from "@/components/common/InstitutionQuickAdd";
@@ -43,7 +44,7 @@ import NoticeLetterPreview, { type NoticeStatusRow } from "@/components/common/N
 import { buildNoticeEmailHtml } from "@/lib/notice-email-html";
 import { useCanWrite } from "@/lib/permissions";
 import { getCurrentUser } from "@/lib/auth";
-import { resolveRdaAgencyId, isSettlementTerm } from "@/lib/fee-calculator";
+import { resolveRdaAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, hasStageTermDateMismatch, buildNoticeFeeRows } from "@/lib/fee-calculator";
 import { generateFeeInvoicePdfDataUrl, buildFeeInvoiceHtml, type FeeInvoiceTarget } from "@/lib/fee-invoice-pdf";
 
 // ── 타입 ──────────────────────────────────────────────────────
@@ -104,12 +105,17 @@ type FeeRow = {
   // 이 금액은 나중에 정산연차에서 자동으로 이월·합산되므로 여기서 청구하면 안 되고 표시만 한다.
   otherFirmHandled: boolean;
   otherFirmUnclaimedTotal: number;
+  // 이 연차를 담당한 회계법인명 — 엑셀 업로드("회계법인" 열)로 반영된다. 삼화 자신이면 보통 비어있다.
+  auditFirm: string;
   // 원본 termFees (확장용)
   fees: TermFee[];
   // 이 과제에 연차별 수수료(TermFee) 기록이 하나도 없어서 만든 자리표시 행인지 — 대시보드
   // 파이프라인(진행중/완료/중단)에서 클릭해 들어왔을 때 과제 자체는 보이되 수수료 관련 칸은
   // 비어 있는 이유를 알 수 있게 표시한다.
   noFeeRecord: boolean;
+  // 특정 연차에 담당자가 직접 지정한 날짜가, 그 뒤 단계 날짜가 바뀌면서 그 단계 기간 밖으로 벗어난
+  // 상태인지 — 과제명 옆에 주의 배지로 표시한다.
+  hasDateMismatch: boolean;
   termYear: number;
   termNumber: number;
   totalTerms: number;
@@ -137,6 +143,11 @@ type SalesTarget = {
   projectName: string;
   leadInstitutionName: string;
   institutionId?: string; // RDA2 등 기관별 분리 청구 행일 때만 채워짐
+  // 세금계산서·미수금의 leadInstitutionId로 들어갈 실제 청구 대상 기관 — 연차 통합이면 주관기관,
+  // 기관별 분리 청구(RDA2)면 그 참여기관 (row.billedInstitutionId와 동일한 값).
+  billedInstitutionId: string;
+  // 이 청구 단위에 속한 TermFee들 — 발행 시 청구 대상 기관의 연차는 BILLED로, 나머지는 CONFIRMED까지만 잠근다.
+  fees: TermFee[];
   termYear: number;
   termNumber: number;
   currentBillingType: string;
@@ -255,10 +266,12 @@ function SalesIssueModal({ target, onClose }: { target: SalesTarget; onClose: ()
   const isNoBill = billingType === "대상아님" || billingType === "면제";
 
   function handleSave() {
-    // 1. Project billingType 업데이트
-    if (target.projectId) {
-      updateProject(target.projectId, { billingType: billingType as "정발행" | "역발행요청" | "역발행" | "대상아님" | "면제" });
-    }
+    // 1. 이 연차(+분리 청구 기관)의 발행구분 업데이트 — 연차마다 다르게 발행될 수 있어 TermFee에 저장한다.
+    setTermBillingType(
+      target.projectNumber, target.termYear, target.termNumber,
+      billingType as "정발행" | "역발행요청" | "역발행" | "대상아님" | "면제",
+      target.institutionId
+    );
 
     // 2. 대상아님/면제는 세금계산서 처리 불필요
     if (isNoBill) { onClose(); return; }
@@ -287,7 +300,7 @@ function SalesIssueModal({ target, onClose }: { target: SalesTarget; onClose: ()
         projectName:         target.projectName,
         termYear:            target.termYear,
         termNumber:          target.termNumber,
-        leadInstitutionId:   "",
+        leadInstitutionId:   target.billedInstitutionId,
         leadInstitutionName: target.leadInstitutionName,
         institutionId:       target.institutionId,
         issuedAt,
@@ -314,7 +327,7 @@ function SalesIssueModal({ target, onClose }: { target: SalesTarget; onClose: ()
         projectName:         target.projectName,
         termYear:            target.termYear,
         termNumber:          target.termNumber,
-        leadInstitutionId:   "",
+        leadInstitutionId:   target.billedInstitutionId,
         leadInstitutionName: target.leadInstitutionName,
         institutionId:       target.institutionId,
         billedAt:            issuedAt,
@@ -327,6 +340,18 @@ function SalesIssueModal({ target, onClose }: { target: SalesTarget; onClose: ()
         status:              "OVERDUE",
       });
     }
+
+    // 실제로 청구서를 받는 기관만 청구완료(BILLED) 처리하고, 나머지(연차 통합 케이스에서 참여기관처럼
+    // 개별 청구되지 않은 쪽)는 확정(CONFIRMED)까지만 반영한다 — 과제상세 페이지의 발행 처리와 동일한 규칙.
+    // 이 잠금이 없으면 이후 참여기관 정보가 바뀔 때 autoGenerateTermFees가 이미 청구한 금액을 조용히
+    // 재산정해버릴 수 있다.
+    target.fees.forEach((f: TermFee) => {
+      if (f.institutionId === target.billedInstitutionId) {
+        if (f.status !== "BILLED") updateTermFee(f.id, { status: "BILLED" });
+      } else if (f.status === "DRAFT" || f.status === "SCHEDULED") {
+        updateTermFee(f.id, { status: "CONFIRMED" });
+      }
+    });
 
     onClose();
   }
@@ -434,10 +459,10 @@ function SalesCancelModal({ target, onClose }: { target: SalesTarget; onClose: (
     if (!target.taxInvoiceId) { onClose(); return; }
     if (mode === "delete") {
       updateTaxInvoice(target.taxInvoiceId, { issuedAt: "", status: "CANCELED" });
-      // billingType이 "정발행"으로 저장되어 있으면 취소 후에도 계속 그 표시가 남으므로 초기화한다.
-      // (세금계산서가 실제로 취소됐는지와 무관하게 project.billingType은 별도 필드라 자동으로 안 지워짐)
-      if (target.projectId && target.currentBillingType === "정발행") {
-        updateProject(target.projectId, { billingType: undefined });
+      // billingType이 이 연차에 "정발행"으로 저장되어 있으면 취소 후에도 계속 그 표시가 남으므로 초기화한다.
+      // (세금계산서가 실제로 취소됐는지와 무관하게 TermFee.billingType은 별도 필드라 자동으로 안 지워짐)
+      if (target.currentBillingType === "정발행") {
+        setTermBillingType(target.projectNumber, target.termYear, target.termNumber, undefined, target.institutionId);
       }
     } else {
       if (!newDate) return;
@@ -680,7 +705,6 @@ type AttachmentRow = { name: string; checked: boolean; dataUrl?: string; preview
 
 function DispatchModal({ target, onClose }: { target: DispatchTarget; onClose: () => void }) {
   const { standardAttachments, users, feeInvoiceTemplates } = useStore();
-  const bizRegAttachment = standardAttachments.find((a) => a.id === "sa-biz-reg");
   // getCurrentUser()는 로그인 시점 스냅샷이라 이후 등록된 하이웍스 계정 정보가 반영되지 않으므로,
   // 실시간 store에서 같은 id의 사용자 레코드를 다시 찾아 발신 계정으로 사용한다.
   const senderUser = users.find((u) => u.id === getCurrentUser()?.id) ?? null;
@@ -747,8 +771,14 @@ ${COMPANY_INFO.name} 드림`;
   // 카테고리별로 등록해둔 대표양식을 그대로 쓴다 — 선택 UI 없이 항상 자동 적용. 역발행/기타는 연차상시/
   // 위탁정산 어느 쪽이든 항상 REVERSE·OTHER 전용 대표양식을 쓴다(공문발송 드롭다운의 "역발행 수수료
   // 공문"·"기타 공문"이 연차상시/위탁정산 구분 없이 하나뿐인 것과 대응).
+  // 청구서 대표양식뿐 아니라 공통 첨부파일(사업자등록증 등)의 "이 유형엔 첨부할지" 설정도 같은 카테고리
+  // 축(ANNUAL/SETTLEMENT/REVERSE/OTHER)을 기준으로 삼는다 — 역발행/기타는 항상 REVERSE·OTHER로 취급.
+  function resolveTemplateCategory(cat: "ANNUAL" | "SETTLEMENT"): "ANNUAL" | "SETTLEMENT" | "REVERSE" | "OTHER" {
+    return target.kind === "REVERSE" ? "REVERSE" : target.kind === "OTHER" ? "OTHER" : cat;
+  }
+
   function resolveInvoiceTemplateEntry(cat: "ANNUAL" | "SETTLEMENT") {
-    const category = target.kind === "REVERSE" ? "REVERSE" : target.kind === "OTHER" ? "OTHER" : cat;
+    const category = resolveTemplateCategory(cat);
     return (
       feeInvoiceTemplates.find((t) => t.category === category && t.isDefault)
       ?? feeInvoiceTemplates.find((t) => t.category === category)
@@ -790,15 +820,21 @@ ${COMPANY_INFO.name} 드림`;
       checked: true,
       previewHtml: buildFeeInvoiceHtml(buildFeeInvoiceTargetData(cat), resolveInvoiceTemplateContent(cat)),
     };
-    const bizRegAttachmentRow = { name: bizRegAttachment?.name ?? "사업자등록증.pdf", checked: true, dataUrl: bizRegAttachment?.fileDataUrl };
-    // 기타 공문도 청구서 PDF는 자동 생성해 붙이되(대표양식은 OTHER 전용), 위탁정산내역서처럼 특정
-    // 카테고리 전용 서류는 붙이지 않는다 — "기타"는 정형화된 카테고리가 아니라서 그 판단까지 자동화하지 않는다.
-    if (isOther) return [invoiceAttachment, bizRegAttachmentRow];
-    return [
-      invoiceAttachment,
-      bizRegAttachmentRow,
-      ...(cat === "SETTLEMENT" ? [{ name: "위탁정산내역서.pdf", checked: true }] : []),
-    ];
+    // 사업자등록증·통장사본 등 공통 첨부파일(/notice-templates/invoices에서 관리) — 이 유형(카테고리)
+    // 기준으로 꺼져 있는 항목은(파일이 등록돼 있어도) 발송 목록에서 아예 빼서, 그 유형엔 필요 없는
+    // 서류를 매번 체크 해제하지 않아도 되게 한다.
+    const templateCategory = resolveTemplateCategory(cat);
+    const standardAttachmentRows = standardAttachments
+      .filter((a) => (a.enabledByCategory?.[templateCategory] ?? true))
+      .map((a) => ({ name: a.name, checked: true, dataUrl: a.fileDataUrl }));
+    // 공문 양식 관리 > 수수료 청구서 양식(/notice-templates/invoices)에서 이 카테고리(대표양식)에
+    // 등록해둔 기본 첨부 파일 — 위탁정산내역서처럼 카테고리마다 다를 수 있는 서류를 거기서 관리한다.
+    const defaultAttachmentRows = (resolveInvoiceTemplateEntry(cat)?.defaultAttachments ?? []).map((a) => ({
+      name: a.name,
+      checked: true,
+      dataUrl: a.fileDataUrl,
+    }));
+    return [invoiceAttachment, ...standardAttachmentRows, ...defaultAttachmentRows];
   }
 
   const [feeCategory,  setFeeCategory]  = useState(target.feeCategory);
@@ -1651,8 +1687,16 @@ function useFeeRows(): FeeRow[] {
       // 과제구분(연차상시/정산)과 당해시작일/종료일은 과제 전체 기간이 아니라 "이 행이 나타내는 연차"
       // 기준으로 계산해야 한다 — 다년차 과제는 연차마다 행이 따로 나오므로, project 레벨 고정값을 그대로
       // 쓰면 모든 연차 행이 똑같은 날짜/구분을 보여줘서 어느 연차인지 구분이 안 된다.
-      const termRange = project ? termDateRange(project.startDate, f0.termNumber) : null;
+      const termRange = project ? resolveTermDateRange(project, f0.termNumber) : null;
+      // 엑셀에서 이 연차의 실제 시작/종료일(연차시작일자/연차종료일자)을 받았으면 그 값을 우선 쓰고,
+      // 없으면 단계시작일(있으면) 또는 총개발시작일+연차번호로 계산한 값을 대신 쓴다.
+      const explicitTermStart = fees.find((f) => f.termStartDate)?.termStartDate;
+      const explicitTermEnd = fees.find((f) => f.termEndDate)?.termEndDate;
       const projectCategory = project ? (isSettlementTerm(project, f0.termNumber) ? "정산" : "연차상시") : "연차상시";
+      // 과제 전체 연차 중 하나라도 단계-연차 날짜가 어긋나 있으면, 그 과제의 모든 행에 동일하게 배지를 띄운다.
+      const hasDateMismatch = project
+        ? hasStageTermDateMismatch(project, termFees.filter((tf) => tf.projectNumber === project.projectNumber))
+        : false;
 
       // RDA2는 참여기관마다 계산서·공문발송·수금을 따로 관리하므로(과제 상세의 BillingBlock과 동일 기준),
       // 실제로 수수료가 발생하는(appliedFee > 0) 기관마다 행을 따로 만든다. 그 외 전담기관은 지금까지와
@@ -1690,6 +1734,10 @@ function useFeeRows(): FeeRow[] {
         const recipientMember = isSplit
           ? projectMembers.find((pm) => pm.projectNumber === f0.projectNumber && pm.institutionId === primary.institutionId)
           : projectMembers.find((pm) => pm.projectNumber === f0.projectNumber && pm.role === "LEAD");
+        // 연차별로 수신자가 다를 수 있어(과제 상세 페이지에서 연차별로 수정) recipientOverrides를 먼저 본다.
+        const recipient = recipientMember
+          ? resolveMemberRecipientForTerm(recipientMember, f0.termNumber)
+          : { recipientName: "", recipientEmail: "", recipientPhone: "" };
 
         // 서류요청일/회신일을 들고 있는 TermFee — 분리행이면 그 기관 자신, 아니면 주관기관 쪽(없으면
         // 청구(BILLED)된 쪽, 그것도 없으면 첫 번째 행)을 기본 소유자로 삼는다.
@@ -1697,16 +1745,19 @@ function useFeeRows(): FeeRow[] {
           ? primary
           : unitFees.find((f) => f.institutionId === project?.leadInstitutionId) ?? unitFees.find((f) => f.status === "BILLED") ?? primary;
 
-        // 발행구분 — billingType 없으면 세금계산서 유무로 판별.
+        // 발행구분 — 연차(TermFee)마다 다르게 발행될 수 있어 그 연차의 TermFee.billingType을 우선
+        // 쓰고, 없으면 과제 단위 기본값(project.billingType)을, 그것도 없으면 세금계산서 유무로 판별한다.
         // 단, 취소된(CANCELED) 계산서는 "발행됨"으로 치지 않는다 — 안 그러면 발행 취소 후에도
         // billingType이 비어있는 과제는 계속 "정발행"으로 표시되어 버린다.
-        const billingType = project?.billingType ?? (invoice && invoice.status !== "CANCELED" ? "정발행" : "");
+        const termBillingType = unitFees.find((f) => f.billingType)?.billingType;
+        const billingType = termBillingType ?? project?.billingType ?? (invoice && invoice.status !== "CANCELED" ? "정발행" : "");
         // 타회계법인이 진행한 기관×연차는 삼화가 청구할 금액이 아니므로 appliedFeeTotal(실제 청구/발행 대상
         // 금액)에서 제외한다 — 그 몫의 당해 미청구(15%)는 otherFirmUnclaimedTotal로 따로 보여주기만 하고,
         // 정산연차가 되면 store.ts의 이월 로직이 알아서 그때 청구액에 합산한다.
         const appliedFeeTotal = unitFees.reduce((s, f) => s + (f.otherFirmHandled ? 0 : f.appliedFee), 0);
         const otherFirmHandled = unitFees.some((f) => f.otherFirmHandled);
         const otherFirmUnclaimedTotal = unitFees.reduce((s, f) => s + (f.otherFirmHandled ? (f.unclaimedFee ?? 0) : 0), 0);
+        const auditFirm = unitFees.find((f) => f.auditFirm)?.auditFirm ?? "";
 
         return {
           key: isSplit ? `${key}|${primary.institutionId}` : key,
@@ -1721,15 +1772,18 @@ function useFeeRows(): FeeRow[] {
           isSplitRow:          isSplit,
           researchLead:        project?.researchLead ?? "",
           projectCategory,
-          startDate:           termRange?.start ?? project?.startDate ?? "",
-          endDate:             termRange?.end ?? project?.endDate ?? "",
+          startDate:           explicitTermStart ?? termRange?.start ?? project?.startDate ?? "",
+          endDate:             explicitTermEnd ?? termRange?.end ?? project?.endDate ?? "",
           stageStartDate:      project?.stageStartDate ?? "",
           stageEndDate:        project?.stageEndDate ?? "",
           billingType,
           invoiceIssuedAt:     invoice?.issuedAt ?? "",
-          supplyAmount:        invoice?.supplyAmount ?? 0,
-          taxAmount:           invoice?.taxAmount ?? 0,
-          totalInvoiceAmount:  invoice?.totalAmount ?? 0,
+          // 세금계산서가 아직 발행되지 않았어도, 산정된 수수료(appliedFeeTotal)가 있으면 그걸 부가세
+          // 포함가 기준으로 역산해 "예상 금액"으로 채운다 — 전체 과제의 예상 수수료 합계를 발행 여부와
+          // 무관하게 확인할 수 있어야 하기 때문. 실제 발행액과 구분은 taxInvoiceId 유무로 렌더링에서 한다.
+          supplyAmount:        invoice?.supplyAmount ?? (appliedFeeTotal > 0 ? splitVatInclusive(appliedFeeTotal).supplyAmount : 0),
+          taxAmount:           invoice?.taxAmount ?? (appliedFeeTotal > 0 ? splitVatInclusive(appliedFeeTotal).taxAmount : 0),
+          totalInvoiceAmount:  invoice?.totalAmount ?? appliedFeeTotal,
           receivableId:        rv?.id ?? "",
           billedAmount:        rv?.billedAmount ?? 0,
           collectionStatus:    rv?.status ?? "",
@@ -1742,8 +1796,8 @@ function useFeeRows(): FeeRow[] {
           docFeeId:            docOwner?.id ?? "",
           docRequestDate:      docOwner?.docRequestDate ?? "",
           docReplyDate:        docOwner?.docReplyDate ?? "",
-          recipientName:       recipientMember?.contactName ?? "",
-          recipientEmail:      recipientMember?.contactEmail ?? "",
+          recipientName:       recipient.recipientName,
+          recipientEmail:      recipient.recipientEmail,
           projectDivision:     project?.projectDivision ?? "",
           assignedManager:     project?.assignedManager ?? "",
           registeredAt:        project?.registeredAt ?? "",
@@ -1752,6 +1806,7 @@ function useFeeRows(): FeeRow[] {
           appliedFeeTotal,
           otherFirmHandled,
           otherFirmUnclaimedTotal,
+          auditFirm,
           fees: unitFees,
           termYear:            f0.termYear,
           termNumber:          f0.termNumber,
@@ -1762,6 +1817,7 @@ function useFeeRows(): FeeRow[] {
           leadMemberId:        recipientMember?.id ?? "",
           issues,
           noFeeRecord: false,
+          hasDateMismatch,
         };
       });
     });
@@ -1777,7 +1833,7 @@ function useFeeRows(): FeeRow[] {
       const issues = projectIssues
         .filter((i) => i.projectNumber === project.projectNumber)
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-      const termRange = termDateRange(project.startDate, project.currentTerm);
+      const termRange = resolveTermDateRange(project, project.currentTerm);
       rows.push({
         key: `no-fee|${project.projectNumber}`,
         projectId: project.id,
@@ -1812,8 +1868,8 @@ function useFeeRows(): FeeRow[] {
         docFeeId: "",
         docRequestDate: "",
         docReplyDate: "",
-        recipientName: leadMember?.contactName ?? "",
-        recipientEmail: leadMember?.contactEmail ?? "",
+        recipientName: leadMember ? resolveMemberRecipientForTerm(leadMember, project.currentTerm).recipientName : "",
+        recipientEmail: leadMember ? resolveMemberRecipientForTerm(leadMember, project.currentTerm).recipientEmail : "",
         projectDivision: project.projectDivision ?? "",
         assignedManager: project.assignedManager ?? "",
         registeredAt: project.registeredAt ?? "",
@@ -1831,7 +1887,9 @@ function useFeeRows(): FeeRow[] {
         issues,
         otherFirmHandled: false,
         otherFirmUnclaimedTotal: 0,
+        auditFirm: "",
         noFeeRecord: true,
+        hasDateMismatch: false,
       });
     }
 
@@ -1969,7 +2027,7 @@ const ISSUE_STATUS_LABEL: Record<string, string> = { OPEN: "미처리", IN_PROGR
 function FeeRowDetail({ row }: { row: FeeRow }) {
   return (
     <tr>
-      <td colSpan={COLUMNS.length + 4} className="bg-slate-50/70 px-6 py-4 border-b border-slate-100">
+      <td colSpan={COLUMNS.length + 5} className="bg-slate-50/70 px-6 py-4 border-b border-slate-100">
         <div className="space-y-2">
           <div className="flex items-center justify-between mb-2">
             <p className="text-[10px] font-bold text-slate-400 tracking-widest">이슈 / 메모</p>
@@ -2035,6 +2093,7 @@ interface BulkNoticeTarget {
   leadInstitutionName: string;
   recipientEmail: string;
   statusRows: NoticeStatusRow[];
+  feeRows: NoticeStatusRow[];
   templates: AgencyNoticeTemplateEntry[];
 }
 
@@ -2101,7 +2160,7 @@ function BulkSettlementNoticeModal({
       const docNumber = `${COMPANY_INFO.docNumberPrefix} ${now.getFullYear()}-${String(seq).padStart(4, "0")}`;
       seq++;
       const subject = `[${t.projectNumber}] ${template.title || "정산절차 안내 및 수수료 청구"}`;
-      const html = buildNoticeEmailHtml({ template, statusRows: t.statusRows, docNumber, issuedDate });
+      const html = buildNoticeEmailHtml({ template, statusRows: t.statusRows, feeRows: t.feeRows, docNumber, issuedDate });
 
       let status: "SUCCESS" | "FAILED" = "SUCCESS";
       let errMsg = "";
@@ -2134,7 +2193,7 @@ function BulkSettlementNoticeModal({
         emailType: "SETTLEMENT_NOTICE",
         attachments: template.attachments.map((a) => a.name),
         status,
-        noticeSnapshot: { template, statusRows: t.statusRows, docNumber, issuedDate },
+        noticeSnapshot: { template, statusRows: t.statusRows, feeRows: t.feeRows, docNumber, issuedDate },
       });
       newResults.push({ projectName: t.projectName, email: t.recipientEmail, status, error: errMsg });
     }
@@ -2225,6 +2284,7 @@ function BulkSettlementNoticeModal({
                     <NoticeLetterPreview
                       template={template}
                       statusRows={items[0].statusRows}
+                      feeRows={items[0].feeRows}
                       docNumber={`${COMPANY_INFO.docNumberPrefix} ${new Date().getFullYear()}-미리보기`}
                       issuedDate={new Date().toISOString().slice(0, 10).replace(/-/g, ".")}
                     />
@@ -2292,7 +2352,7 @@ export default function FeesPage() {
   const canEditSales = useCanWrite("fees-sales");
   const canEditEmails = useCanWrite("emails");
   const allRows     = useFeeRows();
-  const { fundingAgencies, projects, projectMembers, agencyNoticeTemplates, users, emailDispatches } = useStore();
+  const { fundingAgencies, projects, projectMembers, agencyNoticeTemplates, users, emailDispatches, termFees } = useStore();
   const searchParams = useSearchParams();
   const router = useRouter();
   const [filterProjectNumber,   setFilterProjectNumber]   = useState("");
@@ -2317,6 +2377,9 @@ export default function FeesPage() {
   const [selectedKeys, setSelectedKeys]   = useState<Set<string>>(new Set());
   const [showBulkNotice, setShowBulkNotice] = useState(false);
   const [showRcmsUpload, setShowRcmsUpload] = useState(false);
+  // 고정열(약칭~연구책임자, 5개)이 차지하는 폭이 좁은 화면에서는 오른쪽 스크롤 영역을 거의 다 잡아먹으므로,
+  // 필요할 때 꺼서 일반 표처럼 전체를 스크롤해 볼 수 있게 한다. 체크박스·펼치기 열은 폭이 작아(64px) 계속 고정해둔다.
+  const [columnsFrozen, setColumnsFrozen] = useState(true);
 
   // 표 영역을 스크롤바 드래그 없이 아무 빈 공간이나 잡고 좌우로 끌어서 스크롤할 수 있게 한다.
   // 버튼·체크박스 등 클릭 가능한 요소 위에서 시작한 경우는 드래그로 취급하지 않아 기존 클릭 동작을 해치지 않는다.
@@ -2524,6 +2587,11 @@ export default function FeesPage() {
         { label: "연구책임자", value: project.researchLead ?? "—" },
         { label: "공동연구개발기관수", value: `${coInstitutionCount}개` },
       ];
+      const feeRows: NoticeStatusRow[] = buildNoticeFeeRows(
+        project,
+        termFees.filter((tf) => tf.projectNumber === project.projectNumber),
+        project.currentTerm
+      );
       return {
         projectId,
         projectNumber: project.projectNumber,
@@ -2532,10 +2600,11 @@ export default function FeesPage() {
         leadInstitutionName: project.leadInstitutionName,
         recipientEmail: leadMember?.contactEmail ?? "",
         statusRows,
+        feeRows,
         templates,
       };
     });
-  }, [showBulkNotice, filtered, selectedKeys, projects, fundingAgencies, agencyNoticeTemplates, projectMembers]);
+  }, [showBulkNotice, filtered, selectedKeys, projects, fundingAgencies, agencyNoticeTemplates, projectMembers, termFees]);
 
   const bulkNoticeSenderUser = users.find((u) => u.id === getCurrentUser()?.id) ?? null;
   const bulkNoticeStartSeq = emailDispatches.filter((e) => e.emailType === "SETTLEMENT_NOTICE").length + 1;
@@ -2558,14 +2627,24 @@ export default function FeesPage() {
             <Link href={`/projects/${row.projectId}`} className="block w-full font-medium text-blue-600 hover:underline hover:text-blue-800 text-xs line-clamp-2" title={row.projectName}>
               {row.projectName}
             </Link>
-            {row.noFeeRecord && (
-              <span
-                className="inline-block mt-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 whitespace-nowrap"
-                title="이 과제는 아직 연차별 수수료(TermFee)가 등록되지 않아 발행·수금 관련 칸이 비어 있습니다"
-              >
-                수수료 미등록
-              </span>
-            )}
+            <div className="flex items-center gap-1 flex-wrap">
+              {row.noFeeRecord && (
+                <span
+                  className="inline-block mt-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 whitespace-nowrap"
+                  title="이 과제는 아직 연차별 수수료(TermFee)가 등록되지 않아 발행·수금 관련 칸이 비어 있습니다"
+                >
+                  수수료 미등록
+                </span>
+              )}
+              {row.hasDateMismatch && (
+                <span
+                  className="inline-block mt-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 whitespace-nowrap"
+                  title="특정 연차에 직접 지정한 날짜가, 그 뒤 단계 날짜 변경으로 단계 기간 밖으로 벗어났습니다. 과제 상세페이지에서 확인해주세요."
+                >
+                  ⚠ 단계·연차 날짜 불일치
+                </span>
+              )}
+            </div>
           </div>
         );
 
@@ -2625,13 +2704,25 @@ export default function FeesPage() {
         return <span className="text-xs text-slate-600">{row.invoiceIssuedAt ? fmtDate(row.invoiceIssuedAt) : "—"}</span>;
 
       case "supplyAmount":
-        return <span className="text-xs font-medium text-slate-800">{row.supplyAmount ? fmtWon(row.supplyAmount) : "—"}</span>;
+        return row.supplyAmount ? (
+          row.taxInvoiceId
+            ? <span className="text-xs font-medium text-slate-800">{fmtWon(row.supplyAmount)}</span>
+            : <span className="text-xs font-medium text-slate-400" title="세금계산서 발행 전 예상 금액">{fmtWon(row.supplyAmount)}</span>
+        ) : <span className="text-xs text-slate-300">—</span>;
 
       case "taxAmount":
-        return <span className="text-xs text-slate-600">{row.taxAmount ? fmtWon(row.taxAmount) : "—"}</span>;
+        return row.taxAmount ? (
+          row.taxInvoiceId
+            ? <span className="text-xs text-slate-600">{fmtWon(row.taxAmount)}</span>
+            : <span className="text-xs text-slate-400" title="세금계산서 발행 전 예상 금액">{fmtWon(row.taxAmount)}</span>
+        ) : <span className="text-xs text-slate-300">—</span>;
 
       case "totalInvoiceAmount":
-        return <span className="text-xs font-bold text-slate-800">{row.totalInvoiceAmount ? fmtWon(row.totalInvoiceAmount) : "—"}</span>;
+        return row.totalInvoiceAmount ? (
+          row.taxInvoiceId
+            ? <span className="text-xs font-bold text-slate-800">{fmtWon(row.totalInvoiceAmount)}</span>
+            : <span className="text-xs font-bold text-slate-400" title="세금계산서 발행 전 예상 금액">{fmtWon(row.totalInvoiceAmount)}</span>
+        ) : <span className="text-xs text-slate-300">—</span>;
 
       case "collectionStatus":
         return row.collectionStatus ? (
@@ -2754,6 +2845,7 @@ export default function FeesPage() {
       "수신자이메일": r.recipientEmail,
       "구분": r.projectDivision,
       "삼화담당자": r.assignedManager,
+      "회계법인": r.auditFirm,
     }));
     const ws = XLSX.utils.json_to_sheet(data);
     ws["!cols"] = Object.keys(data[0] ?? {}).map(() => ({ wch: 16 }));
@@ -2813,14 +2905,23 @@ export default function FeesPage() {
           <div key={c.label} className="bg-white rounded-xl border border-slate-200 px-4 py-3">
             <p className="text-xs text-slate-500">{c.label}</p>
             <p className={`text-sm font-bold mt-0.5 ${c.color}`}>{c.value}</p>
+            {c.label === "공급가액 합계" && (
+              <p className="text-[10px] text-slate-400 mt-0.5">미발행 과제는 산정된 예상 수수료 포함</p>
+            )}
           </div>
         ))}
       </div>
 
       {/* 검색 + 날짜 필터 */}
-      <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100">
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm divide-y divide-slate-100 overflow-hidden">
+        {/* 패널 헤더 */}
+        <div className="px-5 py-2.5 flex items-center gap-2 bg-slate-50/70 rounded-t-xl">
+          <FiSearch size={13} className="text-slate-400" />
+          <span className="text-xs font-semibold text-slate-500 tracking-wide">검색 필터</span>
+        </div>
+
         {/* 텍스트 필터 */}
-        <div className="px-4 py-3 grid grid-cols-3 gap-3">
+        <div className="px-5 py-4 grid grid-cols-3 gap-x-4 gap-y-3.5">
           {[
             { label: "과제번호",   value: filterProjectNumber,   onChange: setFilterProjectNumber   },
             { label: "과제명",     value: filterProjectName,     onChange: setFilterProjectName     },
@@ -2829,24 +2930,28 @@ export default function FeesPage() {
             { label: "삼화 담당자", value: filterAssignedManager, onChange: setFilterAssignedManager },
           ].map(({ label, value, onChange }) => (
             <div key={label}>
-              <p className="text-[10px] font-medium text-slate-400 mb-1">{label}</p>
-              <input
-                type="text"
-                value={value}
-                onChange={(e) => onChange(e.target.value)}
-                placeholder={`${label} 검색...`}
-                className="w-full text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-              />
+              <p className="text-xs font-medium text-slate-500 mb-1.5">{label}</p>
+              <div className="relative">
+                <FiSearch size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" />
+                <input
+                  type="text"
+                  value={value}
+                  onChange={(e) => onChange(e.target.value)}
+                  placeholder={`${label} 검색...`}
+                  className="w-full text-sm border border-slate-200 rounded-lg pl-8 pr-3 py-2 text-slate-700 hover:border-slate-300 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                />
+              </div>
             </div>
           ))}
         </div>
 
         {/* 상태 · 구분 필터 */}
-        <div className="px-4 py-3 flex items-center gap-2 flex-wrap">
+        <div className="px-5 py-3.5 flex items-center gap-2 flex-wrap">
+          <FiSliders size={13} className="text-slate-300 mr-0.5 shrink-0" />
           <select
             value={filterProjectStatus}
             onChange={(e) => setFilterProjectStatus(e.target.value)}
-            className="text-xs border border-slate-200 rounded-lg px-3 py-1.5 text-slate-600 bg-white shrink-0 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+            className="text-xs border border-slate-200 rounded-lg px-3 py-2 text-slate-600 bg-white shrink-0 hover:border-slate-300 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/30"
           >
             <option value="ALL">전체 상태</option>
             <option value="ACTIVE">진행중</option>
@@ -2855,21 +2960,21 @@ export default function FeesPage() {
           </select>
           <span className="w-px h-4 bg-slate-200" />
           <select value={filterAgency} onChange={(e) => setFilterAgency(e.target.value)}
-            className="text-xs border border-slate-200 rounded-lg px-3 py-1.5 text-slate-600 bg-white shrink-0 focus:outline-none focus:ring-2 focus:ring-blue-500/30">
+            className="text-xs border border-slate-200 rounded-lg px-3 py-2 text-slate-600 bg-white shrink-0 hover:border-slate-300 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/30">
             <option value="ALL">전담기관 전체</option>
             {fundingAgencies.map((a) => (
               <option key={a.id} value={a.shortName}>{a.shortName} · {a.name}</option>
             ))}
           </select>
           <select value={filterBillingType} onChange={(e) => setFilterBillingType(e.target.value)}
-            className="text-xs border border-slate-200 rounded-lg px-3 py-1.5 text-slate-600 bg-white shrink-0 focus:outline-none focus:ring-2 focus:ring-blue-500/30">
+            className="text-xs border border-slate-200 rounded-lg px-3 py-2 text-slate-600 bg-white shrink-0 hover:border-slate-300 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/30">
             <option value="ALL">발행구분 전체</option>
             {["정발행", "역발행요청", "역발행", "대상아님", "면제"].map((v) => (
               <option key={v} value={v}>{v}</option>
             ))}
           </select>
           <select value={filterCollectionStatus} onChange={(e) => setFilterCollectionStatus(e.target.value)}
-            className="text-xs border border-slate-200 rounded-lg px-3 py-1.5 text-slate-600 bg-white shrink-0 focus:outline-none focus:ring-2 focus:ring-blue-500/30">
+            className="text-xs border border-slate-200 rounded-lg px-3 py-2 text-slate-600 bg-white shrink-0 hover:border-slate-300 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/30">
             <option value="ALL">수금상태 전체</option>
             <option value="PAID">완납</option>
             <option value="PARTIAL">일부납부</option>
@@ -2878,7 +2983,7 @@ export default function FeesPage() {
             {/* 금액 자체가 아니라 손실금액이 등록돼 있는지 여부만 확인하는 용도 */}
             <option value="HAS_LOSS">손실금액 있음</option>
           </select>
-          <label className="flex items-center gap-1.5 cursor-pointer ml-1 shrink-0">
+          <label className="flex items-center gap-1.5 cursor-pointer ml-1 shrink-0 px-2.5 py-2 rounded-lg hover:bg-slate-50 transition-colors">
             <input type="checkbox" checked={filterOnlyReceivable}
               onChange={(e) => setFilterOnlyReceivable(e.target.checked)}
               className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30" />
@@ -2887,22 +2992,24 @@ export default function FeesPage() {
           {(filterAgency !== "ALL" || filterBillingType !== "ALL" || filterCollectionStatus !== "ALL" || filterOnlyReceivable) && (
             <button
               onClick={() => { setFilterAgency("ALL"); setFilterBillingType("ALL"); setFilterCollectionStatus("ALL"); setFilterOnlyReceivable(false); }}
-              className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1 rounded hover:bg-slate-100 transition-colors ml-auto">
+              className="text-xs text-slate-400 hover:text-slate-600 px-2.5 py-1.5 rounded-lg hover:bg-slate-100 transition-colors ml-auto">
               초기화
             </button>
           )}
         </div>
 
         {/* 기간 필터 */}
-        <div className="px-4 py-3 grid grid-cols-3 gap-x-6 gap-y-3">
+        <div className="px-5 py-4 grid grid-cols-3 gap-3">
           {/* 세금계산서 일자 */}
-          <div className="space-y-1.5">
+          <div className="space-y-2 rounded-lg bg-slate-50/60 border border-slate-100 p-3">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-slate-500">세금계산서 일자</span>
+              <span className="flex items-center gap-1.5 text-xs font-medium text-slate-500">
+                <FiCalendar size={12} className="text-slate-400" /> 세금계산서 일자
+              </span>
               {hasDateFilter && (
                 <button
                   onClick={clearDateRange}
-                  className="text-[11px] text-slate-400 hover:text-slate-600 px-1.5 py-0.5 rounded hover:bg-slate-100 transition-colors"
+                  className="text-[11px] text-slate-400 hover:text-slate-600 px-1.5 py-0.5 rounded hover:bg-white transition-colors"
                 >
                   초기화
                 </button>
@@ -2926,7 +3033,7 @@ export default function FeesPage() {
                 <button
                   key={label}
                   onClick={fn}
-                  className="text-xs px-2.5 py-1 rounded-md border border-slate-200 text-slate-600 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 transition-colors"
+                  className="text-xs px-2.5 py-1 rounded-full bg-white border border-slate-200 text-slate-600 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 transition-colors"
                 >
                   {label}
                 </button>
@@ -2935,13 +3042,15 @@ export default function FeesPage() {
           </div>
 
           {/* 당해종료일 */}
-          <div className="space-y-1.5">
+          <div className="space-y-2 rounded-lg bg-slate-50/60 border border-slate-100 p-3">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-slate-500">당해종료일</span>
+              <span className="flex items-center gap-1.5 text-xs font-medium text-slate-500">
+                <FiCalendar size={12} className="text-slate-400" /> 당해종료일
+              </span>
               {hasTermEndDateFilter && (
                 <button
                   onClick={clearTermEndDateRange}
-                  className="text-[11px] text-slate-400 hover:text-slate-600 px-1.5 py-0.5 rounded hover:bg-slate-100 transition-colors"
+                  className="text-[11px] text-slate-400 hover:text-slate-600 px-1.5 py-0.5 rounded hover:bg-white transition-colors"
                 >
                   초기화
                 </button>
@@ -2955,13 +3064,15 @@ export default function FeesPage() {
           </div>
 
           {/* 전담기관 배정일 */}
-          <div className="space-y-1.5">
+          <div className="space-y-2 rounded-lg bg-slate-50/60 border border-slate-100 p-3">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-slate-500">전담기관 배정일</span>
+              <span className="flex items-center gap-1.5 text-xs font-medium text-slate-500">
+                <FiCalendar size={12} className="text-slate-400" /> 전담기관 배정일
+              </span>
               {hasAgencyAssignedFilter && (
                 <button
                   onClick={clearAgencyAssignedRange}
-                  className="text-[11px] text-slate-400 hover:text-slate-600 px-1.5 py-0.5 rounded hover:bg-slate-100 transition-colors"
+                  className="text-[11px] text-slate-400 hover:text-slate-600 px-1.5 py-0.5 rounded hover:bg-white transition-colors"
                 >
                   초기화
                 </button>
@@ -3009,6 +3120,30 @@ export default function FeesPage() {
         </div>
       )}
 
+      {/* 컬럼 고정 토글 — 화면이 좁아 오른쪽 스크롤 영역이 부족할 때 꺼서 표 전체를 자유롭게 스크롤할 수 있다. */}
+      <div className="flex justify-end">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={columnsFrozen}
+          onClick={() => setColumnsFrozen((v) => !v)}
+          className="flex items-center gap-2 text-xs text-slate-500 select-none"
+        >
+          <span>약칭~연구책임자 컬럼 고정</span>
+          <span
+            className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+              columnsFrozen ? "bg-blue-600" : "bg-slate-300"
+            }`}
+          >
+            <span
+              className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                columnsFrozen ? "translate-x-[18px]" : "translate-x-0.5"
+              }`}
+            />
+          </span>
+        </button>
+      </div>
+
       {/* 메인 테이블 */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         {/* max-h + overflow-y-auto: 이 div 자체가 세로 스크롤 컨테이너가 되어야 안의 sticky
@@ -3051,7 +3186,7 @@ export default function FeesPage() {
                   style={{ ...fixedColStyle(STICKY_CHEVRON_PX), left: canEdit ? STICKY_CHECKBOX_PX : 0 }}
                 />
                 {COLUMNS.map((col) => {
-                  const isSticky = (STICKY_LEFT_KEYS as readonly string[]).includes(col.key);
+                  const isSticky = columnsFrozen && (STICKY_LEFT_KEYS as readonly string[]).includes(col.key);
                   const isLastSticky = col.key === STICKY_LEFT_KEYS[STICKY_LEFT_KEYS.length - 1];
                   return (
                     <th
@@ -3068,13 +3203,14 @@ export default function FeesPage() {
                 <th className="px-3 py-3 text-center font-medium text-slate-500 whitespace-nowrap w-24 sticky top-0 z-20 bg-slate-50 border-b border-slate-200">공문발송</th>
                 <th className="px-3 py-3 text-center font-medium text-slate-500 whitespace-nowrap w-32 sticky top-0 z-20 bg-slate-50 border-b border-slate-200">매출관리</th>
                 <th className="px-3 py-3 text-center font-medium text-slate-500 whitespace-nowrap w-20 sticky top-0 z-20 bg-slate-50 border-b border-slate-200">수금관리</th>
+                <th className="px-3 py-3 text-center font-medium text-slate-500 whitespace-nowrap w-24 sticky top-0 z-20 bg-slate-50 border-b border-slate-200">회계법인</th>
                 <th className="px-3 py-3 text-center font-medium text-slate-500 whitespace-nowrap w-20 sticky top-0 z-20 bg-slate-50 border-b border-slate-200">정보수정</th>
               </tr>
             </thead>
             <tbody>
               {pagedRows.length === 0 ? (
                 <tr>
-                  <td colSpan={COLUMNS.length + (canEdit ? 6 : 5)} className="px-4 py-10 text-center text-sm text-slate-400">
+                  <td colSpan={COLUMNS.length + (canEdit ? 7 : 6)} className="px-4 py-10 text-center text-sm text-slate-400">
                     검색 결과가 없습니다
                   </td>
                 </tr>
@@ -3131,7 +3267,7 @@ export default function FeesPage() {
                         </button>
                       </td>
                       {COLUMNS.map((col) => {
-                        const isSticky = (STICKY_LEFT_KEYS as readonly string[]).includes(col.key);
+                        const isSticky = columnsFrozen && (STICKY_LEFT_KEYS as readonly string[]).includes(col.key);
                         const isLastSticky = col.key === STICKY_LEFT_KEYS[STICKY_LEFT_KEYS.length - 1];
                         return (
                           <td
@@ -3198,6 +3334,8 @@ export default function FeesPage() {
                                     projectName:         row.projectName,
                                     leadInstitutionName: row.billedInstitutionName,
                                     institutionId:       row.isSplitRow ? row.billedInstitutionId : undefined,
+                                    billedInstitutionId: row.billedInstitutionId,
+                                    fees:                row.fees,
                                     termYear:            row.termYear,
                                     termNumber:          row.termNumber,
                                     currentBillingType:  row.billingType,
@@ -3225,6 +3363,8 @@ export default function FeesPage() {
                                       projectName:         row.projectName,
                                       leadInstitutionName: row.billedInstitutionName,
                                       institutionId:       row.isSplitRow ? row.billedInstitutionId : undefined,
+                                      billedInstitutionId: row.billedInstitutionId,
+                                      fees:                row.fees,
                                       termYear:            row.termYear,
                                       termNumber:          row.termNumber,
                                       currentBillingType:  row.billingType,
@@ -3278,6 +3418,12 @@ export default function FeesPage() {
                         ) : (
                           <span className="text-slate-300 text-xs">—</span>
                         )}
+                      </td>
+                      {/* 회계법인 — 엑셀 업로드("회계법인" 열)로 반영, 삼화 자신이면 보통 비어있다 */}
+                      <td className={`px-3 py-2.5 text-center align-middle w-24 ${rowBorder}`}>
+                        {row.auditFirm
+                          ? <span className="text-xs text-slate-700">{row.auditFirm}</span>
+                          : <span className="text-slate-300 text-xs">—</span>}
                       </td>
                       {/* 정보수정 버튼 */}
                       <td className={`px-3 py-2.5 text-center align-middle w-20 ${rowBorder}`}>

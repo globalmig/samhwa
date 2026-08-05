@@ -74,6 +74,7 @@ export const ENTITY_NAMES: Record<string, string> = {
   receivable: "미수금",
   settlement: "정산",
   taxInvoice: "세금계산서",
+  emailDispatch: "이메일 발송",
   user: "사용자",
   projectIssue: "이슈/메모",
   notice: "공지사항",
@@ -135,7 +136,7 @@ const INITIAL_AUDIT_LOG: AuditEntry[] = [
     entityLabel: "삼화전자(주) — RS-2024-00214837",
     action: "UPDATE",
     changedFields: {
-      institutionGrade: { before: "일반", after: "A~C" },
+      institutionGrade: { before: "일반", after: "우수(A)" },
       budget: { before: 450000000, after: 520000000 },
     },
     performedBy: "이회계",
@@ -322,16 +323,52 @@ export function updateFundingAgency(id: string, data: Partial<FundingAgency>): v
   if (!before) return;
   const after = { ...before, ...data };
   _state = { ..._state, fundingAgencies: _state.fundingAgencies.map((a) => (a.id === id ? after : a)) };
+  // 전담기관명은 과제(Project.agency)에 agencyId와 별개로 그대로 복사돼 있으므로 함께 갱신한다.
+  if (data.name && data.name !== before.name) {
+    const newName = data.name;
+    _state = {
+      ..._state,
+      projects: _state.projects.map((p) => p.agencyId === id ? { ...p, agency: newName } : p),
+    };
+  }
+  // 약칭(shortName)은 agencyGuides 딕셔너리의 키, AgencyNoticeTemplateEntry.agencyShortName의 값으로
+  // 쓰이므로, 바뀌면 옛 약칭 아래 남아있던 안내탭·공문템플릿이 새 약칭으로 조회되지 않아 고아가 된다.
+  if (data.shortName && data.shortName !== before.shortName) {
+    const oldShortName = before.shortName;
+    const newShortName = data.shortName;
+    const { [oldShortName]: movedGuides, ...restGuides } = _state.agencyGuides;
+    _state = {
+      ..._state,
+      agencyGuides: movedGuides ? { ...restGuides, [newShortName]: movedGuides } : _state.agencyGuides,
+      agencyNoticeTemplates: _state.agencyNoticeTemplates.map((t) =>
+        t.agencyShortName === oldShortName ? { ...t, agencyShortName: newShortName } : t
+      ),
+    };
+  }
   record("fundingAgency", id, after.name, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   notify();
 }
 
-export function deleteFundingAgency(id: string): void {
+// 참조 중인 과제·수수료정책·연차수수료산정이 하나라도 있으면 삭제를 막는다 — 참조를 그대로 두고
+// 지우면 agencyId가 가리키는 대상이 없어져 조용히 고아 레코드가 된다. 반환값이 null이면 삭제 성공,
+// 문자열이면 삭제를 막은 이유(화면에 그대로 안내 메시지로 보여준다).
+export function deleteFundingAgency(id: string): string | null {
   const item = _state.fundingAgencies.find((a) => a.id === id);
-  if (!item) return;
+  if (!item) return null;
+  const reasons: string[] = [];
+  const projectCount = _state.projects.filter((p) => p.agencyId === id).length;
+  if (projectCount > 0) reasons.push(`배정된 과제 ${projectCount}건`);
+  const feePolicyCount = _state.feePolicies.filter((p) => p.agencyId === id).length;
+  if (feePolicyCount > 0) reasons.push(`수수료정책 ${feePolicyCount}건`);
+  const termFeeCalcCount = _state.termFeeCalcs.filter((c) => c.agencyId === id).length;
+  if (termFeeCalcCount > 0) reasons.push(`연차수수료산정 ${termFeeCalcCount}건`);
+  if (reasons.length > 0) {
+    return `"${item.name}"은(는) ${reasons.join(", ")}에서 참조 중이라 삭제할 수 없습니다. 삭제 대신 상태를 "비활성"으로 변경해주세요.`;
+  }
   _state = { ..._state, fundingAgencies: _state.fundingAgencies.filter((a) => a.id !== id) };
   record("fundingAgency", id, item.name, "DELETE");
   notify();
+  return null;
 }
 
 // ============================================================
@@ -351,16 +388,65 @@ export function updateInstitution(id: string, data: Partial<Institution>): void 
   if (!before) return;
   const after = { ...before, ...data };
   _state = { ..._state, institutions: _state.institutions.map((i) => (i.id === id ? after : i)) };
+  // 기관명/유형은 과제·참여기관·연차수수료·미청구·미수금·세금계산서·정산·면제기관내역에 institutionId와
+  // 별개로 그대로 복사돼 있으므로, 함께 갱신하지 않으면 이 레코드들이 옛 이름/유형을 보여준 채로 남는다
+  // (updateProject의 projectNumber 전파와 동일한 이유).
+  if (data.name && data.name !== before.name) {
+    const newName = data.name;
+    _state = {
+      ..._state,
+      projects: _state.projects.map((p) => p.leadInstitutionId === id ? { ...p, leadInstitutionName: newName } : p),
+      projectMembers: _state.projectMembers.map((m) => m.institutionId === id ? { ...m, institutionName: newName } : m),
+      termFees: _state.termFees.map((f) => f.institutionId === id ? { ...f, institutionName: newName } : f),
+      unclaimedFees: _state.unclaimedFees.map((u) => u.leadInstitutionId === id ? { ...u, leadInstitutionName: newName } : u),
+      receivables: _state.receivables.map((r) => r.leadInstitutionId === id ? { ...r, leadInstitutionName: newName } : r),
+      taxInvoices: _state.taxInvoices.map((t) => t.leadInstitutionId === id ? { ...t, leadInstitutionName: newName } : t),
+      settlements: _state.settlements.map((s) => s.institutionId === id ? { ...s, institutionName: newName } : s),
+      termFeeCalcs: _state.termFeeCalcs.map((c) =>
+        c.exemptBreakdown.some((e) => e.institutionId === id)
+          ? { ...c, exemptBreakdown: c.exemptBreakdown.map((e) => e.institutionId === id ? { ...e, institutionName: newName } : e) }
+          : c
+      ),
+    };
+  }
+  if (data.type && data.type !== before.type) {
+    const newType = data.type;
+    _state = {
+      ..._state,
+      projectMembers: _state.projectMembers.map((m) => m.institutionId === id ? { ...m, institutionType: newType } : m),
+      termFees: _state.termFees.map((f) => f.institutionId === id ? { ...f, institutionType: newType } : f),
+    };
+  }
   record("institution", id, after.name, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   notify();
 }
 
-export function deleteInstitution(id: string): void {
+// 참조 중인 과제·참여기관·미수금·세금계산서·정산이 하나라도 있으면 삭제를 막는다 — 참조를 그대로 두고
+// 지우면 institutionId가 가리키는 대상이 없어져 조용히 고아 레코드가 된다. 반환값이 null이면 삭제 성공,
+// 문자열이면 삭제를 막은 이유(화면에 그대로 안내 메시지로 보여준다). 등록만 해두고 한 번도 쓰이지 않은
+// 기관은 이 조건에 걸리지 않으므로 그대로 삭제할 수 있다 — 실사용 중인 기관은 상태를 "비활성"으로
+// 바꿔 목록에서 빼는 방식을 쓰도록 유도한다.
+export function deleteInstitution(id: string): string | null {
   const item = _state.institutions.find((i) => i.id === id);
-  if (!item) return;
+  if (!item) return null;
+  const reasons: string[] = [];
+  const participatingProjectCount = new Set(_state.projectMembers.filter((m) => m.institutionId === id).map((m) => m.projectId)).size;
+  if (participatingProjectCount > 0) reasons.push(`참여 중인 과제 ${participatingProjectCount}건`);
+  const leadProjectCount = _state.projects.filter((p) => p.leadInstitutionId === id).length;
+  if (leadProjectCount > 0) reasons.push(`주관 과제 ${leadProjectCount}건`);
+  const receivableCount = _state.receivables.filter((r) => r.leadInstitutionId === id || r.institutionId === id).length;
+  if (receivableCount > 0) reasons.push(`미수금 ${receivableCount}건`);
+  const invoiceCount = _state.taxInvoices.filter((t) => t.leadInstitutionId === id || t.institutionId === id).length;
+  if (invoiceCount > 0) reasons.push(`세금계산서 ${invoiceCount}건`);
+  const settlementCount = _state.settlements.filter((s) => s.institutionId === id).length;
+  if (settlementCount > 0) reasons.push(`정산 ${settlementCount}건`);
+  if (reasons.length > 0) {
+    return `"${item.name}"은(는) ${reasons.join(", ")}에서 참조 중이라 삭제할 수 없습니다. 삭제 대신 상태를 "비활성"으로 변경해주세요.`;
+  }
   _state = { ..._state, institutions: _state.institutions.filter((i) => i.id !== id) };
   record("institution", id, item.name, "DELETE");
   notify();
+  return null;
 }
 
 // ============================================================
@@ -404,7 +490,10 @@ export function addProject(data: Omit<Project, "id">): Project {
 }
 
 // 수수료 산정에 영향을 주는 필드 — 변경 시 해당 과제의 연차별 수수료를 자동 재산정한다.
-const PROJECT_FEE_AFFECTING_FIELDS = ["agencyId", "startDate", "totalTerms", "agreementType", "stages", "projectType", "autonomySettlementType"] as const;
+// programType(IITP 전용 "일반 R&D" ↔ "ICT 기금사업")도 정책 자체를 통째로 바꾸는 필드다 — 구간표·
+// 연차상시 청구비율·산정방식(calcMode)이 모두 달라지므로 여기 빠지면 값을 바꿔도 기존 연차수수료가
+// 옛 정책 그대로 남는다.
+const PROJECT_FEE_AFFECTING_FIELDS = ["agencyId", "startDate", "totalTerms", "agreementType", "stages", "projectType", "autonomySettlementType", "programType"] as const;
 
 export function updateProject(id: string, data: Partial<Project>): void {
   const before = _state.projects.find((p) => p.id === id);
@@ -426,6 +515,22 @@ export function updateProject(id: string, data: Partial<Project>): void {
       receivables: _state.receivables.map((r) => r.projectNumber === oldNum ? { ...r, projectNumber: newNum } : r),
       taxInvoices: _state.taxInvoices.map((t) => t.projectNumber === oldNum ? { ...t, projectNumber: newNum } : t),
       projectIssues: _state.projectIssues.map((i) => i.projectNumber === oldNum ? { ...i, projectNumber: newNum } : i),
+      settlements: _state.settlements.map((s) => s.projectNumber === oldNum ? { ...s, projectNumber: newNum } : s),
+    };
+  }
+  // 과제명도 위와 같은 이유로 연차수수료·연차수수료산정·미청구·미수금·세금계산서·정산에 복사돼 있으므로
+  // 함께 갱신한다. projectNumber가 이 호출에서 함께 바뀌었을 수 있으므로 최신 번호(after.projectNumber)로 매칭한다.
+  if (data.projectName && data.projectName !== before.projectName) {
+    const newName = data.projectName;
+    const num = after.projectNumber;
+    _state = {
+      ..._state,
+      termFees: _state.termFees.map((f) => f.projectNumber === num ? { ...f, projectName: newName } : f),
+      termFeeCalcs: _state.termFeeCalcs.map((c) => c.projectNumber === num ? { ...c, projectName: newName } : c),
+      unclaimedFees: _state.unclaimedFees.map((u) => u.projectNumber === num ? { ...u, projectName: newName } : u),
+      receivables: _state.receivables.map((r) => r.projectNumber === num ? { ...r, projectName: newName } : r),
+      taxInvoices: _state.taxInvoices.map((t) => t.projectNumber === num ? { ...t, projectName: newName } : t),
+      settlements: _state.settlements.map((s) => s.projectNumber === num ? { ...s, projectName: newName } : s),
     };
   }
   record("project", id, after.projectName, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
@@ -454,6 +559,7 @@ export function deleteProject(id: string): void {
     unclaimedFees: _state.unclaimedFees.filter((u) => u.projectNumber !== num),
     receivables: _state.receivables.filter((r) => r.projectNumber !== num),
     taxInvoices: _state.taxInvoices.filter((t) => t.projectNumber !== num),
+    settlements: _state.settlements.filter((s) => s.projectNumber !== num),
   };
   record("project", id, item.projectName, "DELETE");
   notify();
@@ -481,6 +587,7 @@ export function addProjectMember(data: Omit<ProjectMember, "id">): ProjectMember
   _state = { ..._state, projectMembers: [..._state.projectMembers, item] };
   record("projectMember", item.id, `${item.projectNumber} · ${item.institutionName}`, "CREATE");
   autoGenerateTermFees(item.projectId);
+  recalcProjectTotalBudget(item.projectId);
   notify();
   return item;
 }
@@ -497,6 +604,9 @@ export function updateProjectMember(id: string, data: Partial<ProjectMember>): v
   if (FEE_AFFECTING_FIELDS.some((f) => f in data)) {
     autoGenerateTermFees(before.projectId);
   }
+  if ("cashBudget" in data || "inKindBudget" in data) {
+    recalcProjectTotalBudget(before.projectId);
+  }
   notify();
 }
 
@@ -506,7 +616,9 @@ export interface InstitutionGradeApplyResult {
   lockedTermCount: number;
   // 실제로 어느 과제의 몇 연차가 바뀌었는지 — 업로드 화면에서 "이 과제들이 바뀌었다"고
   // 구체적으로 보여줘야 사용자가 반영 결과를 확인·추적할 수 있다(건수만으로는 알 수 없음).
-  updatedProjects: { projectId: string; projectNumber: string; projectName: string; termNumbers: number[] }[];
+  // currentTerm은 호출 쪽에서 "이미 지난 연차까지 소급 반영됐는지"(termNumber < currentTerm)를
+  // 가려내 별도로 경고 표시하는 데 쓴다.
+  updatedProjects: { projectId: string; projectNumber: string; projectName: string; termNumbers: number[]; currentTerm: number }[];
 }
 
 // 정산면제리스트 업로드 등으로 기관의 등급이 새로 확인됐을 때, 그 기관이 참여 중인 모든 과제의
@@ -517,7 +629,7 @@ export function applyInstitutionGradeToProjects(
   institutionId: string,
   newGrade: "최우수(S)" | "우수(A)" | "우수(B)" | "우수(C)" | "일반",
 ): InstitutionGradeApplyResult {
-  const affectedProjects = new Map<string, { projectNumber: string; projectName: string; termNumbers: number[] }>();
+  const affectedProjects = new Map<string, { projectNumber: string; projectName: string; termNumbers: number[]; currentTerm: number }>();
   // 이미 확정(CONFIRMED/BILLED)되어 자동 반영은 안 됐지만, 그 연차를 계산할 때 쓴 등급이 새 등급과
   // 달라 수기 확인이 필요한 건들 — 과제별로 모아서 이슈로 남긴다.
   const lockedMismatches = new Map<string, { projectNumber: string; projectName: string; entries: { termNumber: number; oldGrade: string }[] }>();
@@ -559,6 +671,7 @@ export function applyInstitutionGradeToProjects(
       projectNumber: project.projectNumber,
       projectName: project.projectName,
       termNumbers: [...(affectedProjects.get(project.id)?.termNumbers ?? []), ...changedTerms].sort((a, b) => a - b),
+      currentTerm: project.currentTerm ?? 1,
     });
     return { ...m, gradeOverrides: overrides.sort((a, b) => a.termNumber - b.termNumber) };
   });
@@ -614,6 +727,7 @@ export function deleteProjectMember(id: string): void {
   _state = { ..._state, projectMembers: _state.projectMembers.filter((m) => m.id !== id) };
   record("projectMember", id, `${item.projectNumber} · ${item.institutionName}`, "DELETE");
   autoGenerateTermFees(item.projectId);
+  recalcProjectTotalBudget(item.projectId);
   notify();
 }
 
@@ -637,6 +751,20 @@ export function updateFeePolicy(id: string, data: Partial<FeePolicy>): void {
   _state = { ..._state, feePolicies: _state.feePolicies.map((p) => (p.id === id ? after : p)) };
   record("feePolicy", id, after.name, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   recalcProjectsUsingPolicy(id);
+  notify();
+}
+
+export function deleteFeePolicy(id: string): void {
+  const item = _state.feePolicies.find((p) => p.id === id);
+  if (!item) return;
+  // 삭제 전에 이 정책이 실제로 적용되던 과제를 미리 찾아둔다 — 삭제 후엔 이 정책으로
+  // resolvePolicy가 귀결되는지 더 이상 확인할 수 없으므로, 남은 정책 중 새로 귀결되는 것으로 재산정한다.
+  const affectedProjectIds = _state.projects
+    .filter((p) => resolvePolicy(p.agencyId, _state.feePolicies, p.programType ?? "GENERAL")?.id === id)
+    .map((p) => p.id);
+  _state = { ..._state, feePolicies: _state.feePolicies.filter((p) => p.id !== id) };
+  record("feePolicy", id, item.name, "DELETE");
+  affectedProjectIds.forEach((pid) => autoGenerateTermFees(pid));
   notify();
 }
 
@@ -739,6 +867,69 @@ export function setTermOtherFirmHandled(
   notify();
 }
 
+/** 한 연차(과제번호+연도+연차번호)의 실제 시작일/종료일을 직접 지정(또는 해제)한다. TermFee가
+ *  기관별로 1행씩 있어 연차 단위로 지정하면 그 연차의 모든 기관 행에 동일하게 반영해야 한다.
+ *  null을 넘기면 지정을 해제해 다시 자동계산(resolveTermDateRange) 값을 쓰게 된다. */
+export function setTermDates(
+  projectNumber: string,
+  termYear: number,
+  termNumber: number,
+  termStartDate: string | null,
+  termEndDate: string | null
+): void {
+  const targets = _state.termFees.filter(
+    (f) => f.projectNumber === projectNumber && f.termYear === termYear && f.termNumber === termNumber
+  );
+  if (targets.length === 0) return;
+  const targetIds = new Set(targets.map((f) => f.id));
+  _state = {
+    ..._state,
+    termFees: _state.termFees.map((f) =>
+      targetIds.has(f.id) ? { ...f, termStartDate: termStartDate ?? undefined, termEndDate: termEndDate ?? undefined } : f
+    ),
+  };
+  record(
+    "termFee",
+    targets[0].id,
+    `${projectNumber} · ${termYear}년 ${termNumber}연차`,
+    "UPDATE",
+    { termStartDate: { before: targets[0].termStartDate, after: termStartDate }, termEndDate: { before: targets[0].termEndDate, after: termEndDate } }
+  );
+  notify();
+}
+
+/** 한 연차(과제번호+연도+연차번호)의 세금계산서 발행구분을 일괄 변경한다. TermFee가 기관별로
+ *  1행씩 있어 연차 단위 선택은 그 연차의 모든 행에 동일하게 반영해야 한다(과거엔 Project 전체
+ *  단일 필드였는데, 연차마다 발행구분이 달라질 수 있어 TermFee로 옮겼다).
+ *  institutionId를 주면 RDA2처럼 연차를 기관별로 쪼개 청구하는 경우 그 기관의 행만 바꾼다. */
+export function setTermBillingType(
+  projectNumber: string,
+  termYear: number,
+  termNumber: number,
+  billingType: TermFee["billingType"],
+  institutionId?: string
+): void {
+  const targets = _state.termFees.filter(
+    (f) =>
+      f.projectNumber === projectNumber && f.termYear === termYear && f.termNumber === termNumber &&
+      (institutionId ? f.institutionId === institutionId : true)
+  );
+  if (targets.length === 0) return;
+  const targetIds = new Set(targets.map((f) => f.id));
+  _state = {
+    ..._state,
+    termFees: _state.termFees.map((f) => (targetIds.has(f.id) ? { ...f, billingType } : f)),
+  };
+  record(
+    "termFee",
+    targets[0].id,
+    `${projectNumber} · ${termYear}년 ${termNumber}연차`,
+    "UPDATE",
+    { billingType: { before: targets[0].billingType, after: billingType } }
+  );
+  notify();
+}
+
 // ============================================================
 // UNCLAIMED FEES
 // ============================================================
@@ -815,11 +1006,14 @@ export function addProjectIssue(data: Omit<ProjectIssue, "id">): ProjectIssue {
 }
 
 export function updateProjectIssue(id: string, changes: Partial<Omit<ProjectIssue, "id">>): void {
+  const before = _state.projectIssues.find((i) => i.id === id);
+  if (!before) return;
+  const after = { ...before, ...changes };
   _state = {
     ..._state,
-    projectIssues: _state.projectIssues.map((i) => (i.id === id ? { ...i, ...changes } : i)),
+    projectIssues: _state.projectIssues.map((i) => (i.id === id ? after : i)),
   };
-  record("projectIssue", id, "이슈 업데이트", "UPDATE");
+  record("projectIssue", id, "이슈 업데이트", "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   notify();
 }
 
@@ -904,6 +1098,21 @@ export function updateTaxInvoice(id: string, data: Partial<TaxInvoice>): void {
   if (!before) return;
   const after = { ...before, ...data };
   _state = { ..._state, taxInvoices: _state.taxInvoices.map((t) => (t.id === id ? after : t)) };
+  // Receivable.invoiceNumber는 세금계산서를 별도 FK 없이 문자열로만 참조한다(과제번호+연차+연차차수+
+  // (분리청구면)기관 조합으로 짝짓는 방식 — /fees, 과제상세 페이지의 매칭 로직과 동일). 세금계산서
+  // 번호를 고치면 그 조합으로 짝지어지는 미수금의 참조 번호도 함께 갱신해야 서로 어긋나지 않는다.
+  if (data.invoiceNumber && data.invoiceNumber !== before.invoiceNumber) {
+    const newInvoiceNumber = data.invoiceNumber;
+    _state = {
+      ..._state,
+      receivables: _state.receivables.map((r) =>
+        r.projectNumber === after.projectNumber && r.termYear === after.termYear && r.termNumber === after.termNumber &&
+          (r.institutionId ?? "") === (after.institutionId ?? "")
+          ? { ...r, invoiceNumber: newInvoiceNumber }
+          : r
+      ),
+    };
+  }
   record("taxInvoice", id, after.invoiceNumber, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   notify();
 }
@@ -975,6 +1184,7 @@ export function getUnissuedInvoiceGroups(
 export function addEmailDispatch(data: Omit<EmailDispatch, "id">): EmailDispatch {
   const item: EmailDispatch = { ...data, id: genId("em") };
   _state = { ..._state, emailDispatches: [..._state.emailDispatches, item] };
+  record("emailDispatch", item.id, `${item.recipientInstitution} · ${item.subject}`, "CREATE");
   notify();
   return item;
 }
@@ -989,6 +1199,22 @@ export function updateStandardAttachment(id: string, data: Partial<Omit<Standard
   const after = { ...before, ...data };
   _state = { ..._state, standardAttachments: _state.standardAttachments.map((a) => (a.id === id ? after : a)) };
   record("standardAttachment", id, after.name, "UPDATE");
+  notify();
+}
+
+export function addStandardAttachment(name: string): StandardAttachment {
+  const item: StandardAttachment = { id: genId("sa"), name, updatedAt: new Date().toISOString().slice(0, 10) };
+  _state = { ..._state, standardAttachments: [..._state.standardAttachments, item] };
+  record("standardAttachment", item.id, name, "CREATE");
+  notify();
+  return item;
+}
+
+export function deleteStandardAttachment(id: string): void {
+  const item = _state.standardAttachments.find((a) => a.id === id);
+  if (!item) return;
+  _state = { ..._state, standardAttachments: _state.standardAttachments.filter((a) => a.id !== id) };
+  record("standardAttachment", id, `${item.name} 삭제`, "DELETE");
   notify();
 }
 
@@ -1039,7 +1265,17 @@ export function updateUserHiworksCredentials(
 export function deleteUser(id: string): void {
   const item = _state.users.find((u) => u.id === id);
   if (!item) return;
-  _state = { ..._state, users: _state.users.filter((u) => u.id !== id) };
+  _state = {
+    ..._state,
+    users: _state.users.filter((u) => u.id !== id),
+    // 삭제된 사용자가 이슈/메모의 개인 알림 대상으로 남아있으면 존재하지 않는 id를 가리키는 유령
+    // 참조가 되므로 함께 정리한다.
+    projectIssues: _state.projectIssues.map((i) =>
+      i.recipientUserIds?.includes(id)
+        ? { ...i, recipientUserIds: i.recipientUserIds.filter((uid) => uid !== id) }
+        : i
+    ),
+  };
   record("user", id, item.name, "DELETE");
   notify();
 }
@@ -1108,7 +1344,7 @@ export function addFeeInvoiceTemplate(
 
 export function updateFeeInvoiceTemplate(
   id: string,
-  data: Partial<Pick<FeeInvoiceTemplateEntry, "name" | "content">>
+  data: Partial<Pick<FeeInvoiceTemplateEntry, "name" | "content" | "defaultAttachments">>
 ): void {
   const before = _state.feeInvoiceTemplates.find((t) => t.id === id);
   if (!before) return;
@@ -1364,6 +1600,9 @@ export function autoGenerateTermFees(projectId: string): void {
         status: feeStatus,
         isAutoGenerated: true,
         otherFirmHandled: prevFee?.otherFirmHandled,
+        termStartDate: ab?.termStartDate,
+        termEndDate: ab?.termEndDate,
+        auditFirm: ab?.auditFirm ?? prevFee?.auditFirm,
       });
     }
 

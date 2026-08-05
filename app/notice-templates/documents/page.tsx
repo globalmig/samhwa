@@ -21,6 +21,16 @@ const SAMPLE_PROJECT_STATUS: NoticeStatusRow[] = [
   { label: "공동연구개발기관수", value: "3개" },
 ];
 
+// 수수료 산정 내역 — 실제 발송 시 선택한 과제의 "지금 진행 중인 연차" 데이터로 자동 치환되는 영역.
+// 템플릿에는 포함되지 않으므로 편집 불가하며, 예시 값으로 미리보기만 제공한다.
+const SAMPLE_FEE_ROWS: NoticeStatusRow[] = [
+  { label: "대상 연차", value: "2025년 3연차 (연차상시)" },
+  { label: "진행 상태", value: "확정" },
+  { label: "산정액", value: "12,000,000원" },
+  { label: "당해 청구액", value: "10,200,000원" },
+  { label: "당해 미청구액", value: "1,800,000원" },
+];
+
 const inputCls = "w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400";
 
 // ─── 템플릿 선택 모달 ─────────────────────────────────────────
@@ -318,6 +328,7 @@ export default function NoticeDocumentTemplatesPage() {
                 <NoticeLetterPreview
                   template={isEditing ? draft : selected.content}
                   statusRows={SAMPLE_PROJECT_STATUS}
+                  feeRows={SAMPLE_FEE_ROWS}
                   docNumber="삼화 2026-#### (자동 채번)"
                   previewMode
                   editable={isEditing}

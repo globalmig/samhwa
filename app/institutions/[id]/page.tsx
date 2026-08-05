@@ -95,6 +95,20 @@ export default function InstitutionDetailPage({ params }: { params: Promise<{ id
     return getClassification(project.id, member?.institutionGrade);
   }
 
+  // ProjectMember.budget/feeRate/calculatedFee는 참여 등록 시점의 스냅샷일 뿐 이후 연차별 예산
+  // (annualBudgets)이 바뀌어도 갱신되지 않는 레거시 필드라 화면에 그대로 쓰면 옛 값을 보여줄 수 있다.
+  // 실제 산정 결과(TermFee, autoGenerateTermFees가 매번 다시 계산)에서 이 참여기관의 현재 연차
+  // 값을 찾아 보여주고, 아직 연차수수료가 생성되지 않았으면 연차별 예산에서 파생해 보여준다.
+  function getMemberCurrentFee(m: typeof myMemberships[number]): { budget: number; feeRate: number; calculatedFee: number } {
+    const project = projectsById.get(m.projectId);
+    const currentTerm = project?.currentTerm ?? 1;
+    const termFee = relatedFees.find((f) => f.projectNumber === m.projectNumber && f.termNumber === currentTerm);
+    if (termFee) return { budget: termFee.budget, feeRate: termFee.feeRate, calculatedFee: termFee.calculatedFee };
+    const ab = m.annualBudgets?.find((a) => a.termNumber === currentTerm);
+    const budget = (ab?.cashBudget ?? m.cashBudget ?? 0) + (ab?.inKindBudget ?? m.inKindBudget ?? 0);
+    return { budget, feeRate: 0, calculatedFee: 0 };
+  }
+
   const totalCalculatedFee = relatedFees.reduce((s, f) => s + f.calculatedFee, 0);
   const totalAppliedFee = relatedFees.reduce((s, f) => s + f.appliedFee, 0);
 
@@ -218,6 +232,7 @@ export default function InstitutionDetailPage({ params }: { params: Promise<{ id
                 {myMemberships.map((m) => {
                   const classification = getClassification(m.projectId, m.institutionGrade);
                   const project = projectsById.get(m.projectId);
+                  const currentFee = getMemberCurrentFee(m);
                   return (
                     <tr key={m.id} className="border-b border-slate-50 hover:bg-slate-50">
                       <td className="px-4 py-3">
@@ -258,9 +273,9 @@ export default function InstitutionDetailPage({ params }: { params: Promise<{ id
                       <td className="px-4 py-3 text-center">
                         <StatusBadge label={ROLE_MAP[m.role].label} color={ROLE_MAP[m.role].color} />
                       </td>
-                      <td className="px-4 py-3 text-right text-sm text-slate-700">{fmtWon(m.budget)}</td>
-                      <td className="px-4 py-3 text-right text-xs text-slate-600">{m.feeRate}%</td>
-                      <td className="px-4 py-3 text-right font-medium text-slate-800">{fmtWon(m.calculatedFee)}</td>
+                      <td className="px-4 py-3 text-right text-sm text-slate-700">{fmtWon(currentFee.budget)}</td>
+                      <td className="px-4 py-3 text-right text-xs text-slate-600">{currentFee.feeRate}%</td>
+                      <td className="px-4 py-3 text-right font-medium text-slate-800">{fmtWon(currentFee.calculatedFee)}</td>
                     </tr>
                   );
                 })}
@@ -307,6 +322,7 @@ export default function InstitutionDetailPage({ params }: { params: Promise<{ id
             <tbody>
               {myMemberships.map((m) => {
                 const proj = projects.find((p) => p.id === m.projectId);
+                const currentFee = getMemberCurrentFee(m);
                 return (
                   <tr key={m.id} className="border-b border-slate-50 hover:bg-slate-50">
                     <td className="px-4 py-3">
@@ -320,9 +336,9 @@ export default function InstitutionDetailPage({ params }: { params: Promise<{ id
                     <td className="px-4 py-3 text-center">
                       <StatusBadge label={ROLE_MAP[m.role].label} color={ROLE_MAP[m.role].color} />
                     </td>
-                    <td className="px-4 py-3 text-right text-sm text-slate-700">{fmtWon(m.budget)}</td>
-                    <td className="px-4 py-3 text-right text-xs text-slate-600">{m.feeRate}%</td>
-                    <td className="px-4 py-3 text-right font-medium text-slate-800">{fmtWon(m.calculatedFee)}</td>
+                    <td className="px-4 py-3 text-right text-sm text-slate-700">{fmtWon(currentFee.budget)}</td>
+                    <td className="px-4 py-3 text-right text-xs text-slate-600">{currentFee.feeRate}%</td>
+                    <td className="px-4 py-3 text-right font-medium text-slate-800">{fmtWon(currentFee.calculatedFee)}</td>
                   </tr>
                 );
               })}

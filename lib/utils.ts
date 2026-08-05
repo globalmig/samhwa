@@ -39,6 +39,24 @@ export function termDateRange(projectStartDate: string, termNumber: number): { s
   return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
 }
 
+// termDateRange와 같지만, 그 연차가 속한 단계에 실제 단계시작일(stageStartDate)이 있으면 과제 전체
+// 시작일이 아니라 그 단계 시작일을 기준으로 계산한다 — 계약변경 등으로 단계 시작이 늦춰지면, 그 단계
+// 안 연차들의 당해시작일/종료일도 같이 밀려야 실제 진행 일정과 맞기 때문이다. 단계 정보가 없거나(일괄협약)
+// 그 단계에 날짜가 없으면 기존처럼 과제 전체 시작일 기준으로 계산한다.
+export function resolveTermDateRange(
+  project: {
+    startDate: string;
+    stages?: { stageNumber: number; startTermNumber: number; endTermNumber: number; stageStartDate?: string; stageEndDate?: string }[];
+  },
+  termNumber: number
+): { start: string; end: string } {
+  const stage = project.stages?.find((s) => termNumber >= s.startTermNumber && termNumber <= s.endTermNumber);
+  if (stage?.stageStartDate) {
+    return termDateRange(stage.stageStartDate, termNumber - stage.startTermNumber + 1);
+  }
+  return termDateRange(project.startDate, termNumber);
+}
+
 // 기준일로부터 n개월 뒤 날짜(yyyy-mm-dd). 잘못된 날짜면 빈 문자열.
 // 채권(미수금) 만기일 = 청구일 + 3개월 규칙을 여러 화면(수수료 청구 관리·과제 상세·미수금 관리)에서
 // 동일하게 적용하기 위한 공통 함수 — 각자 따로 계산하면 화면마다 만기일 산정 기준이 어긋난다.

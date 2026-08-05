@@ -1,7 +1,8 @@
-import type { FeePolicy, FeeRateBracket, ExemptInstDetail, TermFeeCalc, PolicyRule, Project, InstitutionType, ProjectMember } from "./mock";
+import type { FeePolicy, FeeRateBracket, ExemptInstDetail, TermFeeCalc, PolicyRule, Project, InstitutionType, ProjectMember, TermFee } from "./mock";
+import { fmtWonFull } from "./utils";
 
 // ─── 영리/비영리 판정 ───────────────────────────────────────────
-// 정산면제(등급 S·A~C 우수기관 혜택)는 과학기술정보통신부 연구비지원체계 평가를 받는
+// 정산면제(등급 S·A·B·C 우수기관 혜택)는 과학기술정보통신부 연구비지원체계 평가를 받는
 // 비영리기관(대학·정부출연연구소·공공기관)에만 적용된다 — 영리기업은 등급이 매겨져 있어도 면제 대상이 아니다.
 const NONPROFIT_INSTITUTION_TYPES: InstitutionType[] = ["대학", "정부출연연구소", "공공기관"];
 export function isNonProfitInstitution(type: string): boolean {
@@ -9,11 +10,13 @@ export function isNonProfitInstitution(type: string): boolean {
 }
 
 // ─── 등급 정규화 ─────────────────────────────────────────────────
-// "최우수(S)", "최우수" → "S"   /   "우수(A/B/C)", "우수" → "A~C"   /   나머지 → "일반"
+// "최우수(S)", "최우수" → "S"   /   "우수(A)" → "A"   /   "우수(B)" → "B"   /   "우수(C)" → "C"   /   나머지 → "일반"
 export function normalizeGrade(grade: string): string {
   if (!grade) return "일반";
   if (grade === "S" || grade.startsWith("최우수")) return "S";
-  if (grade === "A~C" || grade.startsWith("우수")) return "A~C";
+  if (grade === "A" || grade.startsWith("우수(A)")) return "A";
+  if (grade === "B" || grade.startsWith("우수(B)")) return "B";
+  if (grade === "C" || grade.startsWith("우수(C)")) return "C";
   return "일반";
 }
 
@@ -41,6 +44,21 @@ export function resolveMemberSettlementTypeForTerm(
   return override?.settlementType ?? member.settlementType ?? defaultSettlementType;
 }
 
+// ─── 연차별 공문 수신자 조회 ─────────────────────────────────────────
+// 공문을 받는 담당자가 연차 중간에 바뀌는 경우가 많아, 특정 연차만 다른 경우 recipientOverrides에
+// 그 연차분만 따로 기록한다. 오버라이드가 없는 연차는 contactName/Email/Phone(기본값)을 쓴다.
+export function resolveMemberRecipientForTerm(
+  member: Pick<ProjectMember, "contactName" | "contactEmail" | "contactPhone" | "recipientOverrides">,
+  termNumber: number,
+): { recipientName: string; recipientEmail: string; recipientPhone: string } {
+  const override = member.recipientOverrides?.find((r) => r.termNumber === termNumber);
+  return {
+    recipientName: override?.recipientName ?? member.contactName ?? "",
+    recipientEmail: override?.recipientEmail ?? member.contactEmail ?? "",
+    recipientPhone: override?.recipientPhone ?? member.contactPhone ?? "",
+  };
+}
+
 // ─── 정산(SETTLEMENT) 연차 판정 ───────────────────────────────────
 // 일괄협약: 총연차의 마지막 연차만 정산. 단계협약: 각 단계의 마지막 연차가 정산.
 // autoGenerateTermFees(store.ts)와 과제 상세 화면(연차별 수수료 현황·참여기관 목록)이
@@ -56,20 +74,95 @@ export function isSettlementTerm(
   return stage ? termNumber === stage.endTermNumber : termNumber === project.totalTerms;
 }
 
+// ─── 단계-연차 날짜 불일치 판정 ───────────────────────────────────
+// 담당자가 특정 연차에 실제 날짜(TermFee.termStartDate/termEndDate)를 직접 지정해뒀는데, 그 뒤 단계
+// 날짜가 바뀌면서(계약변경 등) 그 연차가 더 이상 자기 단계의 기간 안에 들지 않게 된 경우를 찾는다.
+// 목록·상세 화면에서 "단계-연차 날짜 불일치" 경고 배지를 띄우는 데 쓴다.
+export function hasStageTermDateMismatch(
+  project: Pick<Project, "stages">,
+  termFees: { termNumber: number; termStartDate?: string; termEndDate?: string }[],
+): boolean {
+  const stages = project.stages ?? [];
+  if (stages.length === 0) return false;
+  return termFees.some((tf) => {
+    if (!tf.termStartDate || !tf.termEndDate) return false;
+    const stage = stages.find((s) => tf.termNumber >= s.startTermNumber && tf.termNumber <= s.endTermNumber);
+    if (!stage?.stageStartDate || !stage.stageEndDate) return false;
+    return tf.termStartDate < stage.stageStartDate || tf.termEndDate > stage.stageEndDate;
+  });
+}
+
+// ─── 정산절차 안내 공문 "■ 수수료" 섹션용 — 해당 과제·해당 연차 요약 ──────────────
+// 정산절차 안내 공문은 항상 "지금 진행 중인 연차"를 대상으로 발송되므로, 그 연차의
+// 산정액·당해 청구액·미청구액을 공문 미리보기/발송 시 자동으로 채워 넣는 데 쓴다.
+// 과제 상세 화면의 연차별 수수료 카드와 계산 기준(FEE_STATUS·otherFirmHandled 처리 포함)을
+// 그대로 맞춰야 화면마다 다른 숫자가 나오지 않는다 — 로직을 각 발송 화면에 따로 두지 않고 여기 하나로 모은다.
+const FEE_STATUS_LABEL: Record<TermFee["status"], string> = {
+  BILLED: "청구완료",
+  CONFIRMED: "확정",
+  DRAFT: "초안",
+  SCHEDULED: "연차 미시작",
+};
+
+export function buildNoticeFeeRows(
+  project: Pick<Project, "agreementType" | "stages" | "totalTerms">,
+  projectTermFees: TermFee[],
+  termNumber: number,
+): { label: string; value: string }[] {
+  const fees = projectTermFees.filter((f) => f.termNumber === termNumber);
+  if (fees.length === 0) return [];
+
+  const termYear = fees[0].termYear;
+  const isSettlement = isSettlementTerm(project, termNumber);
+  const otherFirmHandled = fees[0]?.otherFirmHandled ?? false;
+  const termStatus: TermFee["status"] = fees.some((f) => f.status === "DRAFT")
+    ? "DRAFT" : fees.every((f) => f.status === "BILLED") ? "BILLED" : "CONFIRMED";
+  const totalCalculated = fees.reduce((s, f) => s + f.calculatedFee, 0);
+  const totalApplied = fees.reduce((s, f) => s + f.appliedFee, 0);
+  const termUnclaimed = fees.reduce((s, f) => s + (f.unclaimedFee ?? 0), 0);
+
+  const rows: { label: string; value: string }[] = [
+    { label: "대상 연차", value: `${termYear}년 ${termNumber}연차 (${isSettlement ? "정산" : "연차상시"})` },
+    { label: "진행 상태", value: FEE_STATUS_LABEL[termStatus] },
+  ];
+
+  // 타회계법인이 진행한 연차는 85% 몫(당해 청구액) 금액을 외부로 보내는 공문에 노출하지 않는다 —
+  // 과제 상세 화면에서 화면에 뿌릴 때 이미 지키는 규칙과 동일하게 맞춘다.
+  if (otherFirmHandled) {
+    rows.push({ label: "당해 청구액", value: "타회계법인 진행 — 금액 비공개" });
+    if (!isSettlement && termUnclaimed > 0) {
+      rows.push({ label: "당해 미청구액(15%)", value: fmtWonFull(termUnclaimed) });
+    }
+  } else {
+    rows.push({ label: "산정액", value: fmtWonFull(totalCalculated) });
+    rows.push({ label: "당해 청구액", value: fmtWonFull(totalApplied) });
+    if (!isSettlement && termUnclaimed > 0) {
+      rows.push({ label: "당해 미청구액", value: fmtWonFull(termUnclaimed) });
+    }
+  }
+
+  return rows;
+}
+
 // ─── 정책 파라미터로부터 "등급별 산출 비율" 참고표 생성 ────────────
 // exemptGrades/exemptionMode/hasAutonomyTrack/annualBillingRate가 정책의 유일한 진실 소스이며,
 // 이 표는 그 값들로부터 매번 다시 계산한다 — 손으로 별도 관리하는 rules 데이터를 두면
 // 정책 파라미터가 바뀌거나 새 전담기관이 추가될 때 표가 조용히 어긋날 수 있기 때문.
 export function buildPolicyDisplayRules(
-  policy: Pick<FeePolicy, "exemptGrades" | "exemptionMode" | "hasAutonomyTrack" | "annualBillingRate">
+  policy: Pick<FeePolicy, "exemptGrades" | "exemptionMode" | "hasAutonomyTrack" | "annualBillingRate" | "exemptCustomRate">
 ): PolicyRule[] {
   const annualPct = Math.round(policy.annualBillingRate * 100);
-  const gradeName: Record<"S" | "A~C", string> = { S: "최우수", "A~C": "우수" };
+  // CUSTOM 모드는 면제등급 기관에만 exemptCustomRate(없으면 annualBillingRate)를 적용한다 —
+  // 일반 기관의 연차상시청구비율(annualPct)과 다른 값일 수 있다.
+  const exemptPct = policy.exemptionMode === "CUSTOM"
+    ? Math.round((policy.exemptCustomRate ?? policy.annualBillingRate) * 100)
+    : annualPct;
+  const gradeName: Record<"S" | "A" | "B" | "C", string> = { S: "최우수", A: "우수(A)", B: "우수(B)", C: "우수(C)" };
   const rows: PolicyRule[] = [
     { subject: "기관", grade: "일반", gradeName: "일반", settlementType: "위탁정산", annualRate: annualPct, settlementRate: 100 },
   ];
 
-  (["S", "A~C"] as const).forEach((grade) => {
+  (["S", "A", "B", "C"] as const).forEach((grade) => {
     if (!policy.exemptGrades.includes(grade)) {
       rows.push({ subject: "기관", grade, gradeName: gradeName[grade], settlementType: "위탁정산", annualRate: annualPct, settlementRate: 100 });
       return;
@@ -78,8 +171,8 @@ export function buildPolicyDisplayRules(
       rows.push({ subject: "기관", grade, gradeName: gradeName[grade], settlementType: "제외대상", annualRate: 0, settlementRate: 0 });
       return;
     }
-    rows.push({ subject: "기관", grade, gradeName: gradeName[grade], settlementType: "자체정산", annualRate: annualPct, settlementRate: annualPct });
-    rows.push({ subject: "기관", grade, gradeName: gradeName[grade], settlementType: "위탁정산", annualRate: annualPct, settlementRate: 100 });
+    rows.push({ subject: "기관", grade, gradeName: gradeName[grade], settlementType: "자체정산", annualRate: exemptPct, settlementRate: exemptPct });
+    rows.push({ subject: "기관", grade, gradeName: gradeName[grade], settlementType: "위탁정산", annualRate: exemptPct, settlementRate: 100 });
   });
 
   if (policy.hasAutonomyTrack) {
@@ -171,18 +264,22 @@ export function getBaseFee(cashBudget: number, brackets: FeeRateBracket[]): numb
 }
 
 // ─── 가산금 계산 ─────────────────────────────────────────────────
+// TIERED/FLAT도 결국 "1번째 가산율/추가 1개당 가산율" 쌍의 특수 케이스다 —
+// FLAT은 두 비율이 같은 경우(0.1/0.1)와 수학적으로 동일하다. CUSTOM은 정책에서 이 두 비율을 직접 받는다.
 export function getAddonFee(
   baseFee: number,
   coInstCount: number,
-  method: "TIERED" | "FLAT",
+  method: "TIERED" | "FLAT" | "CUSTOM",
+  customRates?: { first: number; additional: number },
 ): number {
   if (coInstCount === 0) return 0;
-  if (method === "FLAT") {
-    // KETEP: 기본수수료 × 10% × 공동기관수
-    return Math.round(baseFee * 0.1 * coInstCount);
-  }
-  // TIERED: 첫 1개 10% + 추가 N개 5%씩 (KEIT)
-  return Math.round(baseFee * 0.1 + baseFee * 0.05 * (coInstCount - 1));
+  const { first, additional } =
+    method === "CUSTOM" && customRates
+      ? customRates
+      : method === "FLAT"
+      ? { first: 0.1, additional: 0.1 } // KETEP: 기본수수료 × 10% × 공동기관수
+      : { first: 0.1, additional: 0.05 }; // TIERED: 첫 1개 10% + 추가 N개 5%씩 (KEIT)
+  return Math.round(baseFee * first + baseFee * additional * (coInstCount - 1));
 }
 
 // ─── 공동기관 수 산정 ────────────────────────────────────────────
@@ -267,6 +364,9 @@ export function calcTermFee(input: CalcInput): CalcResult {
   const feeBasis = policy.feeBasis ?? "CASH";
   const billingRatio = annualBillingRate ?? 0.85;
   const minimumFee = policy.minimumFee ?? 0;
+  const customAddonRates = coInstAddonMethod === "CUSTOM"
+    ? { first: policy.coInstFirstRate ?? 0.1, additional: policy.coInstAdditionalRate ?? 0.05 }
+    : undefined;
   const amountOf = (m: CalcMember) => getMemberAmount(m, feeBasis);
 
   // EXCLUDE 모드 면제등급(S)은 연차상시도 하지 않으므로 산정기준액에서 완전히 빠진다.
@@ -332,7 +432,7 @@ export function calcTermFee(input: CalcInput): CalcResult {
   const totalCashBudget = cashMembers.reduce((s, m) => s + amountOf(m), 0);
   const coInstCount = getCoInstCount(cashMembers, policy);
   const baseFee = Math.max(getBaseFee(totalCashBudget, feeRateBrackets), minimumFee);
-  const addonFee = getAddonFee(baseFee, coInstCount, coInstAddonMethod);
+  const addonFee = getAddonFee(baseFee, coInstCount, coInstAddonMethod, customAddonRates);
   const standardFee = baseFee + addonFee;
 
   // 자율성트랙 + 자체정산(기본값): 전 연도 billingRatio 균일 적용(정산 없음, 면제기관 미고려) —
@@ -368,7 +468,9 @@ export function calcTermFee(input: CalcInput): CalcResult {
   // settlementType(자체정산/위탁정산)은 면제 대상 여부와 무관하다 — 아래 exemptBreakdown에서
   // 정산 연차 청구비율(85%/100%)을 가를 때만 쓰인다. 과거에는 이 필터에도 "자체정산"만 통과시켜서
   // 위탁정산을 선택한 면제등급 비영리기관이 면제 계산에서 통째로 빠지는 버그가 있었다.
-  const exemptMembers = policy.exemptionMode === "DISCOUNT"
+  // CUSTOM 모드는 DISCOUNT와 동일하게 면제등급도 산정기준액에 포함시키되, 청구비율만 아래에서
+  // exemptBillingRatio로 따로 적용한다(일반 기관의 billingRatio와 분리).
+  const exemptMembers = policy.exemptionMode === "DISCOUNT" || policy.exemptionMode === "CUSTOM"
     ? coInstMembers.filter(
         (m) =>
           exemptGrades.includes(normalizeGrade(m.grade)) &&
@@ -380,19 +482,25 @@ export function calcTermFee(input: CalcInput): CalcResult {
   const nonExemptCashBudget = nonExemptMembers.reduce((s, m) => s + amountOf(m), 0);
   const nonExemptCoInstCount = getCoInstCount(nonExemptMembers, policy);
   const nonExemptBaseFee = Math.max(getBaseFee(nonExemptCashBudget, feeRateBrackets), minimumFee);
-  const nonExemptAddonFee = getAddonFee(nonExemptBaseFee, nonExemptCoInstCount, coInstAddonMethod);
+  const nonExemptAddonFee = getAddonFee(nonExemptBaseFee, nonExemptCoInstCount, coInstAddonMethod, customAddonRates);
   const generalFee = nonExemptBaseFee + nonExemptAddonFee;
 
   // 3. 면제기관 수수료 (비례 배분) — 기관별로 각자 반올림하면 그 합이 exemptFeeTotal과 1~2원
   // 어긋날 수 있어 allocateExact(최대잉여법)로 배분해 합계가 항상 정확히 일치하게 한다.
-  // 청구액은 정산구분(자체정산 85%/위탁정산 100%)에 따라 요율이 갈릴 수 있으므로, 같은 요율을
+  // 청구액은 정산구분(자체정산/위탁정산 100%)에 따라 요율이 갈릴 수 있으므로, 같은 요율을
   // 쓰는 기관끼리 묶어(그룹) 그룹 안에서 다시 정확히 배분한다.
   const exemptFeeTotal = standardFee - generalFee;
   const exemptStdShares = allocateExact(exemptFeeTotal, exemptMembers.map((m) => amountOf(m)));
 
+  // CUSTOM 모드에서만 면제기관 전용 청구비율(exemptCustomRate)을 쓰고, 그 외(DISCOUNT)는 일반
+  // 기관과 동일한 billingRatio를 그대로 쓴다 — exemptCustomRate 미지정 시엔 billingRatio로 대체한다.
+  const exemptBillingRatio = policy.exemptionMode === "CUSTOM"
+    ? (policy.exemptCustomRate ?? billingRatio)
+    : billingRatio;
+
   const isSettlement = workType === "SETTLEMENT";
   const exemptRatios = exemptMembers.map((m) =>
-    isSettlement && m.settlementType === "위탁정산" ? 1.0 : billingRatio
+    isSettlement && m.settlementType === "위탁정산" ? 1.0 : exemptBillingRatio
   );
   const exemptBillShares: number[] = new Array(exemptMembers.length).fill(0);
   const ratioGroups = new Map<number, number[]>();

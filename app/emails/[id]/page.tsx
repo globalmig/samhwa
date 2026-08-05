@@ -86,6 +86,7 @@ export default function EmailDispatchDetailPage({ params }: { params: Promise<{ 
             <NoticeLetterPreview
               template={dispatch.noticeSnapshot.template}
               statusRows={dispatch.noticeSnapshot.statusRows}
+              feeRows={dispatch.noticeSnapshot.feeRows}
               docNumber={dispatch.noticeSnapshot.docNumber}
               issuedDate={dispatch.noticeSnapshot.issuedDate}
             />

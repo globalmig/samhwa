@@ -42,6 +42,8 @@ const WRITE_ACCESS: Record<string, Role[]> = {
   projects:            ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   "funding-agencies":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   "notice-templates":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  // 사업자등록증·통장사본(공통 첨부 파일): 회계담당자·시스템관리자만 등록/교체 가능 — 전담기관담당자는 조회만
+  "standard-attachments": ["ADMIN", "ACCOUNTANT"],
   institutions:        ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   users:          ["ADMIN"],
   issues:         ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],

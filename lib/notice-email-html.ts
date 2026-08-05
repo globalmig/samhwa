@@ -18,11 +18,14 @@ function esc(s: string): string {
 export function buildNoticeEmailHtml({
   template,
   statusRows,
+  feeRows,
   docNumber,
   issuedDate,
 }: {
   template: AgencyNoticeTemplate;
   statusRows?: NoticeEmailStatusRow[];
+  // 해당 과제·해당 연차 산정액/청구액 — statusRows와 마찬가지로 과제별 자동 치환 값.
+  feeRows?: NoticeEmailStatusRow[];
   docNumber: string;
   issuedDate: string;
 }): string {
@@ -117,8 +120,25 @@ export function buildNoticeEmailHtml({
       </table>`
       : "";
 
+  const feeRowsHtml =
+    feeRows && feeRows.length > 0
+      ? `
+      <table style="width:100%;border-collapse:collapse;border:1px solid #94a3b8;margin-bottom:8px;">
+        ${feeRows
+          .map(
+            (row) => `
+          <tr>
+            <td style="padding:10px 8px;font-size:13px;font-weight:500;color:#334155;border:1px solid #94a3b8;background:#f8fafc;width:190px;">${esc(row.label)}</td>
+            <td style="padding:10px 12px;color:#1e293b;border:1px solid #94a3b8;text-align:center;">${esc(row.value)}</td>
+          </tr>`
+          )
+          .join("")}
+      </table>`
+      : "";
+
   const feeHtml = `
     <p style="font-weight:700;margin:0 0 6px;">■ 수수료</p>
+    ${feeRowsHtml}
     <div style="background:#f1f5f9;padding:12px;margin-bottom:8px;">
       <p style="font-weight:600;margin:0 0 6px;">${esc(template.feeIntro)}</p>
       <ol style="margin:0;padding-left:20px;color:#1d4ed8;">

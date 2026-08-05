@@ -87,7 +87,6 @@ export default function InstitutionQuickAdd({
       contactName,
       contactEmail,
       contactPhone,
-      projectCount: 0,
       registeredAt: new Date().toISOString().slice(0, 10),
       status: "ACTIVE",
     });

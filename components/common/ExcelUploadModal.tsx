@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo, useRef } from "react";
+import { FiAlertTriangle, FiAlertOctagon, FiRefreshCw, FiCalendar, FiCheckCircle, FiFlag, FiFolderPlus, FiHome, FiUsers } from "react-icons/fi";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
 import { styleTemplateHeader, styleTemplateDataRows, applyDropdown, downloadWorkbook, TEMPLATE_BLANK_ROWS } from "@/lib/excel-template-style";
@@ -86,6 +87,9 @@ interface ProjectUpdateInfo {
   currentTerm: number;
   excelTerm: number;
   status: ProjectUpdateStatus;
+  // "동일 연차 재제출"/"과거 연차"로 판정돼 체크박스가 꺼져 있어도(연차·사업비는 미반영),
+  // 단계 구조(stages) 변경은 안전한 추가 정보라 예외적으로 항상 반영된다 — 그 사실을 미리보기에서 알려준다.
+  stageChanged: boolean;
 }
 
 function defaultChoiceForStatus(status: ProjectUpdateStatus): boolean {
@@ -103,6 +107,12 @@ interface AggregatedBudget {
   govGrant: number;
   privateCash: number;
   privateInKind: number;
+  // 이 연차의 실제 시작/종료일(엑셀 "연차시작일자"/"연차종료일자") — 있으면 ProjectMember.annualBudgets에
+  // 그대로 저장되어 autoGenerateTermFees가 TermFee.termStartDate/termEndDate로 옮겨 담는다.
+  termStartDate?: string;
+  termEndDate?: string;
+  // 이 연차를 담당한 회계법인(엑셀 "회계법인") — 삼화가 아니면 그 연차를 타회계법인 진행으로 자동 표시.
+  auditFirm?: string;
 }
 
 interface MemberAggregate {
@@ -123,6 +133,7 @@ interface MemberAggregate {
   gradeFromAnnual: boolean;
   budgetsByTerm: Map<number, AggregatedBudget>;
   totalCashBudgetFallback: number;
+  totalInKindBudgetFallback: number;
 }
 
 // "최우수(S)" / "우수(A~C)" / "일반" 텍스트, 또는 "연차별기관별" 시트의 "등급" 컬럼처럼
@@ -266,6 +277,7 @@ function buildMemberAggregates(
           gradeFromAnnual: false,
           budgetsByTerm: new Map(),
           totalCashBudgetFallback: 0,
+          totalInKindBudgetFallback: 0,
         };
         memberMap.set(key, agg);
       }
@@ -323,13 +335,26 @@ function buildMemberAggregates(
         const cashBudget = parseAmount(get("cashBudgetTerm", row) || get("cashBudget", row));
         const inKindBudget = parseAmount(get("inKindBudgetTerm", row) || get("inKindBudget", row));
         const govGrant = parseAmount(get("govGrant", row));
-        const privateCash = parseAmount(get("privateCashTerm", row));
-        const privateInKind = parseAmount(get("privateInKindTerm", row));
-        agg.budgetsByTerm.set(termNumber, { termYear: supportYear, termNumber, cashBudget, inKindBudget, govGrant, privateCash, privateInKind });
+        let privateCash = parseAmount(get("privateCashTerm", row));
+        let privateInKind = parseAmount(get("privateInKindTerm", row));
+        // 정부출연금/민간현금/민간현물을 셋 다 안 채운 파일(테스트 파일 등)은, 과제의 "당해 사업비"
+        // 자동계산값이 참여기관목록 사업비 합계와 어긋나 보이는 문제가 생긴다 — 정부출연금 비율은
+        // 알 수 없으니 0으로 두고, 민간현금/민간현물을 현금/현물사업비 그대로 대체해 최소한 총액은
+        // 항상 일치하게 한다. 셋 중 하나라도 값이 있으면(의도적으로 일부만 채운 것) 그대로 존중한다.
+        if (govGrant === 0 && privateCash === 0 && privateInKind === 0) {
+          privateCash = cashBudget;
+          privateInKind = inKindBudget;
+        }
+        const termStartDate = toDateStr(get("termStartDate", row)) || undefined;
+        const termEndDate = toDateStr(get("termEndDate", row)) || undefined;
+        const auditFirm = get("auditFirm", row).trim() || undefined;
+        agg.budgetsByTerm.set(termNumber, { termYear: supportYear, termNumber, cashBudget, inKindBudget, govGrant, privateCash, privateInKind, termStartDate, termEndDate, auditFirm });
         projectMaxTerm.set(normNum, Math.max(projectMaxTerm.get(normNum) ?? 0, termNumber));
       } else {
         const totalCash = parseAmount(get("totalCashBudget", row));
         if (totalCash > 0) agg.totalCashBudgetFallback = totalCash;
+        const totalInKind = parseAmount(get("totalInKindBudget", row));
+        if (totalInKind > 0) agg.totalInKindBudgetFallback = totalInKind;
       }
     }
   }
@@ -346,6 +371,12 @@ export interface ProjectScalarInfo {
   projectCodes: Set<string>;      // 과제번호(숫자)
   researchLeads: Set<string>;     // 주관기관 기관책임자
   isAutonomyTrack: boolean;
+  projectCategories: Set<string>;    // 과제구분(연차상시/정산)
+  agencyAssignedAts: Set<string>;    // 전문기관배정일
+  internalAssignedAts: Set<string>;  // 내부배정일
+  // 총개발시작일자 — 신규 과제(아직 Project로 등록되지 않아 startDate를 알 수 없는 상태)에서
+  // "엑셀 연차 vs 캘린더 계산 연차" 불일치를 미리보기 단계에서 미리 점검하는 데 쓴다.
+  startDates: Set<string>;
 }
 
 function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, ProjectScalarInfo> {
@@ -354,7 +385,11 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
   function ensure(normNum: string): ProjectScalarInfo {
     let info = map.get(normNum);
     if (!info) {
-      info = { projectNames: new Set(), assignedManagers: new Set(), projectCodes: new Set(), researchLeads: new Set(), isAutonomyTrack: false };
+      info = {
+        projectNames: new Set(), assignedManagers: new Set(), projectCodes: new Set(), researchLeads: new Set(),
+        isAutonomyTrack: false, projectCategories: new Set(), agencyAssignedAts: new Set(), internalAssignedAts: new Set(),
+        startDates: new Set(),
+      };
       map.set(normNum, info);
     }
     return info;
@@ -374,6 +409,9 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
       const projectName = get("projectName", row);
       if (projectName) info.projectNames.add(projectName);
 
+      const startDate = toDateStr(get("startDate", row));
+      if (startDate) info.startDates.add(startDate);
+
       const manager = get("assignedManager", row);
       if (manager) info.assignedManagers.add(manager);
 
@@ -387,6 +425,15 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
       const roleStr = get("institutionRole", row);
       const lead = get("institutionLead", row);
       if (lead && roleStr.includes("주관")) info.researchLeads.add(lead);
+
+      const category = get("projectCategory", row);
+      if (category) info.projectCategories.add(category.includes("정산") && !category.includes("연차") ? "정산" : "연차상시");
+
+      const agencyAssignedAt = toDateStr(get("agencyAssignedAt", row));
+      if (agencyAssignedAt) info.agencyAssignedAts.add(agencyAssignedAt);
+
+      const internalAssignedAt = toDateStr(get("internalAssignedAt", row));
+      if (internalAssignedAt) info.internalAssignedAts.add(internalAssignedAt);
     }
   }
 
@@ -423,9 +470,10 @@ interface ProjectStageInfo {
   // 이 프로젝트의 단계기관별 행 중 하나라도 4개 값 중 일부가 비어 있거나(시작단계≠종료단계처럼)
   // 해석할 수 없었던 경우 true — 담당자 확인이 필요하다는 신호로 쓴다.
   hasMissing: boolean;
-  // 단계별로 마지막에 관측된 "회계법인" 값 — 삼화가 아닌 이름이면 그 단계(=그 연차 범위)를
-  // 타회계법인 진행으로 자동 표시하는 데 쓴다.
-  auditFirmByStage: Map<number, string>;
+  // hasMissing이 왜 true가 됐는지 행 단위로 남기는 구체적 사유 — "일부 비어있음"이라는 뭉뚱그린
+  // 메시지만으로는 정확히 어느 행·어느 값이 문제인지 알 수 없어서, 실제로 어느 기관·어느 단계값이
+  // 걸러졌는지 사람이 바로 찾아 고칠 수 있게 남긴다.
+  skipReasons: string[];
 }
 
 function buildStageAggregates(sheets: ParsedSheet[]): Map<string, ProjectStageInfo> {
@@ -443,21 +491,36 @@ function buildStageAggregates(sheets: ParsedSheet[]): Map<string, ProjectStageIn
       if (!normNum) continue;
 
       let info = map.get(normNum);
-      if (!info) { info = { ranges: new Map(), dateRanges: new Map(), hasMissing: false, auditFirmByStage: new Map() }; map.set(normNum, info); }
+      if (!info) { info = { ranges: new Map(), dateRanges: new Map(), hasMissing: false, skipReasons: [] }; map.set(normNum, info); }
 
+      const institutionName = get("institutionName", row) || "(기관명 미상)";
       const rawStartStage = get("stageStartNumber", row);
       const rawStartTerm = get("stageStartTerm", row);
       const rawEndStage = get("stageEndNumber", row);
       const rawEndTerm = get("stageEndTerm", row);
-      if (!rawStartStage || !rawStartTerm || !rawEndStage || !rawEndTerm) { info.hasMissing = true; continue; }
+      if (!rawStartStage || !rawStartTerm || !rawEndStage || !rawEndTerm) {
+        info.hasMissing = true;
+        info.skipReasons.push(
+          `${institutionName}: 정산대상시작단계="${rawStartStage}", 시작연차="${rawStartTerm}", 종료단계="${rawEndStage}", 종료연차="${rawEndTerm}" 중 비어있는 값이 있어 이 행을 건너뜀`
+        );
+        continue;
+      }
 
       const startStage = parseInt(rawStartStage, 10);
       const startTerm = parseInt(rawStartTerm, 10);
       const endStage = parseInt(rawEndStage, 10);
       const endTerm = parseInt(rawEndTerm, 10);
-      if (![startStage, startTerm, endStage, endTerm].every(Number.isFinite)) { info.hasMissing = true; continue; }
+      if (![startStage, startTerm, endStage, endTerm].every(Number.isFinite)) {
+        info.hasMissing = true;
+        info.skipReasons.push(`${institutionName}: 정산대상시작/종료단계·연차 값이 숫자가 아니어서 이 행을 건너뜀`);
+        continue;
+      }
       // 한 행이 여러 단계를 걸치는 경우는 이 파일 구조상 나타나지 않고 해석도 애매하므로 건너뛰고 표시만 한다.
-      if (startStage !== endStage) { info.hasMissing = true; continue; }
+      if (startStage !== endStage) {
+        info.hasMissing = true;
+        info.skipReasons.push(`${institutionName}: 정산대상시작단계(${startStage})와 종료단계(${endStage})가 서로 달라 이 행을 건너뜀 — 한 행은 하나의 단계만 나타낼 수 있습니다`);
+        continue;
+      }
 
       const existing = info.ranges.get(startStage);
       if (!existing) info.ranges.set(startStage, { start: startTerm, end: endTerm });
@@ -473,13 +536,43 @@ function buildStageAggregates(sheets: ParsedSheet[]): Map<string, ProjectStageIn
           end: endDateStr > existingDate.end ? endDateStr : existingDate.end,
         });
       }
-
-      const rawAuditFirm = get("auditFirm", row).trim();
-      if (rawAuditFirm) info.auditFirmByStage.set(startStage, rawAuditFirm);
     }
   }
 
   return map;
+}
+
+// "연차별기관별" 시트의 "단계시작일자"/"단계종료일자"로 단계별 실제 날짜를 보충한다 — 단계기관별
+// 시트가 아예 없거나(비RCMS 파일 등) 그 시트에 날짜가 비어 있을 때의 보조 수단이다. 단계기관별
+// 시트에 이미 값이 있으면 min/max 병합이라 결과가 넓어지기만 할 뿐, 우선순위 걱정 없이 그대로 섞어도 된다.
+function supplementStageDatesFromAnnual(sheets: ParsedSheet[], stageAggregates: Map<string, ProjectStageInfo>): void {
+  for (const sheet of sheets) {
+    if (sheet.def.key !== "annual") continue;
+    const get = (field: string, row: Record<string, string>) => {
+      const m = sheet.mapping.find((x) => x.field === field);
+      return getCellVal(row, m?.mappedTo ?? null);
+    };
+
+    for (const row of sheet.rows) {
+      const normNum = normProjectNum(get("projectNumber", row));
+      if (!normNum) continue;
+      const stageNum = parseInt(get("term", row), 10);
+      if (!Number.isFinite(stageNum) || stageNum <= 0) continue;
+      const startDateStr = toDateStr(get("stageStartDateAnnual", row));
+      const endDateStr = toDateStr(get("stageEndDateAnnual", row));
+      if (!startDateStr || !endDateStr) continue;
+
+      let info = stageAggregates.get(normNum);
+      if (!info) { info = { ranges: new Map(), dateRanges: new Map(), hasMissing: false, skipReasons: [] }; stageAggregates.set(normNum, info); }
+
+      const existingDate = info.dateRanges.get(stageNum);
+      if (!existingDate) info.dateRanges.set(stageNum, { start: startDateStr, end: endDateStr });
+      else info.dateRanges.set(stageNum, {
+        start: startDateStr < existingDate.start ? startDateStr : existingDate.start,
+        end: endDateStr > existingDate.end ? endDateStr : existingDate.end,
+      });
+    }
+  }
 }
 
 // "단계기관별" 시트의 정산대상시작/종료연차는 그 단계 안에서 1부터 다시 세는 상대값으로 적히는
@@ -582,6 +675,14 @@ function computeProjectUpdates(
     // 1단계 2연차)만 재업로드해도 곧장 그 단계의 마지막 연차로 건너뛰는 오류가 생긴다.
     const excelTerm = projectMaxTerm.get(normNum) ?? currentTerm;
     const status: ProjectUpdateStatus = excelTerm > currentTerm ? "next" : excelTerm === currentTerm ? "same" : "behind";
+
+    const stageInfo = stageAggregates.get(normNum);
+    const { agreementType: nextAgreementType, stages: nextStagesRaw } = resolveStageStructure(stageInfo, existing.stages);
+    const nextStages = nextStagesRaw ?? existing.stages;
+    const stageChanged =
+      JSON.stringify(nextStages ?? null) !== JSON.stringify(existing.stages ?? null) ||
+      (nextAgreementType ?? existing.agreementType) !== existing.agreementType;
+
     updates.push({
       normNum,
       projectId: existing.id,
@@ -590,9 +691,59 @@ function computeProjectUpdates(
       currentTerm,
       excelTerm,
       status,
+      stageChanged,
     });
   }
   return updates;
+}
+
+export interface TermCalendarMismatch {
+  normNum: string;
+  projectNumber: string;
+  projectName: string;
+  excelTerm: number;      // 이번 엑셀에 실제로 등록/반영될 연차 값
+  calendarTerm: number;   // 총개발시작일자 기준으로 "오늘" 계산했을 때 나오는 예상 연차
+}
+
+// 엑셀에 적힌 연차(=실제로 등록되는 값)와, 총개발시작일자 기준 캘린더 역산 결과가 다른 과제를 찾는다.
+// 다르다고 무조건 잘못된 건 아니다(과제가 일정보다 빠르거나 늦게 진행 중일 수 있음) — 등록을 막지는
+// 않고, 엑셀 연차 값이나 총개발시작일자를 잘못 입력했을 가능성을 담당자·회계담당자가 확인할 수 있게
+// 미리보기 경고 + 등록 후 이슈로만 남긴다.
+function computeTermCalendarMismatches(
+  projects: Project[],
+  scalarAggregates: Map<string, ProjectScalarInfo>,
+  projectMaxTerm: Map<string, number>,
+  stageAggregates: Map<string, ProjectStageInfo>,
+  today: string
+): TermCalendarMismatch[] {
+  const mismatches: TermCalendarMismatch[] = [];
+  for (const [normNum, excelTerm] of projectMaxTerm) {
+    const existingProject = projects.find((p) => normProjectNum(p.projectNumber) === normNum);
+    const scalarInfo = scalarAggregates.get(normNum);
+    // 신규 과제(아직 Project가 없음)는 이번 엑셀에서 시작일이 하나로 특정될 때만 계산할 수 있다.
+    const startDate = existingProject?.startDate
+      ?? (scalarInfo && scalarInfo.startDates.size === 1 ? [...scalarInfo.startDates][0] : undefined);
+    if (!startDate) continue;
+
+    const stageInfo = stageAggregates.get(normNum);
+    const { stages, batchEndTerm } = resolveStageStructure(stageInfo, existingProject?.stages);
+    const maxStageEndTerm = stages ? Math.max(...stages.map((s) => s.endTermNumber)) : batchEndTerm;
+    const totalTerms = Math.max(1, excelTerm, maxStageEndTerm, existingProject?.totalTerms ?? 1);
+
+    const calendarTerm = computeCurrentTerm(startDate, totalTerms, today);
+    if (calendarTerm !== excelTerm) {
+      const projectName = existingProject?.projectName
+        ?? (scalarInfo && scalarInfo.projectNames.size >= 1 ? [...scalarInfo.projectNames][0] : "");
+      mismatches.push({
+        normNum,
+        projectNumber: existingProject?.projectNumber ?? normNum,
+        projectName,
+        excelTerm,
+        calendarTerm,
+      });
+    }
+  }
+  return mismatches;
 }
 
 // RCMS 과제번호가 재부여되어 문자열이 바뀌는 경우가 있어(같은 실제 과제인데 번호만 달라짐),
@@ -660,7 +811,7 @@ function isOtherFirmName(name: string): boolean {
 
 // ── 1. 파일 업로드 영역 ──────────────────────────────────────────
 
-function UploadZone({ onFile }: { onFile: (f: File) => void }) {
+function UploadZone({ onFile, className = "" }: { onFile: (f: File) => void; className?: string }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
 
@@ -678,9 +829,9 @@ function UploadZone({ onFile }: { onFile: (f: File) => void }) {
       onDragLeave={() => setDragging(false)}
       onDrop={(e) => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files[0]; if (f) handle(f); }}
       onClick={() => inputRef.current?.click()}
-      className={`cursor-pointer border-2 border-dashed rounded-xl p-12 text-center transition-colors ${
+      className={`cursor-pointer border-2 border-dashed rounded-xl text-center transition-colors flex flex-col items-center justify-center ${
         dragging ? "border-blue-400 bg-blue-50" : "border-slate-300 hover:border-blue-400 hover:bg-slate-50"
-      }`}
+      } ${className}`}
     >
       <div className="flex flex-col items-center gap-3">
         <svg viewBox="0 0 48 48" className="w-12 h-12 text-slate-300" fill="none" stroke="currentColor" strokeWidth={1.5}>
@@ -716,7 +867,8 @@ function SheetStep({
   );
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="h-full flex flex-col">
+    <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-4">
       <p className="text-sm font-semibold text-slate-700">시트 탐색 결과</p>
       <p className="text-xs text-slate-400 -mt-2">
         RCMS가 아닌 다른 시스템(예: 통합Ezbaro) 파일이라 시트가 자동으로 인식되지 않았다면,
@@ -772,8 +924,8 @@ function SheetStep({
           ))}
         </div>
       )}
-
-      <div className="flex justify-between pt-2 border-t border-slate-100">
+    </div>
+      <div className="shrink-0 flex justify-between px-6 py-4 border-t border-slate-100">
         <button onClick={onBack} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">이전</button>
         <button
           onClick={onConfirm}
@@ -805,7 +957,8 @@ function MappingStep({
   );
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="h-full flex flex-col">
+    <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-6">
       {parsedSheets.map((sheet) => (
         <div key={sheet.def.key} className="space-y-3">
           <p className="text-sm font-semibold text-slate-700">{sheet.def.label} <span className="font-mono text-xs text-slate-400">({sheet.sheetName})</span></p>
@@ -900,8 +1053,8 @@ function MappingStep({
           필수 컬럼이 연결되지 않았습니다. 위에서 직접 연결하거나 파일을 확인해주세요.
         </div>
       )}
-
-      <div className="flex justify-between pt-2 border-t border-slate-100">
+    </div>
+      <div className="shrink-0 flex justify-between px-6 py-4 border-t border-slate-100">
         <button onClick={onBack} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">이전</button>
         <button
           onClick={onConfirm}
@@ -923,133 +1076,313 @@ const STATUS_BADGE: Record<ProjectUpdateStatus, { label: string; cls: string }> 
   behind: { label: "과거 연차 데이터 — 확인 필요", cls: "bg-red-100 text-red-700" },
 };
 
+const MEMBER_ROLE_LABEL: Record<string, string> = { LEAD: "주관", PARTICIPANT: "공동", ENTRUSTED: "위탁" };
+
+// 탭 콘텐츠 목록이 비었을 때 공통으로 보여주는 안내 문구
+function EmptyTabNote({ children }: { children: React.ReactNode }) {
+  return <div className="px-4 py-6 text-center text-xs text-slate-400">{children}</div>;
+}
+
+type PreviewTabKey = "agency" | "project" | "inst" | "member" | "review";
+
 function PreviewStep({
   previewRows,
-  newMemberCount,
+  newMembers,
   projectUpdates,
   updateChoices,
   onToggleUpdate,
+  calendarMismatches,
+  stageSkipWarnings,
   onConfirm,
   onBack,
   loading,
 }: {
   previewRows: PreviewRow[];
-  newMemberCount: number;
+  newMembers: MemberAggregate[];
   projectUpdates: ProjectUpdateInfo[];
   updateChoices: Record<string, boolean>;
   onToggleUpdate: (normNum: string, next: boolean) => void;
+  calendarMismatches: TermCalendarMismatch[];
+  stageSkipWarnings: { normNum: string; projectNumber: string; projectName: string; reasons: string[] }[];
   onConfirm: () => void;
   onBack: () => void;
   loading: boolean;
 }) {
+  // 각 "신규 ○○" 탭에 실제로 무엇이 새로 등록되는지 보여주기 위해, 개수만 세던 걸 목록으로도 모은다.
+  const newAgencyNames: string[] = [];
+  const newProjectList: { projectNumber: string; projectName: string; agencyName: string }[] = [];
+  const newInstList: { bizNumber: string; institutionName: string }[] = [];
   const agencySet = new Set<string>();
   const projectSet = new Set<string>();
   const instSet = new Set<string>();
-  let newAgency = 0, newProject = 0, newInst = 0;
 
   for (const r of previewRows) {
     if (r.agencyName && r.willRegister.agency && !agencySet.has(r.agencyName)) {
-      agencySet.add(r.agencyName); newAgency++;
+      agencySet.add(r.agencyName); newAgencyNames.push(r.agencyName);
     }
     if (r.projectNumber && r.willRegister.project && !projectSet.has(r.projectNumber)) {
-      projectSet.add(r.projectNumber); newProject++;
+      projectSet.add(r.projectNumber); newProjectList.push({ projectNumber: r.projectNumber, projectName: r.projectName, agencyName: r.agencyName });
     }
     if (r.bizNumber && r.willRegister.institution && !instSet.has(r.bizNumber)) {
-      instSet.add(r.bizNumber); newInst++;
+      instSet.add(r.bizNumber); newInstList.push({ bizNumber: r.bizNumber, institutionName: r.institutionName });
     }
   }
+
+  const newAgency = newAgencyNames.length;
+  const newProject = newProjectList.length;
+  const newInst = newInstList.length;
+  const newMemberCount = newMembers.length;
 
   const dupRows = previewRows.filter((r) => r.duplicates.length > 0);
   const totalNew = newAgency + newProject + newInst + newMemberCount;
   const approvedUpdateCount = projectUpdates.filter(
     (u) => updateChoices[u.normNum] ?? defaultChoiceForStatus(u.status)
   ).length;
+  const reviewCount = dupRows.length + stageSkipWarnings.length + projectUpdates.length + calendarMismatches.length;
+
+  const totalToRegister = newAgency + newProject + newInst + newMemberCount + approvedUpdateCount;
+
+  const TABS: { key: PreviewTabKey; label: string; count: number; Icon: typeof FiFlag; warn?: boolean }[] = [
+    { key: "review", label: "확인필요", count: reviewCount, Icon: FiAlertTriangle, warn: true },
+    { key: "agency", label: "신규 전담기관", count: newAgency, Icon: FiFlag },
+    { key: "project", label: "신규 과제", count: newProject, Icon: FiFolderPlus },
+    { key: "inst", label: "신규 기관", count: newInst, Icon: FiHome },
+    { key: "member", label: "신규 참여기관", count: newMemberCount, Icon: FiUsers },
+  ];
+  // 처음 열렸을 때는 "확인필요"가 탭 맨 앞이어도 곧바로 경고창부터 보여주기보다,
+  // 무엇이 새로 등록되는지(신규 항목)부터 먼저 보여주고 확인필요는 사용자가 직접 눌러보게 한다.
+  const [activeTab, setActiveTab] = useState<PreviewTabKey>(
+    (["project", "inst", "member", "agency", "review"] as PreviewTabKey[])
+      .find((key) => (TABS.find((t) => t.key === key)?.count ?? 0) > 0) ?? "project"
+  );
 
   return (
-    <div className="p-6 space-y-4">
-      {/* 요약 */}
-      <div className="grid grid-cols-4 gap-3">
-        {[
-          { label: "신규 전담기관", count: newAgency, color: "blue" },
-          { label: "신규 과제", count: newProject, color: "emerald" },
-          { label: "신규 기관", count: newInst, color: "purple" },
-          { label: "신규 참여기관", count: newMemberCount, color: "amber" },
-        ].map((c) => (
-          <div key={c.label} className={`rounded-xl border border-${c.color}-100 bg-${c.color}-50 px-4 py-3 text-center`}>
-            <p className={`text-2xl font-bold text-${c.color}-700`}>{c.count}</p>
-            <p className="text-xs text-slate-500 mt-0.5">{c.label}</p>
-          </div>
-        ))}
-      </div>
-      <p className="text-[11px] text-slate-400">
-        참여기관까지 등록되어야 해당 과제의 연차 수수료가 자동으로 계산됩니다.
-      </p>
-
-      {/* 중복/유사 경고 */}
-      {dupRows.length > 0 && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 space-y-2">
-          <p className="text-xs font-semibold text-amber-700">중복/유사 항목 ({dupRows.length}건) — 등록에서 자동 제외됩니다</p>
-          <div className="max-h-32 overflow-y-auto space-y-1">
-            {dupRows.map((r, i) => (
-              <div key={i} className="text-[10px] text-amber-700">
-                {r.duplicates.map((d, j) => (
-                  <span key={j} className="block">
-                    {d.type === "agency" ? "전담기관" : d.type === "project" ? "과제" : "기관"}: {d.key}
-                    {d.status === "similar" ? ` (유사 ${d.score}% — "${d.existing}")` : " — 이미 등록됨"}
-                  </span>
-                ))}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* 기존 과제 갱신 */}
-      {projectUpdates.length > 0 && (
-        <div className="rounded-xl border border-slate-200 overflow-hidden">
-          <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200">
-            <p className="text-xs font-semibold text-slate-700">기존 과제 갱신 ({projectUpdates.length}건)</p>
-          </div>
-          <div className="divide-y divide-slate-100">
-            {projectUpdates.map((u) => {
-              const checked = updateChoices[u.normNum] ?? defaultChoiceForStatus(u.status);
-              const badge = STATUS_BADGE[u.status];
+    <div className="p-6 h-full flex flex-col">
+      {/* 탭 — 신규 항목 종류별로 실제 내역을 눌러서 확인할 수 있다 */}
+      <div className="flex-1 flex flex-col min-h-0">
+        <div className="flex-1 flex flex-col min-h-0 rounded-xl border border-slate-200 overflow-hidden">
+          <div className="grid grid-cols-5 divide-x divide-slate-200 shrink-0">
+            {TABS.map((t) => {
+              const active = activeTab === t.key;
+              // "확인필요" 탭은 선택 여부와 무관하게 항상 노란색으로 눈에 띄게 — 나머지 탭은 기존처럼 파란색.
+              const cls = t.warn
+                ? {
+                    wrap: active ? "bg-amber-50 border-amber-500" : "border-transparent hover:bg-amber-50/60",
+                    icon: "text-amber-500",
+                    count: active ? "text-amber-700" : "text-amber-600",
+                    label: active ? "text-amber-600" : "text-amber-500",
+                  }
+                : {
+                    wrap: active ? "bg-blue-50 border-blue-600" : "border-transparent hover:bg-slate-50",
+                    icon: active ? "text-blue-600" : "text-slate-400",
+                    count: active ? "text-blue-700" : "text-slate-800",
+                    label: active ? "text-blue-600" : "text-slate-500",
+                  };
               return (
-                <label key={u.normNum} className="flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-slate-50">
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={(e) => onToggleUpdate(u.normNum, e.target.checked)}
-                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium text-slate-700 truncate">{u.projectName}</p>
-                    <p className="text-[10px] text-slate-400 font-mono">{u.projectNumber}</p>
+                <button
+                  key={t.key}
+                  type="button"
+                  onClick={() => setActiveTab(t.key)}
+                  className={`px-2 py-3 flex items-center justify-center gap-2 border-b-2 transition-colors ${cls.wrap}`}
+                >
+                  <t.Icon size={16} className={cls.icon} />
+                  <div className="text-left">
+                    <p className={`text-base font-bold leading-none ${cls.count}`}>{t.count}</p>
+                    <p className={`text-[10px] mt-1 whitespace-nowrap ${cls.label}`}>{t.label}</p>
                   </div>
-                  <span className="text-[10px] text-slate-500 shrink-0">{u.currentTerm}연차 → {u.excelTerm}연차</span>
-                  <span className={`text-[10px] font-medium px-2 py-0.5 rounded shrink-0 ${badge.cls}`}>{badge.label}</span>
-                </label>
+                </button>
               );
             })}
           </div>
+
+          {/* 탭 콘텐츠 */}
+          <div className="border-t border-slate-200 flex-1 overflow-y-auto">
+            {activeTab === "agency" && (
+              newAgencyNames.length === 0 ? <EmptyTabNote>새로 등록될 전담기관이 없습니다.</EmptyTabNote> : (
+                <div className="divide-y divide-slate-100">
+                  {newAgencyNames.map((name) => (
+                    <div key={name} className="px-4 py-2.5 text-sm text-slate-700">{name}</div>
+                  ))}
+                </div>
+              )
+            )}
+            {activeTab === "project" && (
+              newProjectList.length === 0 ? <EmptyTabNote>새로 등록될 과제가 없습니다.</EmptyTabNote> : (
+                <div className="divide-y divide-slate-100">
+                  {newProjectList.map((p) => (
+                    <div key={p.projectNumber} className="px-4 py-2.5 flex items-center gap-3">
+                      <span className="font-mono text-[11px] text-slate-400 shrink-0">{p.projectNumber}</span>
+                      <span className="text-sm text-slate-700 truncate">{p.projectName}</span>
+                      <span className="ml-auto text-[11px] text-slate-400 shrink-0 whitespace-nowrap">{p.agencyName}</span>
+                    </div>
+                  ))}
+                </div>
+              )
+            )}
+            {activeTab === "inst" && (
+              newInstList.length === 0 ? <EmptyTabNote>새로 등록될 기관이 없습니다.</EmptyTabNote> : (
+                <div className="divide-y divide-slate-100">
+                  {newInstList.map((i) => (
+                    <div key={i.bizNumber} className="px-4 py-2.5 flex items-center gap-3">
+                      <span className="text-sm text-slate-700">{i.institutionName}</span>
+                      <span className="ml-auto font-mono text-[11px] text-slate-400 shrink-0">{i.bizNumber}</span>
+                    </div>
+                  ))}
+                </div>
+              )
+            )}
+            {activeTab === "member" && (
+              newMembers.length === 0 ? <EmptyTabNote>새로 등록될 참여기관이 없습니다.</EmptyTabNote> : (
+                <div className="divide-y divide-slate-100">
+                  {newMembers.map((m) => (
+                    <div key={m.key} className="px-4 py-2.5 flex items-center gap-3">
+                      <span className="font-mono text-[11px] text-slate-400 shrink-0">{m.projectNumber}</span>
+                      <span className="text-sm text-slate-700 truncate">{m.institutionName}</span>
+                      <span className="ml-auto text-[11px] text-slate-500 shrink-0">{MEMBER_ROLE_LABEL[m.role] ?? m.role}</span>
+                    </div>
+                  ))}
+                </div>
+              )
+            )}
+            {activeTab === "review" && (
+              reviewCount === 0 ? <EmptyTabNote>확인이 필요한 항목이 없습니다.</EmptyTabNote> : (
+                <div className="divide-y divide-slate-200">
+                  {/* 중복/유사 경고 */}
+                  {dupRows.length > 0 && (
+                    <div>
+                      <div className="px-4 py-2 bg-amber-50 flex items-center gap-1.5">
+                        <FiAlertTriangle size={13} className="text-amber-500 shrink-0" />
+                        <p className="text-xs font-semibold text-amber-700">중복/유사 항목 ({dupRows.length}건) — 등록에서 자동 제외됩니다</p>
+                      </div>
+                      <div className="divide-y divide-slate-100">
+                        {dupRows.map((r, i) => (
+                          <div key={i} className="px-4 py-2 space-y-0.5">
+                            {r.duplicates.map((d, j) => (
+                              <p key={j} className="text-[11px] text-slate-600">
+                                <span className="font-medium text-slate-700">{d.type === "agency" ? "전담기관" : d.type === "project" ? "과제" : "기관"}</span>
+                                {" · "}{d.key}
+                                {d.status === "similar" ? ` — 유사 ${d.score}% ("${d.existing}"와 비교)` : " — 이미 등록됨"}
+                              </p>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 단계기관별 시트 행 중 값 문제로 단계 구조 계산에서 제외된 것들 */}
+                  {stageSkipWarnings.length > 0 && (
+                    <div>
+                      <div className="px-4 py-2 bg-red-50 flex items-center gap-1.5">
+                        <FiAlertOctagon size={13} className="text-red-500 shrink-0" />
+                        <p className="text-xs font-semibold text-red-700">단계 구조 일부 제외됨 ({stageSkipWarnings.length}개 과제) — &quot;단계기관별&quot; 시트 값 확인 필요</p>
+                      </div>
+                      <div className="divide-y divide-slate-100">
+                        {stageSkipWarnings.map((w) => (
+                          <div key={w.normNum} className="px-4 py-2.5">
+                            <p className="text-xs font-medium text-red-700">{w.projectName} <span className="font-mono text-[10px] text-red-500">({w.projectNumber})</span></p>
+                            {w.reasons.map((r, i) => (
+                              <p key={i} className="text-[10px] text-red-600 pl-2 mt-0.5">· {r}</p>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-red-600 px-4 py-2 bg-red-50/60">
+                        위 행은 단계 정보 없이 등록되니, 필요하면 엑셀에서 값을 고쳐 다시 업로드해주세요. 그대로 등록해도 담당자·회계담당자에게 확인 이슈가 남습니다.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* 기존 과제 갱신 */}
+                  {projectUpdates.length > 0 && (
+                    <div>
+                      <div className="px-4 py-2 bg-slate-50 flex items-center gap-1.5">
+                        <FiRefreshCw size={13} className="text-slate-400 shrink-0" />
+                        <p className="text-xs font-semibold text-slate-700">기존 과제 갱신 ({projectUpdates.length}건)</p>
+                      </div>
+                      <div className="divide-y divide-slate-100">
+                        {projectUpdates.map((u) => {
+                          const checked = updateChoices[u.normNum] ?? defaultChoiceForStatus(u.status);
+                          const badge = STATUS_BADGE[u.status];
+                          return (
+                            <label key={u.normNum} className="flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-slate-50">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(e) => onToggleUpdate(u.normNum, e.target.checked)}
+                                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-medium text-slate-700 truncate">{u.projectName}</p>
+                                <p className="text-[10px] text-slate-400 font-mono">{u.projectNumber}</p>
+                                {u.stageChanged && !checked && (
+                                  <p className="text-[10px] text-blue-500">단계 구조 변경 있음 — 연차 체크와 무관하게 자동 반영됩니다</p>
+                                )}
+                              </div>
+                              <span className="text-[10px] text-slate-500 shrink-0">{u.currentTerm}연차 → {u.excelTerm}연차</span>
+                              <span className={`text-[10px] font-medium px-2 py-0.5 rounded shrink-0 ${badge.cls}`}>{badge.label}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 연차 확인 필요 — 엑셀 연차값과 총개발시작일자 기준 캘린더 계산이 다른 과제 */}
+                  {calendarMismatches.length > 0 && (
+                    <div>
+                      <div className="px-4 py-2 bg-amber-50 flex items-center gap-1.5">
+                        <FiCalendar size={13} className="text-amber-500 shrink-0" />
+                        <p className="text-xs font-semibold text-amber-700">연차 확인 필요 ({calendarMismatches.length}건) — 엑셀 연차와 시작일 기준 계산이 다릅니다</p>
+                      </div>
+                      <div className="divide-y divide-slate-100">
+                        {calendarMismatches.map((m) => (
+                          <div key={m.normNum} className="flex items-center gap-2 px-4 py-2 text-[11px] text-slate-600">
+                            <span className="font-mono text-[10px] text-slate-400 shrink-0">{m.projectNumber}</span>
+                            <span className="truncate">{m.projectName}</span>
+                            <span className="ml-auto shrink-0 whitespace-nowrap text-slate-500">엑셀 {m.excelTerm}연차 · 시작일 기준 계산 {m.calendarTerm}연차</span>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-slate-500 px-4 py-2 bg-slate-50">
+                        엑셀에 적힌 연차값 그대로 등록됩니다. 일정보다 빠르거나 늦게 진행 중이라면 문제 없지만, 연차 값이나
+                        총개발시작일자가 잘못 입력됐을 수도 있습니다 — 그대로 등록하면 담당자·회계담당자에게 확인 이슈가 자동으로 남습니다.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )
+            )}
+          </div>
         </div>
-      )}
+        <p className="text-[11px] text-slate-400 mt-2 shrink-0">
+          참여기관까지 등록되어야 해당 과제의 연차 수수료가 자동으로 계산됩니다.
+        </p>
+      </div>
 
       {totalNew === 0 && approvedUpdateCount === 0 && (
-        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+        <div className="shrink-0 rounded-xl border border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500 mt-4">
           등록하거나 반영할 항목이 없습니다.
         </div>
       )}
 
-      <div className="flex justify-between pt-2 border-t border-slate-100">
+      <div className="shrink-0 flex items-center justify-between pt-4 mt-4 border-t border-slate-100">
         <button onClick={onBack} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">이전</button>
-        <button
-          onClick={onConfirm}
-          disabled={loading || (totalNew === 0 && approvedUpdateCount === 0)}
-          className="px-4 py-2 text-sm font-medium text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-40 transition-colors"
-        >
-          {loading ? "등록 중..." : `등록 (전담기관 ${newAgency} · 과제 ${newProject} · 기관 ${newInst} · 참여기관 ${newMemberCount}${approvedUpdateCount > 0 ? ` · 과제갱신 ${approvedUpdateCount}` : ""})`}
-        </button>
+        <div className="flex items-center gap-3">
+          {totalToRegister > 0 && !loading && (
+            <span className="text-[11px] text-slate-400 hidden sm:inline">
+              전담기관 {newAgency} · 과제 {newProject} · 기관 {newInst} · 참여기관 {newMemberCount}
+              {approvedUpdateCount > 0 ? ` · 과제갱신 ${approvedUpdateCount}` : ""}
+            </span>
+          )}
+          <button
+            onClick={onConfirm}
+            disabled={loading || (totalNew === 0 && approvedUpdateCount === 0)}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40 transition-colors"
+          >
+            {loading ? "등록 중..." : <><FiCheckCircle size={14} /> {totalToRegister}건 등록</>}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1070,7 +1403,7 @@ interface DoneResult {
 
 function DoneStep({ result, onClose }: { result: DoneResult; onClose: () => void }) {
   return (
-    <div className="p-6 flex flex-col items-center gap-4">
+    <div className="h-full overflow-y-auto p-6 flex flex-col items-center justify-center gap-4">
       <div className="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center">
         <svg className="w-7 h-7 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
@@ -1122,7 +1455,8 @@ function DoneStep({ result, onClose }: { result: DoneResult; onClose: () => void
           <p className="font-semibold">확인 필요 — {result.stageAlerts}개 과제</p>
           <p className="mt-0.5 text-amber-600">
             단계 구조 값이 비어있거나, 같은 과제인데 행마다 과제코드·과제담당자·연구책임자 등이 서로 달라 자동으로 채우지 못했거나,
-            과제번호가 바뀐 것 같은데 기존 과제 후보가 여러 개라 자동으로 연결하지 못한 과제입니다.
+            과제번호가 바뀐 것 같은데 기존 과제 후보가 여러 개라 자동으로 연결하지 못했거나, 동일/과거 연차가 재제출됐거나,
+            엑셀 연차값과 총개발시작일자 기준 계산이 서로 다른 과제입니다.
             해당 과제 담당자·회계담당자에게 이슈로 등록해뒀으니, 과제 상세 페이지에서 직접 확인해주세요.
           </p>
         </div>
@@ -1147,13 +1481,19 @@ export async function downloadExcelTemplate() {
     "선택", "※필수 (이 행의 사업비가 몇 연차 것인지 — 비면 1연차로 잘못 등록됨)", "선택",
     "※필수", "※필수 (000-00-00000)",
     "선택 (주관/공동/위탁)", "선택 (S/A/B/C, 미입력시 등급 없음)", "선택 (위탁정산/자체정산)",
+    "선택 (삼화가 아니면 이 연차를 타회계법인 진행으로 자동 표시)",
+    "선택 (연차상시/정산, 미입력시 협약구조로 자동판정 — \"정산형태\"와는 다른 값)",
+    "선택 (주관기관 행에만, 없으면 단계기관별 시트의 값을 사용)",
+    "선택 (YYYY-MM-DD)", "선택 (YYYY-MM-DD)",
+    "선택 (YYYY-MM-DD, 이 연차의 실제 시작일 — 있으면 자동계산 대신 사용)",
+    "선택 (YYYY-MM-DD, 이 연차의 실제 종료일 — 있으면 자동계산 대신 사용)",
+    "선택 (YYYY-MM-DD, 단계기관별 시트가 없을 때의 보조 수단)", "선택 (YYYY-MM-DD, 단계기관별 시트가 없을 때의 보조 수단)",
     "※필수 (이 연차 현금사업비 — 참여기관별·연차별 사업비. 비면 이 연차엔 참여 안 함으로 처리됨)",
     "선택 (이 연차 현물사업비 — 있으면 아래 \"현물사업비총액\"보다 우선)",
     "선택 (이 연차 정부출연금 — 과제의 당해 정부출연금 합산에 사용)",
     "선택 (이 연차 민간현금 — 과제의 당해 민간현금 합산에 사용)",
     "선택 (이 연차 민간현물 — 과제의 당해 민간현물 합산에 사용)",
     "선택 (원 단위, 위 \"연차_기관_총사업비(현금)\"이 없을 때만 쓰는 대체값)", "선택 (원 단위, 위 \"연차_기관_총사업비(현물)\" 없을 때만 사용)",
-    "선택 (Y/N)",
   ];
   const headers = [
     "전문기관명", "과제번호", "과제명",
@@ -1161,10 +1501,14 @@ export async function downloadExcelTemplate() {
     "총개발시작일자", "총개발종료일자",
     "단계", "연차", "지원연도",
     "연구개발기관명", "기관사업자등록번호",
-    "기관역할구분", "등급", "정산형태",
+    "기관역할구분", "등급", "정산형태", "회계법인",
+    "과제구분", "연구책임자",
+    "전문기관배정일", "내부배정일",
+    "연차시작일자", "연차종료일자",
+    "단계시작일자", "단계종료일자",
     "연차_기관_총사업비(현금)", "연차_기관_총사업비(현물)",
     "연차_기관_정부출연금", "연차_기관_민간부담금(현금)", "연차_기관_민간부담금(현물)",
-    "현금사업비총액", "현물사업비총액", "배정대상",
+    "현금사업비총액", "현물사업비총액",
   ];
   const rows = [
     [
@@ -1172,30 +1516,42 @@ export async function downloadExcelTemplate() {
       "홍길동", "",
       "2024-03-01", "2027-02-28", "1", "1", "2024",
       "삼화기술경영(주)", "123-45-67890",
-      "주관", "A", "위탁정산",
+      "주관", "A", "위탁정산", "",
+      "연차상시", "박연구",
+      "2024-01-15", "2024-02-01",
+      "2024-03-01", "2025-02-28",
+      "2024-03-01", "2027-02-28",
       "500000000", "0",
       "400000000", "100000000", "0",
-      "500000000", "0", "Y",
+      "500000000", "0",
     ],
     [
       "한국산업기술기획평가원", "RS-2024-00000001", "스마트 제조 AI 시스템 개발",
       "홍길동", "",
       "2024-03-01", "2027-02-28", "1", "1", "2024",
       "참여기업(주)", "234-56-78901",
-      "공동", "", "위탁정산",
+      "공동", "", "위탁정산", "",
+      "연차상시", "",
+      "", "",
+      "2024-03-01", "2025-02-28",
+      "2024-03-01", "2027-02-28",
       "200000000", "0",
       "150000000", "50000000", "0",
-      "200000000", "0", "Y",
+      "200000000", "0",
     ],
     [
       "한국에너지기술평가원", "RS-2024-00000002", "신재생에너지 효율화 연구",
       "김담당", "자율성트랙",
       "2024-06-01", "2026-05-31", "0", "1", "2024",
       "에너지연구소", "345-67-89012",
-      "주관", "S", "자체정산",
+      "주관", "S", "자체정산", "",
+      "연차상시", "이연구",
+      "2024-04-20", "2024-05-10",
+      "2024-06-01", "2025-05-31",
+      "", "",
       "800000000", "0",
       "700000000", "100000000", "0",
-      "800000000", "0", "Y",
+      "800000000", "0",
     ],
   ];
 
@@ -1212,7 +1568,7 @@ export async function downloadExcelTemplate() {
   applyDropdown(ws, headers.indexOf("기관역할구분") + 1, ["주관", "공동", "위탁"], 3, 2 + TEMPLATE_BLANK_ROWS);
   applyDropdown(ws, headers.indexOf("등급") + 1, ["S", "A", "B", "C", "D", "E", "F", ""], 3, 2 + TEMPLATE_BLANK_ROWS);
   applyDropdown(ws, headers.indexOf("정산형태") + 1, ["위탁정산", "자체정산"], 3, 2 + TEMPLATE_BLANK_ROWS);
-  applyDropdown(ws, headers.indexOf("배정대상") + 1, ["Y", "N"], 3, 2 + TEMPLATE_BLANK_ROWS);
+  applyDropdown(ws, headers.indexOf("과제구분") + 1, ["", "연차상시", "정산"], 3, 2 + TEMPLATE_BLANK_ROWS);
 
   const stageNotes = [
     "선택", "※필수", "선택", "※필수", "※필수",
@@ -1221,31 +1577,33 @@ export async function downloadExcelTemplate() {
     "선택 (YYYY-MM-DD, 이 단계의 실제 시작일)", "선택 (YYYY-MM-DD, 이 단계의 실제 종료일)",
     "선택",
     "선택 (정발행/역발행요청/역발행/대상아님/면제, 미입력시 정발행)",
-    "※필수", "※필수 (000-00-00000)", "선택 (주관/공동/위탁)", "선택 (최우수/우수/일반)", "선택", "※필수 (원 단위)", "선택",
+    "※필수", "※필수 (000-00-00000)", "선택 (주관/공동/위탁)", "선택 (최우수/우수/일반)", "선택 (주관기관 행에만)",
+    "※필수 (원 단위)", "선택 (원 단위)",
   ];
   const stageHeaders = [
     "과제번호(숫자)", "전문기관명", "RCMS사업명", "과제번호", "과제명",
     "총개발시작일자", "총개발종료일자",
     "정산대상시작단계", "정산대상시작연차", "정산대상종료단계", "정산대상종료연차",
-    "정산대상개발시작일자", "정산대상개발종료일자",
+    "단계시작일자", "단계종료일자",
     "정산형태구분", "발행구분",
-    "연구기관명", "기관사업자등록번호", "기관역할구분", "기관등급", "기관책임자", "기관_총사업비(현금)", "회계법인",
+    "연구기관명", "기관사업자등록번호", "기관역할구분", "기관등급", "연구책임자",
+    "기관_총사업비(현금)", "기관_총사업비(현물)",
   ];
   const stageRows = [
     [
       "1", "한국산업기술기획평가원", "스마트제조혁신사업", "RS-2024-00000001", "스마트 제조 AI 시스템 개발",
       "2024-03-01", "2027-02-28", "1", "1", "1", "3", "2024-03-01", "2027-02-28", "위탁정산", "정발행",
-      "삼화기술경영(주)", "123-45-67890", "주관", "일반", "홍길동", "500000000", "삼일회계법인",
+      "삼화기술경영(주)", "123-45-67890", "주관", "일반", "홍길동", "500000000", "0",
     ],
     [
       "1", "한국산업기술기획평가원", "스마트제조혁신사업", "RS-2024-00000001", "스마트 제조 AI 시스템 개발",
       "2024-03-01", "2027-02-28", "1", "1", "1", "3", "2024-03-01", "2027-02-28", "위탁정산", "정발행",
-      "참여기업(주)", "234-56-78901", "공동", "우수", "김참여", "200000000", "삼일회계법인",
+      "참여기업(주)", "234-56-78901", "공동", "우수", "", "200000000", "0",
     ],
     [
       "2", "한국에너지기술평가원", "신재생에너지핵심기술개발", "RS-2024-00000002", "신재생에너지 효율화 연구",
       "2024-06-01", "2026-05-31", "0", "1", "0", "4", "2024-06-01", "2026-05-31", "위탁정산", "역발행요청",
-      "에너지연구소", "345-67-89012", "주관", "최우수", "박연구", "800000000", "한영회계법인",
+      "에너지연구소", "345-67-89012", "주관", "최우수", "박연구", "800000000", "50000000",
     ],
   ];
 
@@ -1302,7 +1660,11 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
 
   // "단계기관별" 시트의 정산대상시작/종료단계·연차 값으로 과제별 단계 구조(Project.stages)를 추정
   // — 아래 buildMemberAggregates가 "연차별기관별" 시트의 상대연차를 절대연차로 바꾸는 데 이 결과가 필요하므로 먼저 계산한다.
-  const stageAggregates = useMemo(() => buildStageAggregates(parsedSheets), [parsedSheets]);
+  const stageAggregates = useMemo(() => {
+    const map = buildStageAggregates(parsedSheets);
+    supplementStageDatesFromAnnual(parsedSheets, map);
+    return map;
+  }, [parsedSheets]);
 
   // "연차별기관별" + "단계기관별" 시트를 과제+기관 단위로 합산 — 참여기관(ProjectMember) 등록에 사용
   const { members: memberAggregates, projectMaxTerm } = useMemo(
@@ -1319,20 +1681,46 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
     [projects, memberAggregates, projectMaxTerm, stageAggregates]
   );
 
+  // 엑셀 연차값과 총개발시작일자 기준 캘린더 계산값이 다른 과제 — 등록 자체는 막지 않고 미리보기에서
+  // 경고로 보여준 뒤, 등록 후 담당자·회계담당자에게 확인 이슈를 남긴다.
+  const calendarMismatches = useMemo(
+    () => computeTermCalendarMismatches(projects, scalarAggregates, projectMaxTerm, stageAggregates, new Date().toISOString().slice(0, 10)),
+    [projects, scalarAggregates, projectMaxTerm, stageAggregates]
+  );
+
+  // "단계기관별" 시트에서 일부 행이 값 문제로 통째로 걸러진 과제 — 등록 전 미리보기에서 바로 알려준다.
+  // (예: 정산대상시작단계가 비어있거나, 시작단계≠종료단계인 행은 그 단계 정보 없이 조용히 진행된다.)
+  const stageSkipWarnings = useMemo(() => {
+    const warnings: { normNum: string; projectNumber: string; projectName: string; reasons: string[] }[] = [];
+    for (const [normNum, info] of stageAggregates) {
+      if (!info.hasMissing || info.skipReasons.length === 0) continue;
+      const existing = projects.find((p) => normProjectNum(p.projectNumber) === normNum);
+      const scalarInfo = scalarAggregates.get(normNum);
+      warnings.push({
+        normNum,
+        projectNumber: existing?.projectNumber ?? normNum,
+        projectName: existing?.projectName ?? (scalarInfo && scalarInfo.projectNames.size >= 1 ? [...scalarInfo.projectNames][0] : ""),
+        reasons: info.skipReasons,
+      });
+    }
+    return warnings;
+  }, [projects, scalarAggregates, stageAggregates]);
+
   function toggleProjectUpdate(normNum: string, next: boolean) {
     setProjectUpdateChoices((prev) => ({ ...prev, [normNum]: next }));
   }
 
-  // 이미 참여기관으로 연결된 (과제, 기관) 쌍은 제외하고 새로 등록될 참여기관 수를 계산
-  const newMemberCount = useMemo(() => {
+  // 이미 참여기관으로 연결된 (과제, 기관) 쌍은 제외하고 새로 등록될 참여기관 목록을 계산
+  const newMembers = useMemo(() => {
     const existingKeys = new Set<string>();
     for (const pm of projectMembers) {
       const proj = projects.find((p) => p.id === pm.projectId);
       const inst = institutions.find((i) => i.id === pm.institutionId);
       if (proj && inst) existingKeys.add(`${normProjectNum(proj.projectNumber)}|${normBiz(inst.bizNumber)}`);
     }
-    return memberAggregates.filter((m) => !existingKeys.has(m.key)).length;
+    return memberAggregates.filter((m) => !existingKeys.has(m.key));
   }, [memberAggregates, projectMembers, projects, institutions]);
+  const newMemberCount = newMembers.length;
 
   // ── 파일 파싱 ───────────────────────────────────────────────
 
@@ -1525,10 +1913,6 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
     // setTermOtherFirmHandled는 projectNumber "원문"으로 TermFee를 찾으므로, 신규/기존/이름변경 과제
     // 구분 없이 파일에 처음 등장한 원문 과제번호를 normNum마다 하나씩 기록해둔다.
     const projectNumberByNormNum = new Map<string, string>();
-    // 이번 실행에서 각 과제(normNum)에 최종 확정한 절대연차 기준 단계 구조 — 아래 회계법인 자동
-    // 반영 단계에서 "그 단계의 절대연차 범위"를 다시 찾을 때 재사용한다(등록 직후엔 projects
-    // 스냅샷이 갱신되지 않아 store에서 다시 조회할 수 없으므로).
-    const resolvedStagesByProject = new Map<string, Project["stages"]>();
     for (const row of previewRows) {
       const n = normProjectNum(row.projectNumber);
       if (n && !projectNumberByNormNum.has(n)) projectNumberByNormNum.set(n, row.projectNumber);
@@ -1571,7 +1955,6 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           contactName: "",
           contactEmail: "",
           contactPhone: "",
-          projectCount: 0,
           registeredAt: today,
           status: "ACTIVE",
         });
@@ -1591,6 +1974,9 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         const assignedManager = scalarInfo?.assignedManagers.size === 1 ? [...scalarInfo.assignedManagers][0] : undefined;
         const projectCode = scalarInfo?.projectCodes.size === 1 ? [...scalarInfo.projectCodes][0] : undefined;
         const researchLead = scalarInfo?.researchLeads.size === 1 ? [...scalarInfo.researchLeads][0] : undefined;
+        const agencyAssignedAt = scalarInfo?.agencyAssignedAts.size === 1 ? [...scalarInfo.agencyAssignedAts][0] : undefined;
+        const internalAssignedAt = scalarInfo?.internalAssignedAts.size === 1 ? [...scalarInfo.internalAssignedAts][0] : undefined;
+        const explicitProjectCategory = scalarInfo?.projectCategories.size === 1 ? [...scalarInfo.projectCategories][0] : undefined;
 
         // 새로 만들기 전에 "과제번호만 바뀐 기존 과제"인지 먼저 확인한다 — RCMS에서 과제번호가
         // 재부여되는 경우가 있어, 문자열이 달라도 과제코드나 (과제명+기간)이 같으면 같은 과제로 본다.
@@ -1602,10 +1988,12 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
 
         const stageInfo = stageAggregates.get(normNum);
         const { agreementType, stages, batchEndTerm } = resolveStageStructure(stageInfo, renamedFrom?.stages);
-        resolvedStagesByProject.set(normNum, stages);
         const maxStageEndTerm = stages ? Math.max(...stages.map((s) => s.endTermNumber)) : batchEndTerm;
         const totalTerms = Math.max(1, projectMaxTerm.get(normNum) ?? 1, maxStageEndTerm);
-        const currentTerm = computeCurrentTerm(startDateStr, totalTerms, today);
+        // 진행 연차는 캘린더 역산이 아니라 엑셀에 적힌 값을 그대로 신뢰한다 — "연차별기관별_연구비집행"
+        // 시트는 항상 현재 진행 중인 연차 하나만 담아 업로드하는 것이 실무 규칙이기 때문. 캘린더 계산은
+        // (이 과제의 연차별 행이 파일에 아예 없어 값을 모를 때의) 폴백이자, calendarMismatches 경고·이슈용 참고값이다.
+        const currentTerm = projectMaxTerm.get(normNum) ?? computeCurrentTerm(startDateStr, totalTerms, today);
 
         // 당해(현재 연차) 정부출연금/민간현금/민간현물 — 참여기관 전체 합산
         const { govGrant, privateCash, privateInKind } = sumTermFinancials(memberAggregates, normNum, currentTerm);
@@ -1625,8 +2013,10 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           ? allStageDateRanges.reduce((max, d) => (d.end > max ? d.end : max), allStageDateRanges[0].end)
           : undefined;
 
-        // 연차상시/정산 — 방금 계산한 단계 구조·총연차 기준으로 판정(다른 화면과 동일 기준)
-        const projectCategory = isSettlementTerm({ agreementType, stages, totalTerms }, currentTerm) ? "정산" : "연차상시";
+        // 연차상시/정산 — 엑셀에 명시적으로 있으면(과제구분 컬럼) 그 값을 쓰고, 없으면 방금 계산한
+        // 단계 구조·총연차 기준으로 판정(다른 화면과 동일 기준)한다.
+        const autoProjectCategory = isSettlementTerm({ agreementType, stages, totalTerms }, currentTerm) ? "정산" : "연차상시";
+        const projectCategory = explicitProjectCategory ?? autoProjectCategory;
 
         if (ambiguousCandidates.length > 0) {
           // 후보가 여러 개라 자동으로 판단할 수 없음 — 등록하지 않고 아래에서 이슈로 남긴다
@@ -1677,6 +2067,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             projectCode: nextProjectCode,
             previousProjectCodes: nextPreviousCodes,
             researchLead: researchLead ?? renamedFrom.researchLead,
+            agencyAssignedAt: agencyAssignedAt ?? renamedFrom.agencyAssignedAt,
+            internalAssignedAt: internalAssignedAt ?? renamedFrom.internalAssignedAt,
           });
           registeredProjects.set(normNum, renamedFrom.id);
           newProjectAgencyId.set(normNum, agencyId || renamedFrom.agencyId);
@@ -1712,6 +2104,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             assignedManager,
             projectCode,
             researchLead,
+            agencyAssignedAt,
+            internalAssignedAt,
           });
           registeredProjects.set(normNum, created.id);
           newProjectAgencyId.set(normNum, agencyId);
@@ -1730,6 +2124,9 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
 
     let memberUpdatedCount = 0;
     const touchedProjectIds = new Set<string>();
+    const now = new Date().toISOString().replace("T", " ").slice(0, 16);
+    const authorName = getCurrentUser()?.name ?? "시스템";
+    let stageAlertCount = 0;
 
     // 참여기관 등록/갱신 — 이게 등록돼야 연차 수수료가 자동으로 계산된다 (autoGenerateTermFees 트리거)
     for (const agg of memberAggregates) {
@@ -1744,11 +2141,12 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
 
       touchedProjectIds.add(projectId);
       const institution = institutions.find((i) => i.id === institutionId);
-      // ProjectMember.annualBudgets엔 공식 4개 필드만 저장 — govGrant/privateCash/privateInKind는
-      // 과제 레벨 "당해 사업비" 필드를 채우기 위한 집계용 임시값이라 여기엔 남기지 않는다.
+      // ProjectMember.annualBudgets엔 예산 4개 필드 + 연차 시작/종료일·담당 회계법인(있으면)만 저장 —
+      // govGrant/privateCash/privateInKind는 과제 레벨 "당해 사업비" 필드를 채우기 위한
+      // 집계용 임시값이라 여기엔 남기지 않는다.
       const annualBudgets: AnnualBudget[] = Array.from(agg.budgetsByTerm.values())
         .sort((a, b) => a.termNumber - b.termNumber)
-        .map(({ termYear, termNumber, cashBudget, inKindBudget }) => ({ termYear, termNumber, cashBudget, inKindBudget }));
+        .map(({ termYear, termNumber, cashBudget, inKindBudget, termStartDate, termEndDate, auditFirm }) => ({ termYear, termNumber, cashBudget, inKindBudget, termStartDate, termEndDate, auditFirm }));
       const existingMember = projectMembers.find(
         (m) => m.projectId === projectId && m.institutionId === institutionId
       );
@@ -1758,7 +2156,9 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         const totalCash = annualBudgets.length > 0
           ? annualBudgets.reduce((s, b) => s + b.cashBudget, 0)
           : agg.totalCashBudgetFallback;
-        const totalInKind = annualBudgets.reduce((s, b) => s + b.inKindBudget, 0);
+        const totalInKind = annualBudgets.length > 0
+          ? annualBudgets.reduce((s, b) => s + b.inKindBudget, 0)
+          : agg.totalInKindBudgetFallback;
         addProjectMember({
           projectId,
           projectNumber: agg.projectNumber,
@@ -1820,36 +2220,84 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
     // 과제를 단계·연차별로 개별 재업로드하면 새 단계 구조가 반영될 방법이 없었다. 승인 대상도
     // "next" 상태로 한정하지 않는다 — "과거 연차" 등으로 표시돼도 사용자가 체크박스로 명시 승인하면
     // 그 판단을 신뢰해서 반영한다.)
+    //
+    // 단계 구조(stages)는 예외다 — "동일 연차 재제출"/"과거 연차"라서 연차·사업비 반영이 보류(체크박스
+    // 꺼짐)돼도, resolveStageStructure는 기존 단계를 지우지 않고 새 단계를 추가하거나 기존 단계 길이를
+    // 늘리기만 하는 안전한(추가적) 병합이라 그대로 반영한다. 그렇지 않으면 "단계기관별" 시트에 새 단계
+    // (예: 2단계)를 추가해 올려도, 연차 값이 그대로라는 이유만으로 그 단계 정보까지 통째로 묻혀버린다.
     for (const info of projectUpdates) {
-      if (!isApprovedUpdate(info.normNum)) continue;
       const existingProject = projects.find((p) => p.id === info.projectId);
       if (!existingProject) continue;
-      touchedProjectIds.add(info.projectId);
 
       const stageInfo = stageAggregates.get(info.normNum);
       const { agreementType, stages, batchEndTerm } = resolveStageStructure(stageInfo, existingProject.stages);
-      resolvedStagesByProject.set(info.normNum, stages);
       const maxStageEndTerm = stages ? Math.max(...stages.map((s) => s.endTermNumber)) : batchEndTerm;
-      const nextTotalTerms = Math.max(existingProject.totalTerms, info.excelTerm, maxStageEndTerm);
-      const nextCurrentTerm = info.excelTerm;
-      const currentStage = stages?.find((s) => nextCurrentTerm >= s.startTermNumber && nextCurrentTerm <= s.endTermNumber);
-      const stageDateRange = currentStage ? stageInfo?.dateRanges.get(currentStage.stageNumber) : undefined;
       const nextAgreementType = agreementType ?? existingProject.agreementType;
       const nextStages = stages ?? existingProject.stages;
-      const projectCategory = isSettlementTerm(
-        { agreementType: nextAgreementType, stages: nextStages, totalTerms: nextTotalTerms },
-        nextCurrentTerm
-      ) ? "정산" : "연차상시";
+      const stageChanged =
+        JSON.stringify(nextStages ?? null) !== JSON.stringify(existingProject.stages ?? null) ||
+        nextAgreementType !== existingProject.agreementType;
 
-      updateProject(info.projectId, {
-        currentTerm: nextCurrentTerm,
-        totalTerms: nextTotalTerms,
+      const approved = isApprovedUpdate(info.normNum);
+      if (!approved && !stageChanged) continue; // 반영할 것이 아무것도 없음
+
+      touchedProjectIds.add(info.projectId);
+
+      // 연차 반영이 보류된 경우(승인 안 됨) 단계 날짜·연차상시/정산 재계산은 "현재 등록된 연차" 기준으로 —
+      // 승인된 경우에만 엑셀의 새 연차 기준으로 계산한다.
+      const effectiveCurrentTerm = approved ? info.excelTerm : existingProject.currentTerm;
+      const nextTotalTerms = Math.max(existingProject.totalTerms, approved ? info.excelTerm : 0, maxStageEndTerm);
+      const currentStage = nextStages?.find((s) => effectiveCurrentTerm >= s.startTermNumber && effectiveCurrentTerm <= s.endTermNumber);
+      const stageDateRange = currentStage ? stageInfo?.dateRanges.get(currentStage.stageNumber) : undefined;
+
+      const updates: Partial<Project> = {
         agreementType: nextAgreementType,
         stages: nextStages,
+        totalTerms: nextTotalTerms,
         stageStartDate: stageDateRange?.start ?? existingProject.stageStartDate,
         stageEndDate: stageDateRange?.end ?? existingProject.stageEndDate,
-        projectCategory,
-      });
+      };
+
+      if (approved) {
+        const nextCurrentTerm = info.excelTerm;
+        const projectCategory = isSettlementTerm(
+          { agreementType: nextAgreementType, stages: nextStages, totalTerms: nextTotalTerms },
+          nextCurrentTerm
+        ) ? "정산" : "연차상시";
+
+        // 당해(이번에 반영되는 연차) 정부출연금/민간현금/민간현물 — 신규/이름변경 과제와 동일하게
+        // 참여기관 전체 합산해 갱신한다. 이 값들은 매년 바뀌는데 지금까지는 여기서 빠져 있어
+        // 재업로드로 연차만 넘어가고 당해 사업비는 예전 값 그대로 남는 문제가 있었다.
+        const { govGrant, privateCash, privateInKind } = sumTermFinancials(memberAggregates, info.normNum, nextCurrentTerm);
+
+        // 과제담당자·과제코드·연구책임자·배정일 — 신규/이름변경 과제(위쪽 분기)와 달리 이 "기존 과제
+        // 연차 갱신" 분기는 지금까지 이 필드들을 전혀 건드리지 않아서, 최초 등록 때 값이 갈려(row마다
+        // 값이 달라) 비어 있었으면 이후 아무리 재업로드해도 영영 채워지지 않는 문제가 있었다.
+        // scalarInfo가 이번 파일에서 값을 하나로 특정하지 못하면(비어 있거나 여전히 갈리면) 기존 값을 유지한다.
+        const scalarInfo = scalarAggregates.get(info.normNum);
+        const assignedManager = scalarInfo?.assignedManagers.size === 1 ? [...scalarInfo.assignedManagers][0] : undefined;
+        const projectCode = scalarInfo?.projectCodes.size === 1 ? [...scalarInfo.projectCodes][0] : undefined;
+        const researchLead = scalarInfo?.researchLeads.size === 1 ? [...scalarInfo.researchLeads][0] : undefined;
+        const agencyAssignedAt = scalarInfo?.agencyAssignedAts.size === 1 ? [...scalarInfo.agencyAssignedAts][0] : undefined;
+        const internalAssignedAt = scalarInfo?.internalAssignedAts.size === 1 ? [...scalarInfo.internalAssignedAts][0] : undefined;
+
+        Object.assign(updates, {
+          currentTerm: nextCurrentTerm,
+          projectCategory,
+          govGrant: govGrant > 0 ? govGrant : existingProject.govGrant,
+          privateCash: privateCash > 0 ? privateCash : existingProject.privateCash,
+          privateInKind: privateInKind > 0 ? privateInKind : existingProject.privateInKind,
+          assignedManager: assignedManager ?? existingProject.assignedManager,
+          projectCode: projectCode ?? existingProject.projectCode,
+          researchLead: researchLead ?? existingProject.researchLead,
+          agencyAssignedAt: agencyAssignedAt ?? existingProject.agencyAssignedAt,
+          internalAssignedAt: internalAssignedAt ?? existingProject.internalAssignedAt,
+        });
+      }
+
+      updateProject(info.projectId, updates);
+      // 단계 구조 예외 반영 여부는 아래 "동일 연차 재제출/과거 연차" 이슈 생성 루프에서 info.stageChanged로
+      // 함께 안내한다 — 프로젝트당 이슈를 하나로 합쳐 담당자가 헷갈리지 않게 한다.
     }
 
     // 주관기관 정보 보정 — 과제 생성 시점엔 어느 행이 주관기관인지 알 수 없어 비워뒀으므로,
@@ -1887,39 +2335,25 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       });
     }
 
-    // 회계법인 자동 반영 — "단계기관별" 시트의 "회계법인" 값이 삼화가 아니면, 그 단계(=연차 범위)를
-    // 타회계법인 진행으로 자동 표시한다. 삼화가 정산연차만 새로 배정받고 이전 연차상시는 다른 회계법인이
-    // 진행한 과제를 엑셀 한 번에 등록 + 표시까지 마칠 수 있게 하기 위함(수동으로 과제 상세에서 연차마다
-    // 체크할 필요가 없어짐). TermFee는 위 참여기관 등록 단계에서 이미 자동 생성되어 있어야 찾을 수 있다.
-    for (const [normNum, stageInfo] of stageAggregates) {
+    // 회계법인 자동 반영 — "연차별기관별" 시트의 "회계법인" 값이 삼화가 아니면, 그 연차를 타회계법인
+    // 진행으로 자동 표시한다. 삼화가 정산연차만 새로 배정받고 이전 연차상시는 다른 회계법인이 진행한
+    // 과제를 엑셀 한 번에 등록 + 표시까지 마칠 수 있게 하기 위함(수동으로 과제 상세에서 연차마다 체크할
+    // 필요가 없어짐). 예전엔 "단계기관별" 시트 값을 썼는데, 그 시트는 재업로드해도 값이 갱신되지 않는
+    // 고정 스냅샷이라 실제 그 해 담당 회계법인과 어긋날 수 있어 연차별로 갱신되는 이 시트 값으로 바꿨다.
+    // TermFee는 위 참여기관 등록 단계에서 이미 자동 생성되어 있어야 찾을 수 있다.
+    for (const agg of memberAggregates) {
+      const normNum = normProjectNum(agg.projectNumber);
       const projectId = registeredProjects.get(normNum);
       if (!projectId) continue;
       const projectNumber = projectNumberByNormNum.get(normNum);
       if (!projectNumber) continue;
       const startDate = newProjectStartDate.get(normNum) ?? projects.find((p) => p.id === projectId)?.startDate;
       if (!startDate) continue;
-      // 이번 실행에서 새로 확정한 단계 구조가 있으면 그걸, 없으면(승인 안 된 갱신 등) 기존에 등록된
-      // 단계 구조를 사용해 "단계번호 → 절대연차 범위"를 찾는다.
-      const resolvedStages = resolvedStagesByProject.get(normNum) ?? projects.find((p) => p.id === projectId)?.stages;
 
-      for (const [stageNumber, range] of stageInfo.ranges) {
-        const auditFirm = stageInfo.auditFirmByStage.get(stageNumber);
-        if (!auditFirm || !isOtherFirmName(auditFirm)) continue;
-        // 0단계(일괄협약 표기)는 단계 오프셋 개념이 없어 파일에 적힌 값이 곧 절대연차다. 그 외
-        // 단계는 정산대상시작/종료연차가 그 단계 안에서 다시 세는 상대값이므로, 절대연차로 변환된
-        // stages에서 그 단계의 실제 범위를 찾아야 한다.
-        let absStart = range.start;
-        let absEnd = range.end;
-        if (stageNumber !== 0) {
-          const abs = resolvedStages?.find((s) => s.stageNumber === stageNumber);
-          if (!abs) continue; // 절대연차 범위를 확정하지 못했으면 잘못 표시하지 않고 건너뜀
-          absStart = abs.startTermNumber;
-          absEnd = abs.endTermNumber;
-        }
-        for (let termNumber = absStart; termNumber <= absEnd; termNumber++) {
-          const termYear = computeTermYear(startDate, termNumber);
-          setTermOtherFirmHandled(projectNumber, termYear, termNumber, true);
-        }
+      for (const b of agg.budgetsByTerm.values()) {
+        if (!b.auditFirm || !isOtherFirmName(b.auditFirm)) continue;
+        const termYear = computeTermYear(startDate, b.termNumber);
+        setTermOtherFirmHandled(projectNumber, termYear, b.termNumber, true);
       }
     }
 
@@ -1933,9 +2367,6 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
     // 자동으로 채우지 못했거나(단계 구조), 같은 과제인데 행마다 값이 갈려서(과제담당자·과제코드·
     // 연구책임자·과제명) 어느 값이 맞는지 판단할 수 없는 경우는 조용히 추정해서 반영하지 않고,
     // 과제 담당자·회계담당자에게 이슈로 남겨서 직접 확인하도록 한다.
-    const now = new Date().toISOString().replace("T", " ").slice(0, 16);
-    const authorName = getCurrentUser()?.name ?? "시스템";
-    let stageAlertCount = 0;
     const reviewNormNums = new Set([...stageAggregates.keys(), ...scalarAggregates.keys()]);
     for (const normNum of reviewNormNums) {
       const projectId = registeredProjects.get(normNum);
@@ -1944,7 +2375,10 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       const reasons: string[] = [];
       const stageInfo = stageAggregates.get(normNum);
       if (stageInfo?.hasMissing) {
-        reasons.push("\"단계기관별\" 시트의 정산대상시작/종료단계·연차 값이 일부 비어 있거나 해석할 수 없어 단계 구조(협약구조)를 자동으로 채우지 못했습니다.");
+        const detail = stageInfo.skipReasons.length > 0
+          ? "\n" + stageInfo.skipReasons.map((r) => `  - ${r}`).join("\n")
+          : "";
+        reasons.push(`"단계기관별" 시트에서 일부 행이 단계 구조(협약구조) 계산에서 제외됐습니다 — 그 행의 단계는 등록되지 않으니 값을 고쳐 다시 올려주세요.${detail}`);
       }
       const scalarInfo = scalarAggregates.get(normNum);
       if (scalarInfo) {
@@ -1997,6 +2431,51 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       stageAlertCount++;
     }
 
+    // 동일 연차 재제출/과거 연차 데이터 — 체크박스로 반영 여부는 이미 결정됐지만(위 참여기관·과제 갱신
+    // 루프), 사용자가 그 순간 놓칠 수 있으니 무엇으로 결정됐는지 담당자·회계담당자에게도 남겨둔다.
+    for (const info of projectUpdates) {
+      const applied = isApprovedUpdate(info.normNum);
+      // 정상적으로 다음 연차로 진행되고(체크박스 그대로 승인) 단계 구조도 안 바뀐 경우만 알림 불필요.
+      // 사용자가 "다음 연차"를 일부러 반려했거나, 단계 구조가 바뀐 경우엔 next여도 알려준다.
+      if (info.status === "next" && applied && !info.stageChanged) continue;
+      const stageNote = info.stageChanged
+        ? (applied
+          ? " 단계 구조(새 단계 추가 등) 변경도 함께 반영됐습니다."
+          : " 다만 단계 구조(새 단계 추가 등) 변경은 안전한 추가 정보라 연차와 무관하게 예외적으로 반영됐습니다.")
+        : "";
+      const statusLabel = info.status === "same" ? "동일 연차 재제출" : info.status === "behind" ? "과거 연차 데이터" : "다음 연차 반영 보류";
+      addProjectIssue({
+        projectId: info.projectId,
+        projectNumber: info.projectNumber,
+        content: `RCMS 엑셀 업로드 — ${statusLabel} (기존 ${info.currentTerm}연차 → 엑셀 ${info.excelTerm}연차).\n이번 업로드에서 연차·사업비는 ${applied ? "반영했습니다" : "반영하지 않았습니다"}.${stageNote} 의도한 결과가 맞는지 확인해주세요.`,
+        author: authorName,
+        createdAt: now,
+        priority: "MEDIUM",
+        status: "OPEN",
+        recipientGroups: ["MANAGER", "ACCOUNTANT"],
+        noInstitution: true,
+      });
+      stageAlertCount++;
+    }
+
+    // 엑셀 연차값과 총개발시작일자 기준 캘린더 계산이 다른 과제 — 이번에 실제로 등록/갱신된 과제만.
+    for (const m of calendarMismatches) {
+      const projectId = registeredProjects.get(m.normNum);
+      if (!projectId || !touchedProjectIds.has(projectId)) continue;
+      addProjectIssue({
+        projectId,
+        projectNumber: m.projectNumber,
+        content: `RCMS 엑셀 업로드 — 엑셀에는 ${m.excelTerm}연차로 등록됐지만, 총개발시작일자 기준으로 계산하면 ${m.calendarTerm}연차일 것으로 예상됩니다.\n일정보다 빠르거나 늦게 진행 중이라면 문제 없지만, 연차 값이나 총개발시작일자가 잘못 입력됐을 수도 있으니 확인해주세요.`,
+        author: authorName,
+        createdAt: now,
+        priority: "MEDIUM",
+        status: "OPEN",
+        recipientGroups: ["MANAGER", "ACCOUNTANT"],
+        noInstitution: true,
+      });
+      stageAlertCount++;
+    }
+
     setDoneResult({
       agency: agencyCount,
       project: projectCount,
@@ -2026,18 +2505,18 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
   const stepIdx = STEPS.indexOf(step);
 
   return (
-    <Modal title={TITLES[step]} onClose={onClose} size="xl">
+    <Modal title={TITLES[step]} onClose={onClose} size="xl" fixedHeight>
       {/* 진행 표시 */}
       {step !== "done" && (
-        <div className="px-6 pt-4 pb-0">
-          <div className="flex items-center gap-1">
+        <div className="px-6 pt-4 pb-0 shrink-0">
+          <div className="flex items-center gap-1.5">
             {["파일 선택", "시트 탐색", "컬럼 매핑", "미리보기"].map((label, i) => (
-              <div key={label} className="flex items-center gap-1 flex-1">
+              <div key={label} className="flex items-center gap-1.5">
                 <div className={`flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold shrink-0 ${
                   i < stepIdx ? "bg-blue-600 text-white" : i === stepIdx ? "bg-blue-600 text-white ring-2 ring-blue-200" : "bg-slate-200 text-slate-500"
                 }`}>{i + 1}</div>
-                <span className={`text-[10px] ${i === stepIdx ? "text-blue-600 font-semibold" : "text-slate-400"}`}>{label}</span>
-                {i < 3 && <div className={`flex-1 h-px ${i < stepIdx ? "bg-blue-400" : "bg-slate-200"}`} />}
+                <span className={`text-[10px] whitespace-nowrap ${i === stepIdx ? "text-blue-600 font-semibold" : "text-slate-400"}`}>{label}</span>
+                {i < 3 && <div className={`w-8 h-px shrink-0 ${i < stepIdx ? "bg-blue-400" : "bg-slate-200"}`} />}
               </div>
             ))}
           </div>
@@ -2046,54 +2525,59 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
 
       {/* 오류 */}
       {error && (
-        <div className="mx-6 mt-4 rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-xs text-red-700">
+        <div className="mx-6 mt-4 rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-xs text-red-700 shrink-0">
           {error}
         </div>
       )}
 
-      {/* 스텝 콘텐츠 */}
-      {step === "upload" && (
-        <div className="p-6">
-          <UploadZone onFile={handleFile} />
-        </div>
-      )}
+      {/* 스텝 콘텐츠 — 진행 표시/오류 배너와 분리된 영역에서 자체적으로 높이·스크롤을 관리한다.
+          (Modal 본문 전체가 스크롤되면, 내용이 길어질 때 하단 버튼이 스크롤해야만 보이는 문제가 있었다.) */}
+      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
+        {step === "upload" && (
+          <div className="p-6 h-full flex flex-col">
+            <UploadZone onFile={handleFile} className="flex-1" />
+          </div>
+        )}
 
-      {step === "sheet" && (
-        <SheetStep
-          allSheetNames={allSheetNames}
-          matched={matchedSheets}
-          onConfirm={() => handleSheetConfirm(parsedSheets)}
-          onBack={() => setStep("upload")}
-          onManualAssign={assignSheetManually}
-          onUnassign={unassignSheet}
-        />
-      )}
+        {step === "sheet" && (
+          <SheetStep
+            allSheetNames={allSheetNames}
+            matched={matchedSheets}
+            onConfirm={() => handleSheetConfirm(parsedSheets)}
+            onBack={() => setStep("upload")}
+            onManualAssign={assignSheetManually}
+            onUnassign={unassignSheet}
+          />
+        )}
 
-      {step === "mapping" && (
-        <MappingStep
-          parsedSheets={parsedSheets}
-          onUpdateMapping={updateMapping}
-          onConfirm={buildPreview}
-          onBack={() => setStep("sheet")}
-        />
-      )}
+        {step === "mapping" && (
+          <MappingStep
+            parsedSheets={parsedSheets}
+            onUpdateMapping={updateMapping}
+            onConfirm={buildPreview}
+            onBack={() => setStep("sheet")}
+          />
+        )}
 
-      {step === "preview" && (
-        <PreviewStep
-          previewRows={previewRows}
-          newMemberCount={newMemberCount}
-          projectUpdates={projectUpdates}
-          updateChoices={projectUpdateChoices}
-          onToggleUpdate={toggleProjectUpdate}
-          onConfirm={doRegister}
-          onBack={() => setStep(previewBackStep)}
-          loading={loading}
-        />
-      )}
+        {step === "preview" && (
+          <PreviewStep
+            previewRows={previewRows}
+            newMembers={newMembers}
+            projectUpdates={projectUpdates}
+            updateChoices={projectUpdateChoices}
+            onToggleUpdate={toggleProjectUpdate}
+            calendarMismatches={calendarMismatches}
+            stageSkipWarnings={stageSkipWarnings}
+            onConfirm={doRegister}
+            onBack={() => setStep(previewBackStep)}
+            loading={loading}
+          />
+        )}
 
-      {step === "done" && (
-        <DoneStep result={doneResult} onClose={onClose} />
-      )}
+        {step === "done" && (
+          <DoneStep result={doneResult} onClose={onClose} />
+        )}
+      </div>
     </Modal>
   );
 }

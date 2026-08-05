@@ -187,11 +187,11 @@ export default function EmailDispatchesPage() {
                     <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">{project?.researchLead ?? "-"}</td>
                     <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">{project?.startDate ? fmtDate(project.startDate) : "-"}</td>
                     <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">{project?.endDate ? fmtDate(project.endDate) : "-"}</td>
-                    <td className="px-4 py-3 text-center">
+                    <td className="px-4 py-3 text-center whitespace-nowrap">
                       <StatusBadge label={displayType(e).label} color={displayType(e).color} />
                     </td>
                     <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">{e.attachments.length}개</td>
-                    <td className="px-4 py-3 text-center">
+                    <td className="px-4 py-3 text-center whitespace-nowrap">
                       <StatusBadge label={STATUS_MAP[e.status].label} color={STATUS_MAP[e.status].color} />
                     </td>
                     <td className="px-4 py-3 text-center text-xs text-slate-500 whitespace-nowrap">{e.senderName}</td>
