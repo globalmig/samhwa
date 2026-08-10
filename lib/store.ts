@@ -533,6 +533,37 @@ export function updateProject(id: string, data: Partial<Project>): void {
       settlements: _state.settlements.map((s) => s.projectNumber === num ? { ...s, projectName: newName } : s),
     };
   }
+  // 자율성트랙 정산구분(project.autonomySettlementType)은 참여기관 개별 settlementType과 별개 필드지만,
+  // 참여기관 목록·정산절차 안내 공문(leadMember.settlementType 표시)에는 여전히 기관별 값이 노출되므로
+  // 실무상 "같은 결정"으로 보인다 — 상단에서 바꾸면 참여기관 기본값도 함께 맞춰준다(이후에도 참여기관
+  // 화면에서 기관별로 다시 개별 수정 가능).
+  // 다만 이 전환은 "지금부터" 적용되는 것이지 과거를 소급하지 않는다 — 이미 지난 연차(현재 연차 이전)는
+  // 정산(또는 연차 업무) 자체가 끝난 상태이므로 전환 전 정산구분을 오버라이드로 고정해 그대로 유지하고,
+  // 현재 연차부터의 기본값만 새 정산구분으로 바꾼다.
+  const resolvedBeforeAutonomy = before.autonomySettlementType ?? "자체정산";
+  const resolvedAfterAutonomy = after.autonomySettlementType ?? "자체정산";
+  if ((after.projectType ?? "GENERAL") === "AUTONOMY_TRACK" && resolvedAfterAutonomy !== resolvedBeforeAutonomy) {
+    const boundaryTerm = after.currentTerm ?? 1;
+    _state = {
+      ..._state,
+      projectMembers: _state.projectMembers.map((m) => {
+        if (m.projectId !== id) return m;
+        const existingOverrides = m.settlementTypeOverrides ?? [];
+        const pastOverrides = Array.from({ length: Math.max(0, boundaryTerm - 1) }, (_, i) => i + 1).map(
+          (termNumber) =>
+            existingOverrides.find((o) => o.termNumber === termNumber) ??
+            { termNumber, settlementType: m.settlementType ?? resolvedBeforeAutonomy },
+        );
+        // 현재 연차 이후에 이미 개별로 지정해둔 오버라이드는 사용자의 명시적 선택이므로 그대로 둔다.
+        const futureOverrides = existingOverrides.filter((o) => o.termNumber >= boundaryTerm);
+        return {
+          ...m,
+          settlementType: resolvedAfterAutonomy,
+          settlementTypeOverrides: [...pastOverrides, ...futureOverrides].sort((a, b) => a.termNumber - b.termNumber),
+        };
+      }),
+    };
+  }
   record("project", id, after.projectName, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   if (PROJECT_FEE_AFFECTING_FIELDS.some((f) => f in data)) {
     autoGenerateTermFees(id);
