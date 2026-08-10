@@ -1431,10 +1431,13 @@ export function autoGenerateTermFees(projectId: string): void {
   // 연차마다 달라지는 경우 실제로 미뤘던 기관과 다른 기관이 그 몫을 떠안는 오류가 생긴다.
   const stageUnclaimed: Record<number, number> = {};
   const stageUnclaimedByInst: Record<number, Record<string, number>> = {};
-  // stageExemptUnclaimedByInst: 면제기관(DISCOUNT 모드 자체정산)이 연차상시 동안 미뤄온 몫(연차상시엔
-  // 청구하지 않고 매출비용으로 소멸시키는 게 기본).단, 정산 연차에 그 기관이 위탁정산으로 전환해
-  // 일반기관 취급을 받게 되면(exemptBreakdown에서 빠지고 nonExempt로 재분류), 자체정산이던 동안 쌓인
-  // 미청구분을 그제서야 함께 청구해야 한다 — 그렇지 않으면 전환 시점에 과거 미청구분이 그냥 사라진다.
+  // stageExemptUnclaimedByInst: 면제기관(DISCOUNT/CUSTOM 모드 자체정산)이 연차상시 동안 미뤄온 몫(연차상시엔
+  // 청구하지 않고 매출비용으로 소멸시키는 게 기본). 정산 연차에 그 기관이 함께 청구해야 하는 경우가 두 가지 있다.
+  // (1) 등급이 바뀌어 면제등급을 벗어나 일반기관으로 재분류된 경우(exemptBreakdown에서 빠지고 nonExempt로 재분류) —
+  //     아래 nonExempt 분기에서 처리.
+  // (2) 등급은 그대로 면제등급이지만 정산구분만 위탁정산으로 전환한 경우(exemptBreakdown엔 계속 남음) —
+  //     아래 exempt 분기에서 처리.
+  // 두 경우 모두 처리하지 않으면 전환 시점에 과거 미청구분이 그냥 사라진다.
   const stageExemptUnclaimedByInst: Record<number, Record<string, number>> = {};
 
   for (let termNumber = 1; termNumber <= project.totalTerms; termNumber++) {
@@ -1490,7 +1493,13 @@ export function autoGenerateTermFees(projectId: string): void {
     // 일반기관 몫도 기관별로 각자 반올림하면 합계가 generalFee/generalBillingFee와 어긋날 수 있어
     // allocateExact(최대잉여법)로 배분해 합계가 항상 정확히 일치하게 한다.
     const nonExemptWeights = nonExemptMembers.map((m) => getMemberAmount(m, feeBasis));
-    const generalCalcShares = allocateExact(result.generalFee, nonExemptWeights);
+    // generalFee(표준, 100%)와 generalCalcFee(실제 산정액)는 자율성트랙+자체정산 과제에서만 서로 다르다
+    // (85%가 표준 단계에서부터 영구 반영되어 정산이 없음) — 일반과제는 둘이 항상 같은 값이라 아래 두
+    // 배분 결과도 동일하다. 기관별 "산정액"은 반드시 generalCalcFee 기준으로 배분해야, 프로젝트
+    // 전체 합계(calc.calculatedFee, 85%)와 기관별 합계가 어긋나지 않는다.
+    const generalStdShares = allocateExact(result.generalFee, nonExemptWeights);
+    const generalStdShareByInst = new Map(nonExemptMembers.map((m, i) => [m.institutionId, generalStdShares[i]]));
+    const generalCalcShares = allocateExact(result.generalCalcFee, nonExemptWeights);
     const generalCalcShareByInst = new Map(nonExemptMembers.map((m, i) => [m.institutionId, generalCalcShares[i]]));
     const generalBillShares = workType === "ANNUAL" ? allocateExact(result.generalBillingFee, nonExemptWeights) : [];
     const generalBillShareByInst = new Map(nonExemptMembers.map((m, i) => [m.institutionId, generalBillShares[i] ?? 0]));
@@ -1544,27 +1553,36 @@ export function autoGenerateTermFees(projectId: string): void {
         instStandardFee = ed?.standardFee ?? 0;
         instUnclaimedFee = ed?.unclaimedFee ?? 0;
         // 면제기관이 연차상시 동안 미루는 몫만 추적한다 — 정산 연차까지 자체정산을 유지해 계속
-        // 면제기관으로 남으면(이 분기 자체), 그 미청구분은 매출비용으로 소멸시키는 게 기본 처리라
-        // 더 이상 추적하지 않는다(정산 연차에 도달한 시점엔 stageExemptUnclaimedByInst가 리셋된다).
+        // 면제기관으로 남으면, 그 미청구분은 매출비용으로 소멸시키는 게 기본 처리라 더 이상 추적하지 않는다.
         if (workType === "ANNUAL") {
           instAnnualExemptUnclaimed[cm.institutionId] = ed?.unclaimedFee ?? 0;
+        } else if (cm.settlementType === "위탁정산") {
+          // 등급은 면제등급 그대로지만 정산구분만 정산 연차에 위탁정산으로 전환한 경우 — 연차상시 동안
+          // 자체정산으로 할인받아 쌓인 몫(stageExemptUnclaimedByInst)을 이번 정산 청구에 함께 걷는다.
+          // 그렇지 않으면 전환 시점에 그 할인분이 아무 데도 반영되지 않고 그냥 사라진다.
+          const ownExemptCarried = stageExemptUnclaimedByInst[stageNumber]?.[cm.institutionId] ?? 0;
+          instAppliedFee += ownExemptCarried;
+          exemptCarryoverBilledThisTerm += ownExemptCarried;
         }
       } else {
         // 이 기관의 일반수수료(generalFee) 몫 — allocateExact로 미리 배분해둔 정수값이라
         // 전체 기관 합계가 항상 generalFee와 정확히 일치한다.
         const instCalcShare = generalCalcShareByInst.get(cm.institutionId) ?? 0;
         instCalcFee = instCalcShare;
-        // 일반기관은 산정 단계에서 85% 적용이 없으므로 표준수수료 = 산정수수료.
-        instStandardFee = instCalcFee;
+        // 일반과제는 산정 단계에서 85% 적용이 없으므로 표준수수료 = 산정수수료(두 배분 결과가 같은 값).
+        // 자율성트랙+자체정산만 예외적으로 표준(100%)과 산정(85%)이 다르므로 별도 배분값을 쓴다.
+        instStandardFee = generalStdShareByInst.get(cm.institutionId) ?? instCalcFee;
 
         if (workType === "SETTLEMENT") {
           // 정산 연차: 이 기관 자신이 그동안 미뤄온 몫(stageUnclaimedByInst)만 더해서 청구한다.
           // (전체를 합쳐서 이번 연차 비율로 재배분하면, 기관별 사업비 비중이 연차마다 달라질 때
           //  실제로 미뤘던 기관과 다른 기관이 그 몫을 떠안는 오류가 생긴다.)
           const ownCarried = stageUnclaimedByInst[stageNumber]?.[cm.institutionId] ?? 0;
-          // 이 기관이 연차상시 동안엔 면제기관(자체정산)이었다가 정산 연차에 위탁정산으로 전환해
-          // 일반기관 취급을 받는 경우 — 자체정산이던 동안 쌓인 미청구분을 여기서 함께 청구한다.
-          // (그대로 두면 전환 시점에 그 미청구분이 아무 데도 반영되지 않고 사라진다.)
+          // 이 기관이 연차상시 동안엔 면제등급이었다가 등급이 바뀌어(gradeOverrides) 정산 연차엔
+          // exemptBreakdown에서 빠지고 일반기관으로 재분류된 경우 — 자체정산이던 동안 쌓인 미청구분을
+          // 여기서 함께 청구한다. (등급은 그대로 면제등급인데 정산구분만 위탁정산으로 바뀐 경우는
+          // exemptIds 판정이 등급 기준이라 계속 exempt 분기로 들어가므로, 그 케이스는 위 exempt
+          // 분기에서 별도로 처리한다.) 그대로 두면 전환 시점에 그 미청구분이 아무 데도 반영되지 않고 사라진다.
           const ownExemptCarried = stageExemptUnclaimedByInst[stageNumber]?.[cm.institutionId] ?? 0;
           // ownCarried/ownExemptCarried도 이제 매 연차 정수로 쌓이므로 반올림이 필요 없다.
           instAppliedFee = instCalcShare + ownCarried + ownExemptCarried;
