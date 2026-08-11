@@ -157,11 +157,6 @@ export function buildPolicyDisplayRules(
   const exemptPct = policy.exemptionMode === "CUSTOM"
     ? Math.round((policy.exemptCustomRate ?? policy.annualBillingRate) * 100)
     : annualPct;
-  // 면제기관은 표준→산정 단계에서 이미 exemptPct%가 반영되고(calcTermFee의 exemptCalcFeeTotal),
-  // 위탁정산이 아닌 한(연차상시 전체, 정산 연차에도 자체정산 유지) 산정→청구 단계에서 exemptPct%가
-  // 한번 더 곱해진다 — 표준액 대비 실제 비율은 exemptPct%의 제곱이 된다. 위탁정산으로 전환하는
-  // 정산 연차만 산정액을 100% 그대로 청구하므로 표준액 대비 exemptPct%(제곱 아님)에서 멈춘다.
-  const exemptSquaredPct = Math.round((exemptPct * exemptPct) / 100);
   const gradeName: Record<"S" | "A" | "B" | "C", string> = { S: "최우수", A: "우수(A)", B: "우수(B)", C: "우수(C)" };
   const rows: PolicyRule[] = [
     { subject: "기관", grade: "일반", gradeName: "일반", settlementType: "위탁정산", annualRate: annualPct, settlementRate: 100 },
@@ -176,8 +171,8 @@ export function buildPolicyDisplayRules(
       rows.push({ subject: "기관", grade, gradeName: gradeName[grade], settlementType: "제외대상", annualRate: 0, settlementRate: 0 });
       return;
     }
-    rows.push({ subject: "기관", grade, gradeName: gradeName[grade], settlementType: "자체정산", annualRate: exemptSquaredPct, settlementRate: exemptSquaredPct });
-    rows.push({ subject: "기관", grade, gradeName: gradeName[grade], settlementType: "위탁정산", annualRate: exemptSquaredPct, settlementRate: exemptPct });
+    rows.push({ subject: "기관", grade, gradeName: gradeName[grade], settlementType: "자체정산", annualRate: exemptPct, settlementRate: exemptPct });
+    rows.push({ subject: "기관", grade, gradeName: gradeName[grade], settlementType: "위탁정산", annualRate: exemptPct, settlementRate: 100 });
   });
 
   if (policy.hasAutonomyTrack) {
@@ -497,23 +492,12 @@ export function calcTermFee(input: CalcInput): CalcResult {
   const exemptFeeTotal = standardFee - generalFee;
   const exemptStdShares = allocateExact(exemptFeeTotal, exemptMembers.map((m) => amountOf(m)));
 
-  // CUSTOM 모드에서만 면제기관 전용 비율(exemptCustomRate)을 쓰고, 그 외(DISCOUNT)는 일반
+  // CUSTOM 모드에서만 면제기관 전용 청구비율(exemptCustomRate)을 쓰고, 그 외(DISCOUNT)는 일반
   // 기관과 동일한 billingRatio를 그대로 쓴다 — exemptCustomRate 미지정 시엔 billingRatio로 대체한다.
   const exemptBillingRatio = policy.exemptionMode === "CUSTOM"
     ? (policy.exemptCustomRate ?? billingRatio)
     : billingRatio;
 
-  // 표준(100%) → 산정: 면제기관은 등급 혜택이 산정 단계에서부터 영구히 반영된다(exemptBillingRatio를
-  // 정산구분·연차유형과 무관하게 항상 적용) — professional_agency_fee_calculation_flow.md의
-  // "면제기관 수수료 산정 = 1-2 결과 × 85%" 규칙과 동일. 일반기관(표준=산정)과 달리, 면제기관은
-  // 표준과 산정이 이 비율만큼 항상 차이 난다.
-  const exemptCalcFeeTotal = Math.round(exemptFeeTotal * exemptBillingRatio);
-  const exemptCalcShares = allocateExact(exemptCalcFeeTotal, exemptStdShares);
-
-  // 산정 → 청구: 정산 연차에 위탁정산으로 전환한 기관만 산정액을 100% 청구하고, 그 외(연차상시 전체,
-  // 정산 연차에도 자체정산을 유지하는 기관)는 산정액에 다시 한번 exemptBillingRatio를 적용한다 —
-  // 자체정산을 계속 유지하는 면제기관은 정산 연차에도 100% 청구에 도달하지 못하고, 그 차액은
-  // 매몰비용으로 소멸한다(문서의 "미청구누적액은 매몰비용" 각주와 동일).
   const isSettlement = workType === "SETTLEMENT";
   const exemptRatios = exemptMembers.map((m) =>
     isSettlement && m.settlementType === "위탁정산" ? 1.0 : exemptBillingRatio
@@ -525,7 +509,7 @@ export function calcTermFee(input: CalcInput): CalcResult {
     ratioGroups.get(r)!.push(i);
   });
   ratioGroups.forEach((indices, ratio) => {
-    const groupCalc = indices.map((i) => exemptCalcShares[i]);
+    const groupCalc = indices.map((i) => exemptStdShares[i]);
     // 그룹 청구 총액은 반올림해서 정하고(일반기관과 동일 규칙), 그 총액을 그룹 내에서 다시 정확히 배분한다.
     const groupBillTotal = Math.round(groupCalc.reduce((s, c) => s + c, 0) * ratio);
     const groupBill = allocateExact(groupBillTotal, groupCalc);
@@ -534,7 +518,7 @@ export function calcTermFee(input: CalcInput): CalcResult {
 
   const exemptBreakdown: ExemptInstDetail[] = exemptMembers.map((m, idx) => {
     const stdFee = exemptStdShares[idx];
-    const calcFee = exemptCalcShares[idx];
+    const calcFee = stdFee;
     const billFee = exemptBillShares[idx];
     return {
       institutionId: m.institutionId,
@@ -548,9 +532,8 @@ export function calcTermFee(input: CalcInput): CalcResult {
     };
   });
 
-  // 4. 과제 산정수수료 — exemptCalcFeeTotal(면제기관 산정 합계, 위에서 이미 반올림)을 그대로 재사용해야
-  // 기관별 산정액 합계(generalCalcFee + ΣexemptBreakdown.calculatedFee)와 정확히 일치한다.
-  const calculatedFee = generalFee + exemptCalcFeeTotal;
+  // 4. 과제 산정수수료
+  const calculatedFee = Math.round(generalFee + exemptFeeTotal * billingRatio);
 
   // 5. 청구수수료
   const generalCalcFee = generalFee;

@@ -187,7 +187,6 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   const [editingBudgetMember, setEditingBudgetMember] = useState<ProjectMember | null>(null);
   const [editingGradeMember, setEditingGradeMember] = useState<ProjectMember | null>(null);
   const [editingSettlementMember, setEditingSettlementMember] = useState<ProjectMember | null>(null);
-  const [editingRoleMember, setEditingRoleMember] = useState<ProjectMember | null>(null);
   const [showIssueForm, setShowIssueForm] = useState(false);
   const [issueContent, setIssueContent] = useState("");
   const [issuePriority, setIssuePriority] = useState<"HIGH" | "MEDIUM" | "LOW">("MEDIUM");
@@ -320,9 +319,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
     const cm = calcMembers.find((m) => m.institutionId === institutionId);
     if (!cm) return 0;
     const ratio = totalNonExemptCash > 0 ? getMemberAmount(cm, feeBasis) / totalNonExemptCash : 0;
-    // generalCalcFee(실제 산정액)를 써야 한다 — generalFee(표준, 100%)를 쓰면 자율성트랙+자체정산
-    // 과제에서 기관별 합계가 100%로 나와, 상단 "산정 수수료 합계"(totalCalcFee, 85%)와 어긋난다.
-    return Math.round(feeResult.generalCalcFee * ratio);
+    return Math.round(feeResult.generalFee * ratio);
   };
 
   const totalCalcFee = feeResult?.calculatedFee ?? members.reduce((s, m) => s + m.calculatedFee, 0);
@@ -903,19 +900,10 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                           <option value="ENTRUSTED">위탁</option>
                         </select>
                       ) : (
-                        <>
-                          <StatusBadge
-                            label={ROLE_LABEL[m.role]}
-                            color={m.role === "LEAD" ? "blue" : m.role === "ENTRUSTED" ? "amber" : "slate"}
-                          />
-                          <button
-                            onClick={() => setEditingRoleMember(m)}
-                            className="mt-1 flex items-center justify-center mx-auto text-slate-400 hover:text-blue-600 transition-colors"
-                            title="역할 변경"
-                          >
-                            <FiEdit2 size={11} />
-                          </button>
-                        </>
+                        <StatusBadge
+                          label={ROLE_LABEL[m.role]}
+                          color={m.role === "LEAD" ? "blue" : m.role === "ENTRUSTED" ? "amber" : "slate"}
+                        />
                       )}
                     </td>
                     <td className="px-4 py-3 text-center">
@@ -1497,17 +1485,6 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
           />
         </Modal>
       )}
-
-      {editingRoleMember && (
-        <Modal title={`${editingRoleMember.institutionName} · 역할 변경`} onClose={() => setEditingRoleMember(null)}>
-          <RoleEditor
-            member={editingRoleMember}
-            otherMembers={members.filter((m) => m.id !== editingRoleMember.id)}
-            canEdit={canEditProjects}
-            onClose={() => setEditingRoleMember(null)}
-          />
-        </Modal>
-      )}
     </div>
   );
 }
@@ -1784,64 +1761,6 @@ function SettlementTypeOverrideEditor({
           </tbody>
         </table>
       </div>
-      <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-        <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
-          {canEdit ? "취소" : "닫기"}
-        </button>
-        {canEdit && (
-          <button onClick={handleSave} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
-            저장
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ─── 참여기관 역할 변경 ────────────────────────────────────────
-// 등급·정산구분과 달리 역할은 연차별 오버라이드가 없는 단일 값이라 바로 저장한다.
-// role은 FEE_AFFECTING_FIELDS에 포함되어 있어 저장 시 store.ts가 미확정 연차의 수수료를 자동으로 다시 계산한다.
-function RoleEditor({
-  member,
-  otherMembers,
-  canEdit,
-  onClose,
-}: {
-  member: ProjectMember;
-  otherMembers: ProjectMember[];
-  canEdit: boolean;
-  onClose: () => void;
-}) {
-  const [role, setRole] = useState<ProjectMember["role"]>(member.role);
-  const otherLeadCount = otherMembers.filter((m) => m.role === "LEAD").length;
-  // 과제는 통상 주관기관이 정확히 1곳이어야 하므로, 변경 결과 주관기관이 0곳 또는 2곳 이상이 되는
-  // 경우를 미리 알려준다 — 저장을 막지는 않는다(기관 수정 화면의 일괄 변경도 막지 않는 것과 동일).
-  const willHaveNoLead = role !== "LEAD" && otherLeadCount === 0;
-  const willHaveMultipleLead = role === "LEAD" && otherLeadCount > 0;
-
-  function handleSave() {
-    if (role !== member.role) updateProjectMember(member.id, { role });
-    onClose();
-  }
-
-  return (
-    <div className="p-6 space-y-4">
-      <select
-        disabled={!canEdit}
-        value={role}
-        onChange={(e) => setRole(e.target.value as ProjectMember["role"])}
-        className="text-sm border border-slate-300 rounded-lg px-3 py-2 bg-white text-slate-700 disabled:bg-slate-50 disabled:text-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
-      >
-        <option value="LEAD">주관</option>
-        <option value="PARTICIPANT">공동</option>
-        <option value="ENTRUSTED">위탁</option>
-      </select>
-      {willHaveNoLead && (
-        <p className="text-xs text-amber-600">⚠ 이 과제에 주관기관이 없게 됩니다. 다른 기관을 주관으로 지정했는지 확인하세요.</p>
-      )}
-      {willHaveMultipleLead && (
-        <p className="text-xs text-amber-600">⚠ 이미 주관기관으로 지정된 기관이 있습니다. 과제당 주관기관은 1곳이어야 합니다.</p>
-      )}
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
         <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
           {canEdit ? "취소" : "닫기"}
