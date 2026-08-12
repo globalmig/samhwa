@@ -1,4 +1,4 @@
-import { COMPANY_INFO, type AgencyNoticeTemplate } from "./mock";
+import { COMPANY_INFO, type CompanyInfo, type AgencyNoticeTemplate } from "./mock";
 
 export interface NoticeEmailStatusRow {
   label: string;
@@ -21,6 +21,7 @@ export function buildNoticeEmailHtml({
   feeRows,
   docNumber,
   issuedDate,
+  companyInfo = COMPANY_INFO,
 }: {
   template: AgencyNoticeTemplate;
   statusRows?: NoticeEmailStatusRow[];
@@ -28,6 +29,7 @@ export function buildNoticeEmailHtml({
   feeRows?: NoticeEmailStatusRow[];
   docNumber: string;
   issuedDate: string;
+  companyInfo?: CompanyInfo;
 }): string {
   const metaRows: [string, string][] = [
     ["문 서 번 호", docNumber],
@@ -160,10 +162,10 @@ export function buildNoticeEmailHtml({
   return `
 <div style="font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif;font-size:14px;color:#1e293b;max-width:720px;margin:0 auto;">
   <div style="padding-bottom:12px;border-bottom:4px double #1e293b;">
-    <h1 style="font-size:26px;font-weight:800;letter-spacing:6px;margin:0;">${esc(COMPANY_INFO.name)}</h1>
+    <h1 style="font-size:26px;font-weight:800;letter-spacing:6px;margin:0;">${esc(companyInfo.name)}</h1>
   </div>
   <p style="font-size:13px;color:#64748b;padding:8px 0;border-bottom:1px solid #e2e8f0;">
-    ${esc(COMPANY_INFO.addressLine)} Tel : ${esc(COMPANY_INFO.tel)} Fax : ${esc(COMPANY_INFO.fax)} 담당 : ${esc(COMPANY_INFO.preparedBy)}
+    ${esc(companyInfo.addressLine)} Tel : ${esc(companyInfo.tel)} Fax : ${esc(companyInfo.fax)} 담당 : ${esc(companyInfo.preparedBy)}
   </p>
   <table style="width:100%;border-collapse:collapse;border-top:2px solid #334155;margin-top:16px;margin-bottom:20px;">
     ${metaHtml}
@@ -178,8 +180,8 @@ export function buildNoticeEmailHtml({
   ${feeHtml}
   ${attachmentsHtml}
   <div style="margin-top:24px;padding-top:20px;border-top:1px dashed #cbd5e1;text-align:right;">
-    <p style="font-size:18px;font-weight:700;letter-spacing:4px;margin:0 0 8px;">${esc(COMPANY_INFO.name)}</p>
-    <p style="font-size:18px;font-weight:700;margin:0;">대표이사 ${esc(COMPANY_INFO.ceoName)}</p>
+    <p style="font-size:18px;font-weight:700;letter-spacing:4px;margin:0 0 8px;">${esc(companyInfo.name)}</p>
+    <p style="font-size:18px;font-weight:700;margin:0;">대표이사 ${esc(companyInfo.ceoName)}</p>
   </div>
 </div>`;
 }

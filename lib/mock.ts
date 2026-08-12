@@ -2991,7 +2991,24 @@ export interface AgencyGuideTable { caption?: string; headers: string[]; rows: A
 export interface AgencyGuideTab { label: string; tables: AgencyGuideTable[] }
 
 // ─── 공문 발신 회사 정보 (전담기관과 무관한 고정 레터헤드) ──────
-export const COMPANY_INFO = {
+export interface CompanyInfo {
+  name: string;
+  addressLine: string;
+  tel: string;
+  fax: string;
+  preparedBy: string;
+  ceoName: string;
+  docNumberPrefix: string;
+  // 세금계산서 공문(수수료 청구서) 기본 본문에 쓰이는 담당자·입금계좌 안내
+  managerName: string;
+  managerEmail: string;
+  managerPhone: string;
+  depositAccountNote: string;
+  // 대표이사 직인 이미지 — 미지정 시 public/CEO_stamp.png(기본 이미지)를 사용한다.
+  stampDataUrl?: string;
+}
+
+export const COMPANY_INFO: CompanyInfo = {
   name: "삼화회계법인",
   addressLine: "우 06097 서울특별시 강남구 봉은사로 407 (삼성동, 삼화빌딩 8층)",
   tel: "02-3453-9422",
@@ -2999,7 +3016,6 @@ export const COMPANY_INFO = {
   preparedBy: "이진아",
   ceoName: "구병주",
   docNumberPrefix: "삼화",
-  // 세금계산서 공문(수수료 청구서) 기본 본문에 쓰이는 담당자·입금계좌 안내
   managerName: "천기현대리",
   managerEmail: "cgh62@shcpa.co.kr",
   managerPhone: "070-4347-7516",

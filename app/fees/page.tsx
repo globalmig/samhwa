@@ -32,7 +32,6 @@ import {
   type SystemUser,
   EMPTY_NOTICE_TEMPLATE,
   EMPTY_FEE_INVOICE_TEMPLATE,
-  COMPANY_INFO,
 } from "@/lib/mock";
 import { fmtWon, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange } from "@/lib/utils";
 import Modal from "@/components/common/Modal";
@@ -704,7 +703,7 @@ function StandardAttachmentsPanel() {
 type AttachmentRow = { name: string; checked: boolean; dataUrl?: string; previewHtml?: string };
 
 function DispatchModal({ target, onClose }: { target: DispatchTarget; onClose: () => void }) {
-  const { standardAttachments, users, feeInvoiceTemplates } = useStore();
+  const { standardAttachments, users, feeInvoiceTemplates, companyInfo } = useStore();
   // getCurrentUser()는 로그인 시점 스냅샷이라 이후 등록된 하이웍스 계정 정보가 반영되지 않으므로,
   // 실시간 store에서 같은 id의 사용자 레코드를 다시 찾아 발신 계정으로 사용한다.
   const senderUser = users.find((u) => u.id === getCurrentUser()?.id) ?? null;
@@ -729,7 +728,7 @@ function DispatchModal({ target, onClose }: { target: DispatchTarget; onClose: (
     const compact = cat === "ANNUAL" ? "연차상시점검수수료" : "위탁정산수수료";
     if (target.kind === "REVERSE") {
       return `안녕하세요.
-${COMPANY_INFO.name}입니다.
+${companyInfo.name}입니다.
 
 수수료 역발행 관련하여 필요 서류 송부드립니다.
 첨부하여드린 청구서 참고하셔서 역발행하여 주시기 바랍니다.
@@ -758,13 +757,13 @@ ${target.projectName} 과제의 ${termLabel} ${compact} 청구서를 첨부하�
 첨부파일을 확인하시고, 기한 내 납부 부탁드립니다.
 문의사항은 아래 연락처로 연락 주시기 바랍니다.
 
-■담당자 : ${COMPANY_INFO.managerName}(${COMPANY_INFO.managerEmail}, ${COMPANY_INFO.managerPhone})
+■담당자 : ${companyInfo.managerName}(${companyInfo.managerEmail}, ${companyInfo.managerPhone})
 
-■입금계좌 : ${COMPANY_INFO.depositAccountNote}
+■입금계좌 : ${companyInfo.depositAccountNote}
 
 
 감사합니다.
-${COMPANY_INFO.name} 드림`;
+${companyInfo.name} 드림`;
   }
 
   // 청구서 문구/라벨은 하드코딩이 아니라 공문관리 > 수수료 청구서 양식(/notice-templates/invoices)에서
@@ -818,7 +817,7 @@ ${COMPANY_INFO.name} 드림`;
     const invoiceAttachment = {
       name: `청구서_${target.projectNumber}_${termLabel}.pdf`,
       checked: true,
-      previewHtml: buildFeeInvoiceHtml(buildFeeInvoiceTargetData(cat), resolveInvoiceTemplateContent(cat)),
+      previewHtml: buildFeeInvoiceHtml(buildFeeInvoiceTargetData(cat), resolveInvoiceTemplateContent(cat), companyInfo),
     };
     // 사업자등록증·통장사본 등 공통 첨부파일(/notice-templates/invoices에서 관리) — 이 유형(카테고리)
     // 기준으로 꺼져 있는 항목은(파일이 등록돼 있어도) 발송 목록에서 아예 빼서, 그 유형엔 필요 없는
@@ -860,7 +859,7 @@ ${COMPANY_INFO.name} 드림`;
   useEffect(() => {
     let cancelled = false;
     setInvoiceGenerating(true);
-    generateFeeInvoicePdfDataUrl(buildFeeInvoiceTargetData(feeCategory), resolveInvoiceTemplateContent(feeCategory))
+    generateFeeInvoicePdfDataUrl(buildFeeInvoiceTargetData(feeCategory), resolveInvoiceTemplateContent(feeCategory), companyInfo)
       .then((dataUrl) => {
         if (cancelled) return;
         setAttachments((prev) => prev.map((a) => (a.name === invoiceFileName ? { ...a, dataUrl } : a)));
@@ -2108,6 +2107,7 @@ function BulkSettlementNoticeModal({
   senderUser: SystemUser | null;
   onClose: () => void;
 }) {
+  const { companyInfo } = useStore();
   // 공문 양식이 없는 전담기관 과제는 보낼 방법이 없어 건너뛰고, 수신 이메일이 없는 과제도 자동 제외한다
   // (참여기관 목록에 담당자 이메일이 등록돼 있어야 함 — 과제 상세에서 확인 가능).
   const noTemplate = targets.filter((t) => t.templates.length === 0);
@@ -2157,10 +2157,10 @@ function BulkSettlementNoticeModal({
     for (const t of toSend) {
       const templateId = templateChoices[t.agencyShortName] ?? t.templates[0]?.id;
       const template = t.templates.find((x) => x.id === templateId)?.content ?? t.templates[0]?.content ?? EMPTY_NOTICE_TEMPLATE;
-      const docNumber = `${COMPANY_INFO.docNumberPrefix} ${now.getFullYear()}-${String(seq).padStart(4, "0")}`;
+      const docNumber = `${companyInfo.docNumberPrefix} ${now.getFullYear()}-${String(seq).padStart(4, "0")}`;
       seq++;
       const subject = `[${t.projectNumber}] ${template.title || "정산절차 안내 및 수수료 청구"}`;
-      const html = buildNoticeEmailHtml({ template, statusRows: t.statusRows, feeRows: t.feeRows, docNumber, issuedDate });
+      const html = buildNoticeEmailHtml({ template, statusRows: t.statusRows, feeRows: t.feeRows, docNumber, issuedDate, companyInfo });
 
       let status: "SUCCESS" | "FAILED" = "SUCCESS";
       let errMsg = "";
@@ -2285,7 +2285,7 @@ function BulkSettlementNoticeModal({
                       template={template}
                       statusRows={items[0].statusRows}
                       feeRows={items[0].feeRows}
-                      docNumber={`${COMPANY_INFO.docNumberPrefix} ${new Date().getFullYear()}-미리보기`}
+                      docNumber={`${companyInfo.docNumberPrefix} ${new Date().getFullYear()}-미리보기`}
                       issuedDate={new Date().toISOString().slice(0, 10).replace(/-/g, ".")}
                     />
                   </div>

@@ -1,4 +1,4 @@
-import { COMPANY_INFO, type FeeInvoiceTemplate } from "./mock";
+import { COMPANY_INFO, type CompanyInfo, type FeeInvoiceTemplate } from "./mock";
 
 // 수수료 청구서(위탁정산 / 연차상시) PDF 생성.
 // 실제 대표이사 직인 이미지(public/CEO_stamp.png)는 공문 발송(NoticeLetterPreview)에서 이미
@@ -57,7 +57,7 @@ function applyAgency(s: string, agencyFullName: string): string {
 // 화면 미리보기와 PDF 캡처가 항상 같은 내용을 보여주도록 공유하는 HTML 빌더.
 // (PDF 뷰어가 없는 환경/브라우저 정책 때문에 <iframe>으로 최종 PDF를 못 띄우는 경우가 있어,
 // 청구서 첨부는 이 HTML을 모달에 직접 렌더링해서 미리보기를 보여준다.)
-export function buildFeeInvoiceHtml(target: FeeInvoiceTarget, content: FeeInvoiceTemplate): string {
+export function buildFeeInvoiceHtml(target: FeeInvoiceTarget, content: FeeInvoiceTemplate, companyInfo: CompanyInfo = COMPANY_INFO): string {
   const periodLabel = content.periodLabel;
   const periodRange = `${fmtDotPad(target.startDate)}~${fmtDotPad(target.endDate)}`;
   const title = applyAgency(content.title, target.agencyFullName);
@@ -79,7 +79,7 @@ export function buildFeeInvoiceHtml(target: FeeInvoiceTarget, content: FeeInvoic
   return `
   <div style="width:794px;box-sizing:border-box;padding:36px 56px;background:#ffffff;font-family:'Malgun Gothic','맑은 고딕',sans-serif;color:#1e293b;">
     <div style="border-bottom:4px double #1e293b;padding-bottom:10px;">
-      <h1 style="margin:0;font-size:26px;font-weight:800;letter-spacing:8px;color:#0f172a;">${esc(COMPANY_INFO.name).split("").join(" ")}</h1>
+      <h1 style="margin:0;font-size:26px;font-weight:800;letter-spacing:8px;color:#0f172a;">${esc(companyInfo.name).split("").join(" ")}</h1>
     </div>
     <p style="margin:8px 0 0;padding-bottom:8px;border-bottom:1px solid #e2e8f0;font-size:12px;color:#64748b;">
       (06097)서울특별시 강남구 봉은사로 407 (삼성동 37-17) 삼화빌딩 8층 &nbsp; ☎ 02-3453-9422~5 &nbsp; FAX: 02-6442-9129
@@ -137,14 +137,14 @@ export function buildFeeInvoiceHtml(target: FeeInvoiceTarget, content: FeeInvoic
       </table>
     </div>
 
-    <p style="font-size:13px;margin:0 0 24px;">■ 입금계좌 : ${esc(COMPANY_INFO.depositAccountNote)}</p>
+    <p style="font-size:13px;margin:0 0 24px;">■ 입금계좌 : ${esc(companyInfo.depositAccountNote)}</p>
 
     <div style="display:flex;justify-content:flex-end;">
       <div style="text-align:left;">
-        <p style="font-size:18px;font-weight:700;letter-spacing:6px;margin:0 0 10px;">${esc(COMPANY_INFO.name).split("").join(" ")}</p>
+        <p style="font-size:18px;font-weight:700;letter-spacing:6px;margin:0 0 10px;">${esc(companyInfo.name).split("").join(" ")}</p>
         <div style="display:flex;align-items:center;justify-content:flex-start;gap:10px;">
-          <p style="font-size:18px;font-weight:700;margin:0;">대표이사&nbsp;&nbsp;${esc(COMPANY_INFO.ceoName).split("").join(" ")}</p>
-          <img src="${window.location.origin}/CEO_stamp.png" alt="대표이사 인" style="width:60px;height:60px;object-fit:contain;" />
+          <p style="font-size:18px;font-weight:700;margin:0;">대표이사&nbsp;&nbsp;${esc(companyInfo.ceoName).split("").join(" ")}</p>
+          <img src="${companyInfo.stampDataUrl || `${window.location.origin}/CEO_stamp.png`}" alt="대표이사 인" style="width:60px;height:60px;object-fit:contain;" />
         </div>
       </div>
     </div>
@@ -153,7 +153,7 @@ export function buildFeeInvoiceHtml(target: FeeInvoiceTarget, content: FeeInvoic
 
 // html2canvas/jsPDF는 DOM(캔버스)이 필요한 브라우저 전용 라이브러리라 동적 import로
 // 로드한다 (서버 사이드 렌더링 시 번들에 끼어들지 않도록).
-export async function generateFeeInvoicePdfDataUrl(target: FeeInvoiceTarget, content: FeeInvoiceTemplate): Promise<string> {
+export async function generateFeeInvoicePdfDataUrl(target: FeeInvoiceTarget, content: FeeInvoiceTemplate, companyInfo: CompanyInfo = COMPANY_INFO): Promise<string> {
   const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
     import("html2canvas"),
     import("jspdf"),
@@ -163,7 +163,7 @@ export async function generateFeeInvoicePdfDataUrl(target: FeeInvoiceTarget, con
   container.style.position = "fixed";
   container.style.top = "-10000px";
   container.style.left = "0";
-  container.innerHTML = buildFeeInvoiceHtml(target, content);
+  container.innerHTML = buildFeeInvoiceHtml(target, content, companyInfo);
   document.body.appendChild(container);
 
   // 폰트/이미지 로딩이 끝난 뒤 캡처하도록 한 프레임 대기.

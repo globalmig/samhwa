@@ -1,7 +1,8 @@
 import Image from "next/image";
 import type { ReactNode } from "react";
 import { FiPlus, FiX } from "react-icons/fi";
-import { COMPANY_INFO, type AgencyNoticeTemplate } from "@/lib/mock";
+import { type AgencyNoticeTemplate } from "@/lib/mock";
+import { useStore, updateCompanyInfo } from "@/lib/store";
 
 export interface NoticeStatusRow {
   label: string;
@@ -143,6 +144,8 @@ export default function NoticeLetterPreview({
   editable?: boolean;
   onFieldChange?: FieldSetter;
 }) {
+  const { companyInfo } = useStore();
+
   function setField<K extends keyof AgencyNoticeTemplate>(key: K, value: AgencyNoticeTemplate[K]) {
     onFieldChange?.(key, value);
   }
@@ -151,16 +154,16 @@ export default function NoticeLetterPreview({
     <div className="text-base text-slate-800 bg-white">
       {/* 레터헤드 */}
       <div className="pb-3 border-b-4 border-double border-slate-800">
-        <h1 className="text-3xl font-extrabold tracking-[0.3em] text-slate-900">{spaced(COMPANY_INFO.name)}</h1>
+        <h1 className="text-3xl font-extrabold tracking-[0.3em] text-slate-900">{spaced(companyInfo.name)}</h1>
       </div>
       <p className="text-sm text-slate-500 py-2 border-b border-slate-200">
-        {COMPANY_INFO.addressLine} Tel : {COMPANY_INFO.tel} Fax : {COMPANY_INFO.fax} 담당 : {COMPANY_INFO.preparedBy}
+        {companyInfo.addressLine} Tel : {companyInfo.tel} Fax : {companyInfo.fax} 담당 : {companyInfo.preparedBy}
       </p>
 
       {/* 문서 메타 */}
       <div className="mt-4 border-t-2 border-slate-700">
         <MetaRow label="문 서 번 호" dynamic={previewMode}>
-          <span>{docNumber || `${COMPANY_INFO.docNumberPrefix} · 발송 시 자동 채번`}</span>
+          <span>{docNumber || `${companyInfo.docNumberPrefix} · 발송 시 자동 채번`}</span>
           {previewMode && <span className="text-xs text-slate-400 shrink-0">데이터에 따라 변경될 예정</span>}
         </MetaRow>
         <MetaRow label="시 행 일 자" dynamic={previewMode}>
@@ -510,12 +513,62 @@ export default function NoticeLetterPreview({
       {/* 발신 서명 */}
       <div className="pt-6 border-t border-dashed border-slate-300 flex justify-end">
         <div className="flex flex-col items-start gap-2">
-          <p className="text-xl font-bold tracking-widest">{spaced(COMPANY_INFO.name)}</p>
+          {editable && (
+            <p className="text-[10px] text-slate-400">회사명·대표이사명·직인은 이 템플릿뿐 아니라 모든 공문·청구서에 공통 적용됩니다</p>
+          )}
+          {editable ? (
+            <InlineInput
+              value={companyInfo.name}
+              onChange={(v) => updateCompanyInfo({ name: v })}
+              className="text-xl font-bold tracking-widest w-56"
+            />
+          ) : (
+            <p className="text-xl font-bold tracking-widest">{spaced(companyInfo.name)}</p>
+          )}
           <div className="flex items-center gap-3">
-            <p className="text-xl font-bold">대표이사 {COMPANY_INFO.ceoName}</p>
+            {editable ? (
+              <div className="flex items-center gap-1.5">
+                <span className="text-xl font-bold shrink-0">대표이사</span>
+                <InlineInput
+                  value={companyInfo.ceoName}
+                  onChange={(v) => updateCompanyInfo({ ceoName: v })}
+                  className="text-xl font-bold w-28"
+                />
+              </div>
+            ) : (
+              <p className="text-xl font-bold">대표이사 {companyInfo.ceoName}</p>
+            )}
             <div className="relative w-16 h-16 shrink-0">
-              <Image src="/CEO_stamp.png" alt="대표이사 인" fill sizes="64px" className="object-contain" />
+              <Image src={companyInfo.stampDataUrl || "/CEO_stamp.png"} alt="대표이사 인" fill sizes="64px" className="object-contain" />
             </div>
+            {editable && (
+              <div className="flex flex-col gap-1">
+                <label className="shrink-0 text-xs font-medium text-blue-600 border border-blue-200 rounded px-2 py-1 cursor-pointer hover:bg-blue-50 transition-colors whitespace-nowrap">
+                  직인 이미지 변경
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = "";
+                      if (!file) return;
+                      const dataUrl = await fileToDataUrl(file);
+                      updateCompanyInfo({ stampDataUrl: dataUrl });
+                    }}
+                  />
+                </label>
+                {companyInfo.stampDataUrl && (
+                  <button
+                    type="button"
+                    onClick={() => updateCompanyInfo({ stampDataUrl: undefined })}
+                    className="text-xs text-slate-400 hover:text-slate-600 hover:underline"
+                  >
+                    기본 이미지로 되돌리기
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>

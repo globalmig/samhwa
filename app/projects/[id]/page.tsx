@@ -14,8 +14,8 @@ import {
   updateProjectMember, autoGenerateTermFees, addProjectMember, deleteProjectMember, deleteProject,
   setTermOtherFirmHandled, setTermBillingType, setTermDates,
 } from "@/lib/store";
-import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type SystemUser, type EmailDispatch, type FeePolicy, EMPTY_NOTICE_TEMPLATE, COMPANY_INFO } from "@/lib/mock";
-import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isNonProfitInstitution, isExcludedMember, resolveRdaAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, type CalcMember } from "@/lib/fee-calculator";
+import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type SystemUser, type EmailDispatch, type FeePolicy, EMPTY_NOTICE_TEMPLATE } from "@/lib/mock";
+import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveRdaAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, type CalcMember } from "@/lib/fee-calculator";
 import { fmtWonFull, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange } from "@/lib/utils";
 import { fmtValue, fieldLabel } from "@/lib/audit-log-format";
 import StatusBadge from "@/components/common/StatusBadge";
@@ -123,6 +123,10 @@ interface TermGroup {
   receivable: Receivable | null;
   unclaimed: UnclaimedFee | null;
   termStatus: TermFee["status"];
+  // 표준수수료 = 일반수수료 + 면제기관수수료 — TermFeeCalc(연차 단위 산정 스냅샷)에서 가져온다.
+  // 기관별 TermFee엔 이 구분이 안 남아있어 group.fees만으로는 못 갈라낸다.
+  generalFee: number | null;
+  exemptFeeTotal: number | null;
 }
 
 // ─── 세금계산서/공문발송/수금 "청구 단위" ──────────────────────
@@ -922,11 +926,6 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                         <span className={`text-xs font-medium px-2 py-0.5 rounded ${GRADE_COLOR[displayGrade] ?? GRADE_COLOR["일반"]}`} title={`${viewTerm}연차 적용 등급`}>
                           {GRADE_LABEL[displayGrade] ?? displayGrade}
                         </span>
-                      )}
-                      {displayGrade !== "일반" && !isNonProfitInstitution(m.institutionType) && (
-                        <p className="text-[10px] text-amber-600 mt-1 leading-tight" title="정산면제는 비영리기관(대학·정부출연연구소·공공기관)만 해당하여, 영리기업은 등급이 있어도 정산면제가 적용되지 않습니다.">
-                          ⚠ 영리기관·면제불가
-                        </p>
                       )}
                       <button
                         onClick={() => setEditingGradeMember(m)}
@@ -1935,8 +1934,8 @@ function zeroFeeReasons(f: TermFee, role: string | undefined, grade: string, pol
   if (policy?.excludeLeadFromCalc === true && role === "LEAD") {
     reasons.push("주관기관은 이 전담기관 정책상 산정기준액에서 완전히 제외됩니다.");
   }
-  if (policy && isExcludedMember(grade, f.institutionType, policy)) {
-    reasons.push(`${GRADE_LABEL[grade] ?? grade} 등급 비영리기관은 이 전담기관 정책상 산정기준액에서 완전히 제외됩니다(면제등급 완전제외 정책).`);
+  if (policy && isExcludedMember(grade, policy)) {
+    reasons.push(`${GRADE_LABEL[grade] ?? grade} 등급 기관은 이 전담기관 정책상 산정기준액에서 완전히 제외됩니다(면제등급 완전제외 정책).`);
   }
   if (reasons.length === 0 && f.manualOverride) {
     reasons.push("담당자가 금액을 0원으로 직접 수정했습니다.");
@@ -2666,6 +2665,7 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
   const canManageOtherFirm = useCanWrite('fees-other-firm');
   const { institutions, emailDispatches, fundingAgencies, feePolicies } = useStore();
   const policy = resolvePolicy(project.agencyId, feePolicies, project.programType ?? "GENERAL");
+  const defaultSettlementType = policy?.defaultSettlementType ?? "자체정산";
   // 이 연차를 타회계법인이 진행했는지 여부 — 연차 내 기관별 행 전체에 동일하게 반영되므로 첫 행 값을 대표로 사용
   const otherFirmHandled = group.fees[0]?.otherFirmHandled ?? false;
   function toggleOtherFirmHandled(checked: boolean) {
@@ -2677,6 +2677,7 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
 
   const [expanded, setExpanded] = useState(false);
   const [showFeeDetail, setShowFeeDetail] = useState(false);
+  const [showFeeBreakdown, setShowFeeBreakdown] = useState(false);
 
   // 연차 기간 직접 지정 — 값이 있으면(TermFee.termStartDate/termEndDate) 자동계산(resolveTermDateRange)
   // 대신 이 값을 쓴다. 기관마다 1행씩인 TermFee 전체에 동일하게 반영해야 하므로 setTermDates로 일괄 저장한다.
@@ -2708,21 +2709,45 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
   }
 
   // 이 연차까지(포함) 그 기관 자신의 미청구수수료 누적 — 연차별 세부표의 "미청구수수료 누적" 열에 사용.
-  // 일반기관은 정산 연차에 그동안 미뤄온 몫을 전액 청구·회수하므로(그 정산 연차 자신의 unclaimedFee가 0),
-  // 그 시점에 누적을 0으로 리셋한다. 반면 자체정산을 유지하는 면제기관은 정산 연차에도 15%를 못 걷고
-  // 매몰비용으로 남으므로(그 정산 연차의 unclaimedFee가 0이 아님) 리셋하지 않고 계속 누적한다.
+  // 정산 연차에 이월분을 걷었는지 여부와 무관하게, 1연차부터 이 연차까지 발생한 unclaimedFee를
+  // 리셋 없이 그대로 합산한다(회계팀 기준 원본 집계 방식과 일치).
   function getCumulativeUnclaimed(institutionId: string): number {
-    const feesForInst = allFees
+    return allFees
       .filter((af) => af.projectNumber === projectNumber && af.institutionId === institutionId && af.termNumber <= group.termNumber)
-      .sort((a, b) => a.termNumber - b.termNumber);
-    let running = 0;
-    for (const af of feesForInst) {
-      const u = af.unclaimedFee ?? 0;
-      const resolvedAtSettlement = isSettlementTerm(project, af.termNumber) && u === 0;
-      running = resolvedAtSettlement ? 0 : running + u;
-    }
-    return running;
+      .reduce((s, af) => s + (af.unclaimedFee ?? 0), 0);
   }
+
+  // 정산 연차의 "미청구수수료 누적" 표시값 — 누적액 자체는 리셋 없이 그대로 두되, 자체정산 기관은
+  // 정산 연차에도 이월분을 걷지 못하고 매몰비용으로 남는다는 사실을 시각적으로 표시하기 위해
+  // "소멸" 상태를 함께 반환한다.
+  function getUnclaimedDisplay(f: TermFee, settlementType: "위탁정산" | "자체정산"): { amount: number; kind: "normal" | "sunk" } {
+    const cumulative = getCumulativeUnclaimed(f.institutionId);
+    if (isSettlement && settlementType === "자체정산" && cumulative > 0) {
+      return { amount: cumulative, kind: "sunk" };
+    }
+    return { amount: cumulative, kind: "normal" };
+  }
+
+  // 탈퇴/미참여 기관 — 이 연차엔 사업비가 없어 정상 TermFee 행이 생성되지 않지만, 과거 연차에
+  // 쌓인 미청구수수료가 아직 남아있는 기관. 화면에서 조용히 사라지지 않도록 별도 행으로 표시한다.
+  const activeInstitutionIds = new Set(group.fees.map((f) => f.institutionId));
+  const departedRows = Array.from(
+    new Set(
+      allFees
+        .filter((af) => af.projectNumber === projectNumber && af.termNumber < group.termNumber && !activeInstitutionIds.has(af.institutionId))
+        .map((af) => af.institutionId)
+    )
+  )
+    .map((institutionId) => {
+      const cumulative = getCumulativeUnclaimed(institutionId);
+      if (cumulative <= 0) return null;
+      const lastFee = allFees
+        .filter((af) => af.projectNumber === projectNumber && af.institutionId === institutionId && af.termNumber < group.termNumber)
+        .sort((a, b) => b.termNumber - a.termNumber)[0];
+      return lastFee ? { institutionId, institutionName: lastFee.institutionName, cumulative } : null;
+    })
+    .filter((r): r is { institutionId: string; institutionName: string; cumulative: number } => r !== null);
+
   const termLabel = `${group.termYear}년 ${group.termNumber}연차`;
 
   // RDA2는 참여기관마다 세금계산서/공문발송/수금을 따로 관리해야 하므로, 연차 전체를 하나로
@@ -2899,7 +2924,9 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                       <th className="text-left px-4 py-2.5">기관명</th>
                       <th className="text-center px-4 py-2.5">역할</th>
                       <th className="text-center px-4 py-2.5">구분</th>
-                      <th className="text-right px-4 py-2.5">사업비</th>
+                      <th className="text-center px-4 py-2.5">정산구분</th>
+                      <th className="text-right px-4 py-2.5">현금 사업비</th>
+                      <th className="text-right px-4 py-2.5">현금+현물 사업비</th>
                       <th className="text-right px-4 py-2.5">미청구수수료(15%)</th>
                       <th className="text-right px-4 py-2.5">미청구수수료 누적</th>
                       <th className="text-center px-4 py-2.5">비고</th>
@@ -2910,6 +2937,9 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                       const gradeMember = members.find((m) => m.institutionId === f.institutionId);
                       const rawGrade = gradeMember ? resolveMemberGradeForTerm(gradeMember, f.termNumber) : "일반";
                       const grade = normalizeGrade(rawGrade);
+                      const settlementType = gradeMember
+                        ? resolveMemberSettlementTypeForTerm(gradeMember, f.termNumber, defaultSettlementType)
+                        : defaultSettlementType;
                       const cumulativeUnclaimed = getCumulativeUnclaimed(f.institutionId);
                       return (
                         <tr key={f.id} className="border-b border-slate-50">
@@ -2924,6 +2954,16 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                             <span className={`text-xs font-medium px-2 py-0.5 rounded ${GRADE_COLOR[grade] ?? GRADE_COLOR["일반"]}`}>
                               {GRADE_LABEL[grade] ?? grade}
                             </span>
+                          </td>
+                          <td className="px-4 py-2.5 text-center whitespace-nowrap">
+                            <span className={`text-xs font-medium px-2 py-0.5 rounded ${
+                              settlementType === "자체정산" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"
+                            }`}>
+                              {settlementType.replace("정산", "")}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5 text-right text-slate-600 whitespace-nowrap">
+                            {fmtWonFull(gradeMember?.annualBudgets?.find((a) => a.termNumber === f.termNumber)?.cashBudget ?? f.budget)}
                           </td>
                           <td className="px-4 py-2.5 text-right text-slate-600 whitespace-nowrap">{fmtWonFull(f.budget)}</td>
                           <td className="px-4 py-2.5 text-right whitespace-nowrap">
@@ -2943,7 +2983,14 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                   </tbody>
                   <tfoot>
                     <tr className="bg-slate-50 border-t border-slate-100">
-                      <td colSpan={2} className="px-4 py-2 text-right text-xs text-slate-400">합계</td>
+                      <td colSpan={4} className="px-4 py-2 text-right text-xs text-slate-400">합계</td>
+                      <td className="px-4 py-2 text-right text-xs font-semibold text-slate-600 whitespace-nowrap">
+                        {fmtWonFull(group.fees.reduce((s, f) => {
+                          const gm = members.find((m) => m.institutionId === f.institutionId);
+                          const cb = gm?.annualBudgets?.find((a) => a.termNumber === f.termNumber)?.cashBudget ?? f.budget;
+                          return s + cb;
+                        }, 0))}
+                      </td>
                       <td className="px-4 py-2 text-right text-xs font-semibold text-slate-600 whitespace-nowrap">
                         {fmtWonFull(group.fees.reduce((s, f) => s + f.budget, 0))}
                       </td>
@@ -2975,24 +3022,27 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                   <th className="text-left px-4 py-2.5">기관명</th>
                   <th className="text-center px-4 py-2.5">역할</th>
                   <th className="text-center px-4 py-2.5">구분</th>
-                  <th className="text-right px-4 py-2.5">사업비</th>
+                  <th className="text-center px-4 py-2.5">정산구분</th>
+                  <th className="text-right px-4 py-2.5">현금 사업비</th>
+                  <th className="text-right px-4 py-2.5">현금+현물 사업비</th>
                   <th className="text-center px-4 py-2.5">요율</th>
-                  {showFeeDetail && <th className="text-right px-4 py-2.5">표준수수료</th>}
-                  <th className="text-right px-4 py-2.5">표준액(산정)</th>
-                  <th className="text-right px-4 py-2.5">조정액</th>
+                  <th className="text-right px-4 py-2.5">표준수수료</th>
+                  <th className="text-right px-4 py-2.5">미청구수수료</th>
                   <th className="text-right px-4 py-2.5">수수료(적용)</th>
-                  {showFeeDetail && <th className="text-right px-4 py-2.5">미청구수수료</th>}
                   {showFeeDetail && <th className="text-right px-4 py-2.5">미청구수수료 누적</th>}
                   <th className="text-center px-4 py-2.5">상태</th>
                 </tr>
               </thead>
               <tbody>
                 {group.fees.map((f) => {
-                  const adj = f.appliedFee === 0 ? 0 : f.appliedFee - f.calculatedFee;
                   const gradeMember = members.find((m) => m.institutionId === f.institutionId);
                   const rawGrade = gradeMember ? resolveMemberGradeForTerm(gradeMember, f.termNumber) : "일반";
                   const grade = normalizeGrade(rawGrade);
-                  const cumulativeUnclaimed = getCumulativeUnclaimed(f.institutionId);
+                  const settlementType = gradeMember
+                    ? resolveMemberSettlementTypeForTerm(gradeMember, f.termNumber, defaultSettlementType)
+                    : defaultSettlementType;
+                  const unclaimedDisplay = getUnclaimedDisplay(f, settlementType);
+                  const cashBudget = gradeMember?.annualBudgets?.find((a) => a.termNumber === f.termNumber)?.cashBudget ?? f.budget;
                   return (
                     <tr key={f.id} className="border-b border-slate-50 hover:bg-slate-50/50">
                       <td className="px-4 py-2.5 font-medium text-slate-800">{f.institutionName}</td>
@@ -3007,18 +3057,21 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                           {GRADE_LABEL[grade] ?? grade}
                         </span>
                       </td>
+                      <td className="px-4 py-2.5 text-center whitespace-nowrap">
+                        <span className={`text-xs font-medium px-2 py-0.5 rounded ${
+                          settlementType === "자체정산" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"
+                        }`}>
+                          {settlementType.replace("정산", "")}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-slate-600 whitespace-nowrap">{fmtWonFull(cashBudget)}</td>
                       <td className="px-4 py-2.5 text-right text-slate-600 whitespace-nowrap">{fmtWonFull(f.budget)}</td>
                       <td className="px-4 py-2.5 text-center text-blue-700 font-medium">{f.feeRate}%</td>
-                      {showFeeDetail && (
-                        <td className="px-4 py-2.5 text-right text-slate-500 whitespace-nowrap">{fmtWonFull(f.standardFee ?? f.calculatedFee)}</td>
-                      )}
                       <td className="px-4 py-2.5 text-right text-slate-700 whitespace-nowrap">{fmtWonFull(f.calculatedFee)}</td>
                       <td className="px-4 py-2.5 text-right whitespace-nowrap">
-                        {adj === 0
+                        {(f.unclaimedFee ?? 0) === 0
                           ? <span className="text-slate-300">-</span>
-                          : <span className={adj > 0 ? "text-blue-600 font-medium" : "text-red-500 font-medium"}>
-                              {adj > 0 ? "+" : ""}{fmtWonFull(adj)}
-                            </span>}
+                          : <span className="text-amber-600 font-medium">{fmtWonFull(f.unclaimedFee ?? 0)}</span>}
                       </td>
                       <td className="px-4 py-2.5 text-right font-semibold whitespace-nowrap">
                         <AppliedFeeCell
@@ -3030,16 +3083,15 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                       </td>
                       {showFeeDetail && (
                         <td className="px-4 py-2.5 text-right whitespace-nowrap">
-                          {(f.unclaimedFee ?? 0) === 0
-                            ? <span className="text-slate-300">-</span>
-                            : <span className="text-amber-600 font-medium">{fmtWonFull(f.unclaimedFee ?? 0)}</span>}
-                        </td>
-                      )}
-                      {showFeeDetail && (
-                        <td className="px-4 py-2.5 text-right whitespace-nowrap">
-                          {cumulativeUnclaimed === 0
-                            ? <span className="text-slate-300">-</span>
-                            : <span className="text-amber-700 font-medium">{fmtWonFull(cumulativeUnclaimed)}</span>}
+                          {unclaimedDisplay.kind === "sunk" ? (
+                            <span className="text-slate-400 line-through decoration-slate-300" title="정산 연차에 회수하지 못해 소멸(매몰비용) 처리된 이월 미청구액입니다">
+                              {fmtWonFull(unclaimedDisplay.amount)}
+                            </span>
+                          ) : unclaimedDisplay.amount === 0 ? (
+                            <span className="text-slate-300">-</span>
+                          ) : (
+                            <span className="text-amber-700 font-medium">{fmtWonFull(unclaimedDisplay.amount)}</span>
+                          )}
                         </td>
                       )}
                       <td className="px-4 py-2.5 text-center">
@@ -3048,38 +3100,73 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                     </tr>
                   );
                 })}
+                {showFeeDetail && departedRows.map((r) => (
+                  <tr key={r.institutionId} className="border-b border-slate-50 bg-slate-50/40">
+                    <td className="px-4 py-2.5 font-medium text-slate-500">{r.institutionName}</td>
+                    <td className="px-4 py-2.5 text-center whitespace-nowrap">
+                      <span className="text-xs font-medium px-2 py-0.5 rounded bg-slate-100 text-slate-400">탈퇴/미참여</span>
+                    </td>
+                    <td className="px-4 py-2.5 text-center text-slate-300">-</td>
+                    <td className="px-4 py-2.5 text-center text-slate-300">-</td>
+                    <td className="px-4 py-2.5 text-right text-slate-300">-</td>
+                    <td className="px-4 py-2.5 text-right text-slate-300">-</td>
+                    <td className="px-4 py-2.5 text-center text-slate-300">-</td>
+                    <td className="px-4 py-2.5 text-right text-slate-300">-</td>
+                    <td className="px-4 py-2.5 text-right text-slate-300">-</td>
+                    <td className="px-4 py-2.5 text-right text-slate-300">-</td>
+                    <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                      <span className="text-amber-700 font-medium" title="이 연차엔 참여가 없어 정상 행이 생성되지 않지만, 과거 연차에 쌓인 미청구수수료가 남아있습니다">
+                        {fmtWonFull(r.cumulative)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5 text-center text-slate-300">-</td>
+                  </tr>
+                ))}
               </tbody>
               <tfoot>
                 <tr className="bg-slate-50 border-t border-slate-100">
-                  <td colSpan={3} className="px-4 py-2 text-right text-xs text-slate-400">합계</td>
+                  <td colSpan={4} className="px-4 py-2 text-right text-xs text-slate-400">합계</td>
+                  <td className="px-4 py-2 text-right text-xs font-semibold text-slate-600 whitespace-nowrap">
+                    {fmtWonFull(group.fees.reduce((s, f) => {
+                      const gm = members.find((m) => m.institutionId === f.institutionId);
+                      const cb = gm?.annualBudgets?.find((a) => a.termNumber === f.termNumber)?.cashBudget ?? f.budget;
+                      return s + cb;
+                    }, 0))}
+                  </td>
                   <td className="px-4 py-2 text-right text-xs font-semibold text-slate-600 whitespace-nowrap">
                     {fmtWonFull(group.fees.reduce((s, f) => s + f.budget, 0))}
                   </td>
                   <td />
-                  {showFeeDetail && (
-                    <td className="px-4 py-2 text-right text-xs text-slate-500">
-                      {fmtWonFull(group.fees.reduce((s, f) => s + (f.standardFee ?? f.calculatedFee), 0))}
-                    </td>
-                  )}
-                  <td className="px-4 py-2 text-right text-xs font-semibold text-slate-700">{fmtWonFull(group.totalCalculated)}</td>
-                  <td className="px-4 py-2 text-right text-xs">
-                    {(() => {
-                      const adj = group.totalApplied - group.totalCalculated;
-                      if (adj === 0) return <span className="text-slate-300">-</span>;
-                      return <span className={adj > 0 ? "text-blue-600 font-medium" : "text-red-500 font-medium"}>
-                        {adj > 0 ? "+" : ""}{fmtWonFull(adj)}
-                      </span>;
-                    })()}
+                  <td className="px-4 py-2 text-right text-xs font-semibold text-slate-700">
+                    <div className="flex items-center justify-end gap-1">
+                      {(group.generalFee != null || group.exemptFeeTotal != null) && (
+                        <button type="button" onClick={() => setShowFeeBreakdown((v) => !v)}
+                          className="text-slate-300 hover:text-blue-600 transition-colors" title="일반·면제기관 수수료 합계 나눠보기">
+                          {showFeeBreakdown ? <FiChevronUp size={11} /> : <FiChevronDown size={11} />}
+                        </button>
+                      )}
+                      <span>{fmtWonFull(group.totalCalculated)}</span>
+                    </div>
+                    {showFeeBreakdown && (group.generalFee != null || group.exemptFeeTotal != null) && (
+                      <div className="mt-1 text-[10px] font-normal text-slate-400 space-y-0.5">
+                        <div>일반 {fmtWonFull(group.generalFee ?? 0)}</div>
+                        <div>면제기관 {fmtWonFull(group.exemptFeeTotal ?? 0)}</div>
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-4 py-2 text-right text-xs text-amber-600 font-medium">
+                    {fmtWonFull(group.fees.reduce((s, f) => s + (f.unclaimedFee ?? 0), 0))}
                   </td>
                   <td className="px-4 py-2 text-right text-xs font-bold text-slate-800">{fmtWonFull(group.totalApplied)}</td>
                   {showFeeDetail && (
-                    <td className="px-4 py-2 text-right text-xs text-amber-600 font-medium">
-                      {fmtWonFull(group.fees.reduce((s, f) => s + (f.unclaimedFee ?? 0), 0))}
-                    </td>
-                  )}
-                  {showFeeDetail && (
                     <td className="px-4 py-2 text-right text-xs text-amber-700 font-medium">
-                      {fmtWonFull(group.fees.reduce((s, f) => s + getCumulativeUnclaimed(f.institutionId), 0))}
+                      {fmtWonFull(
+                        group.fees.reduce((s, f) => {
+                          const gm = members.find((m) => m.institutionId === f.institutionId);
+                          const st = gm ? resolveMemberSettlementTypeForTerm(gm, f.termNumber, defaultSettlementType) : defaultSettlementType;
+                          return s + getUnclaimedDisplay(f, st).amount;
+                        }, 0) + departedRows.reduce((s, r) => s + r.cumulative, 0)
+                      )}
                     </td>
                   )}
                   <td />
@@ -3149,7 +3236,7 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
 
 // ─── Tab 2: 수수료 관리 ──────────────────────────────────────
 function FeeManagementTab({ projectId }: { projectId: string }) {
-  const { projects, termFees, taxInvoices, receivables, unclaimedFees, projectMembers } = useStore();
+  const { projects, termFees, termFeeCalcs, taxInvoices, receivables, unclaimedFees, projectMembers } = useStore();
   const canRecalc = useCanWrite('fees');
   const [recalculated, setRecalculated] = useState(false);
 
@@ -3195,9 +3282,16 @@ function FeeManagementTab({ projectId }: { projectId: string }) {
       const unclaimed = unclaimedFees.find(
         (u) => u.projectNumber === projectNumber && u.termYear === y && u.termNumber === n
       ) ?? null;
-      return { key, termYear: y, termNumber: n, fees, totalApplied, totalCalculated, invoice, receivable, unclaimed, termStatus };
+      const calc = termFeeCalcs.find(
+        (c) => c.projectNumber === projectNumber && c.termYear === y && c.termNumber === n
+      ) ?? null;
+      return {
+        key, termYear: y, termNumber: n, fees, totalApplied, totalCalculated, invoice, receivable, unclaimed, termStatus,
+        generalFee: calc?.generalFee ?? null,
+        exemptFeeTotal: calc?.exemptFeeTotal ?? null,
+      };
     }).sort((a, b) => b.termYear !== a.termYear ? b.termYear - a.termYear : b.termNumber - a.termNumber);
-  }, [project, termFees, taxInvoices, receivables, unclaimedFees]);
+  }, [project, termFees, termFeeCalcs, taxInvoices, receivables, unclaimedFees]);
 
   if (!project) return null;
 
@@ -3270,6 +3364,7 @@ function SettlementNoticeModal({
   senderUser: SystemUser | null;
   onClose: () => void;
 }) {
+  const { companyInfo } = useStore();
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
   const [toEmail, setToEmail] = useState(recipientEmail);
   const [sending, setSending] = useState(false);
@@ -3289,7 +3384,7 @@ function SettlementNoticeModal({
     setSending(true);
     setSendError("");
     const subject = `[${project.projectNumber}] ${template.title || "정산절차 안내 및 수수료 청구"}`;
-    const html = buildNoticeEmailHtml({ template, statusRows, feeRows, docNumber, issuedDate });
+    const html = buildNoticeEmailHtml({ template, statusRows, feeRows, docNumber, issuedDate, companyInfo });
 
     let status: "SUCCESS" | "FAILED" = "SUCCESS";
     try {
@@ -3424,7 +3519,7 @@ function SettlementNoticeModal({
 export default function ProjectDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
-  const { projects, fundingAgencies, agencyNoticeTemplates, projectMembers, emailDispatches, users, termFees } = useStore();
+  const { projects, fundingAgencies, agencyNoticeTemplates, projectMembers, emailDispatches, users, termFees, companyInfo } = useStore();
   const canEditProjects = useCanWrite('projects');
   const canSendNotice = useCanWrite('emails');
   const [activeTab, setActiveTab] = useState<"info" | "fees">("info");
@@ -3465,7 +3560,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
     { label: "공동연구개발기관수", value: `${coInstitutionCount}개` },
   ];
   const noticeSeq = emailDispatches.filter((e) => e.emailType === "SETTLEMENT_NOTICE").length + 1;
-  const noticeDocNumber = `${COMPANY_INFO.docNumberPrefix} ${new Date().getFullYear()}-${String(noticeSeq).padStart(4, "0")}`;
+  const noticeDocNumber = `${companyInfo.docNumberPrefix} ${new Date().getFullYear()}-${String(noticeSeq).padStart(4, "0")}`;
   const noticeIssuedDate = new Date().toISOString().slice(0, 10).replace(/-/g, ".");
   // getCurrentUser()는 로그인 시점의 스냅샷이라 이후 등록된 하이웍스 계정 정보가 반영되지 않으므로,
   // 실시간 store에서 같은 id의 사용자 레코드를 다시 찾아 발신 계정으로 사용한다.

@@ -204,7 +204,9 @@ function getCellVal(row: Record<string, string>, mappedTo: string | null): strin
 
 function parseAmount(s: string): number {
   const n = Number(s.replace(/[^0-9.-]/g, ""));
-  return Number.isFinite(n) ? n : 0;
+  // 원 단위는 소수점이 없어야 하는데, 엑셀 셀에 소수점 값이 들어있는 경우가 있어(수식 계산 오차 등)
+  // 반올림해서 정수 원으로 맞춘다.
+  return Number.isFinite(n) ? Math.round(n) : 0;
 }
 
 // 엑셀 날짜 셀은 셀 서식이 "날짜"인 경우 시트 파싱 단계에서 일련번호(예: 45108)로 읽힌다.

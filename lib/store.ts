@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { getCurrentUser } from "./auth";
-import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, allocateExact, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, type CalcMember } from "./fee-calculator";
+import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, type CalcMember } from "./fee-calculator";
 import {
   institutions as initialInstitutions,
   projects as initialProjects,
@@ -20,6 +20,8 @@ import {
   feeInvoiceTemplates as initialFeeInvoiceTemplates,
   notices as initialNotices,
   standardAttachments as initialStandardAttachments,
+  COMPANY_INFO as initialCompanyInfo,
+  type CompanyInfo,
   type Institution,
   type Project,
   type ProjectMember,
@@ -80,6 +82,7 @@ export const ENTITY_NAMES: Record<string, string> = {
   notice: "공지사항",
   standardAttachment: "표준 첨부서류",
   feeInvoiceTemplate: "수수료 청구서 양식",
+  companyInfo: "공문 발신 회사 정보",
 };
 
 // ============================================================
@@ -108,6 +111,7 @@ interface StoreState {
   agencyNoticeTemplates: AgencyNoticeTemplateEntry[];
   feeInvoiceTemplates: FeeInvoiceTemplateEntry[];
   standardAttachments: StandardAttachment[];
+  companyInfo: CompanyInfo;
 }
 
 const INITIAL_AUDIT_LOG: AuditEntry[] = [
@@ -249,6 +253,7 @@ let _state: StoreState = {
   agencyNoticeTemplates: [...initialAgencyNoticeTemplates],
   feeInvoiceTemplates: [...initialFeeInvoiceTemplates],
   standardAttachments: [...initialStandardAttachments],
+  companyInfo: { ...initialCompanyInfo },
 };
 
 const _listeners = new Set<() => void>();
@@ -1219,6 +1224,18 @@ export function deleteStandardAttachment(id: string): void {
 }
 
 // ============================================================
+// COMPANY INFO (공문 발신 회사 정보 — 회사명·대표이사·직인 등 전담기관과 무관한 고정 레터헤드)
+// ============================================================
+
+export function updateCompanyInfo(data: Partial<CompanyInfo>): void {
+  const before = _state.companyInfo;
+  const after = { ...before, ...data };
+  _state = { ..._state, companyInfo: after };
+  record("companyInfo", "company-info", after.name, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
+  notify();
+}
+
+// ============================================================
 // USERS
 // ============================================================
 
@@ -1487,13 +1504,9 @@ export function autoGenerateTermFees(projectId: string): void {
     const nonExemptMembers = calcMembers.filter(
       (m) => !exemptIds.has(m.institutionId) && !excludedIds.has(m.institutionId)
     );
-    // 일반기관 몫도 기관별로 각자 반올림하면 합계가 generalFee/generalBillingFee와 어긋날 수 있어
-    // allocateExact(최대잉여법)로 배분해 합계가 항상 정확히 일치하게 한다.
-    const nonExemptWeights = nonExemptMembers.map((m) => getMemberAmount(m, feeBasis));
-    const generalCalcShares = allocateExact(result.generalFee, nonExemptWeights);
-    const generalCalcShareByInst = new Map(nonExemptMembers.map((m, i) => [m.institutionId, generalCalcShares[i]]));
-    const generalBillShares = workType === "ANNUAL" ? allocateExact(result.generalBillingFee, nonExemptWeights) : [];
-    const generalBillShareByInst = new Map(nonExemptMembers.map((m, i) => [m.institutionId, generalBillShares[i] ?? 0]));
+    // 일반기관(면제등급 아님) 기관별 산정·청구 몫 — calcTermFee가 이미 기관별로 정확히 배분해서
+    // 반환하므로(정산 연차엔 정산구분별로 요율이 갈린 상태로) 여기선 그대로 맵으로 옮겨 쓰기만 한다.
+    const generalBreakdownByInst = new Map(result.generalBreakdown.map((g) => [g.institutionId, g]));
 
     // 이번 연차에 기관별로 새로 미뤄지는 몫(ANNUAL일 때만 채움) — 연차 루프가 끝난 뒤
     // stageUnclaimedByInst에 합산한다.
@@ -1550,30 +1563,40 @@ export function autoGenerateTermFees(projectId: string): void {
           instAnnualExemptUnclaimed[cm.institutionId] = ed?.unclaimedFee ?? 0;
         }
       } else {
-        // 이 기관의 일반수수료(generalFee) 몫 — allocateExact로 미리 배분해둔 정수값이라
-        // 전체 기관 합계가 항상 generalFee와 정확히 일치한다.
-        const instCalcShare = generalCalcShareByInst.get(cm.institutionId) ?? 0;
+        // 이 기관의 일반수수료(generalFee) 몫 — calcTermFee가 기관별로 미리 배분해둔 값이라
+        // 전체 기관 합계가 항상 generalFee/generalBillingFee와 정확히 일치한다.
+        const gd = generalBreakdownByInst.get(cm.institutionId);
+        const instCalcShare = gd?.calculatedFee ?? 0;
         instCalcFee = instCalcShare;
         // 일반기관은 산정 단계에서 85% 적용이 없으므로 표준수수료 = 산정수수료.
         instStandardFee = instCalcFee;
 
         if (workType === "SETTLEMENT") {
-          // 정산 연차: 이 기관 자신이 그동안 미뤄온 몫(stageUnclaimedByInst)만 더해서 청구한다.
-          // (전체를 합쳐서 이번 연차 비율로 재배분하면, 기관별 사업비 비중이 연차마다 달라질 때
-          //  실제로 미뤘던 기관과 다른 기관이 그 몫을 떠안는 오류가 생긴다.)
-          const ownCarried = stageUnclaimedByInst[stageNumber]?.[cm.institutionId] ?? 0;
-          // 이 기관이 연차상시 동안엔 면제기관(자체정산)이었다가 정산 연차에 위탁정산으로 전환해
-          // 일반기관 취급을 받는 경우 — 자체정산이던 동안 쌓인 미청구분을 여기서 함께 청구한다.
-          // (그대로 두면 전환 시점에 그 미청구분이 아무 데도 반영되지 않고 사라진다.)
-          const ownExemptCarried = stageExemptUnclaimedByInst[stageNumber]?.[cm.institutionId] ?? 0;
-          // ownCarried/ownExemptCarried도 이제 매 연차 정수로 쌓이므로 반올림이 필요 없다.
-          instAppliedFee = instCalcShare + ownCarried + ownExemptCarried;
-          exemptCarryoverBilledThisTerm += ownExemptCarried;
-          // 정산 연차의 일반기관은 100% 청구되므로 이번 연차 자체가 새로 남기는 미청구는 없다.
-          instUnclaimedFee = 0;
+          // 정산 연차: 등급과 무관하게 이 기관의 정산구분만으로 갈린다.
+          if (cm.settlementType === "자체정산") {
+            // 자체정산: billingRatio만 청구하고, 그동안 쌓아온 이월 미청구액은 청구하지 않는다
+            // (매몰비용으로 소멸) — gd.billingFee가 이미 calcTermFee에서 이 비율로 계산돼 있으므로 그대로 쓴다.
+            instAppliedFee = gd?.billingFee ?? 0;
+            instUnclaimedFee = gd?.unclaimedFee ?? 0;
+          } else {
+            // 위탁정산: 이번 연차 산정액 100%(gd.billingFee, ratio=1.0이라 instCalcShare와 동일) +
+            // 이 기관 자신이 그동안 미뤄온 몫(stageUnclaimedByInst)을 더해서 청구한다. 전체를 합쳐서
+            // 이번 연차 비율로 재배분하면, 기관별 사업비 비중이 연차마다 달라질 때 실제로 미뤘던
+            // 기관과 다른 기관이 그 몫을 떠안는 오류가 생기므로 기관 자신의 누적분만 더한다.
+            const ownCarried = stageUnclaimedByInst[stageNumber]?.[cm.institutionId] ?? 0;
+            // 이 기관이 연차상시 동안엔 면제기관(자체정산)이었다가 정산 연차에 위탁정산으로 전환해
+            // 일반기관 취급을 받는 경우 — 자체정산이던 동안 쌓인 미청구분을 여기서 함께 청구한다.
+            // (그대로 두면 전환 시점에 그 미청구분이 아무 데도 반영되지 않고 사라진다.)
+            const ownExemptCarried = stageExemptUnclaimedByInst[stageNumber]?.[cm.institutionId] ?? 0;
+            // ownCarried/ownExemptCarried도 이제 매 연차 정수로 쌓이므로 반올림이 필요 없다.
+            instAppliedFee = (gd?.billingFee ?? 0) + ownCarried + ownExemptCarried;
+            exemptCarryoverBilledThisTerm += ownExemptCarried;
+            // 위탁정산은 100% 청구되므로 이번 연차 자체가 새로 남기는 미청구는 없다.
+            instUnclaimedFee = 0;
+          }
         } else {
-          // 청구액도 allocateExact로 미리 배분해둔 정수값이라 합계가 generalBillingFee와 정확히 일치한다.
-          const instBillShare = generalBillShareByInst.get(cm.institutionId) ?? 0;
+          // 청구액도 calcTermFee가 미리 배분해둔 정수값이라 합계가 generalBillingFee와 정확히 일치한다.
+          const instBillShare = gd?.billingFee ?? 0;
           instAppliedFee = instBillShare;
           instUnclaimedFee = instCalcShare - instBillShare;
           instAnnualUnclaimed[cm.institutionId] = instUnclaimedFee;
