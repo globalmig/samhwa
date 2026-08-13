@@ -74,7 +74,7 @@ KEIT/KETEP/IITP/KOFPI/RDA1/RDA2 등 6개 전담기관.
 | 필드 | 설명 |
 |---|---|
 | noticeRecipientScope | `LEAD_ONLY`(주관기관만 발송) \| `LEAD_AND_PARTICIPANTS`(주관+공동 모두 발송) |
-| rda2AffiliatedInstitutionNames | RDA2 전용 — 주관기관명이 이 목록에 있으면 RDA1 대신 RDA2 정책 자동 적용(`resolveRdaAgencyId`). "농촌진흥청"이라는 같은 표시명을 가진 fa-005(RDA1)/fa-006(RDA2) 두 레코드를 구분하는 유일한 근거 |
+| autoDetectByLeadInstitution / affiliatedInstitutionNames | 전담기관 어디든 켤 수 있는 소속기관 자동판별(`resolveAutoDetectedAgencyId`) — 주관기관명이 목록에 있으면 다른 전담기관을 선택해도 이 전담기관으로 자동 교정된다. fa-006(RDA2)이 대표 사용 사례로, "농촌진흥청"이라는 같은 표시명을 가진 fa-005(RDA1)와 구분하는 근거로 쓰인다(수수료 기준 관리 화면에서 전담기관별로 켜고 목록 편집 가능) |
 
 ---
 

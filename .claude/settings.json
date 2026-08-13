@@ -11,7 +11,17 @@
       "Bash(ssh -i /c/Users/user/AppData/Local/Temp/claude/d--file-hyebinkim-development-samhwa/da9810bd-2ea2-47db-9a24-e1a01fc523ea/scratchpad/samhwa_employee -o BatchMode=yes -o ConnectTimeout=10 -p 22 shcpa8f@211.115.107.58 'chcp 65001 & sqlcmd -S localhost,1433 -U samhwafee_app -P Sf_96869a36db0e2735! -d SamhwaFee -Q \"SELECT DB_NAME\\(\\) AS ConnectedDB, SYSTEM_USER AS LoginUser, GETDATE\\(\\) AS ServerTime\"')",
       "Bash(mkdir -p \"/c/Users/user/AppData/Local/Temp/claude/d--file-hyebinkim-development-samhwa/da9810bd-2ea2-47db-9a24-e1a01fc523ea/scratchpad\")",
       "Bash(cat)",
-      "Bash(ssh -i /c/Users/user/AppData/Local/Temp/claude/d--file-hyebinkim-development-samhwa/da9810bd-2ea2-47db-9a24-e1a01fc523ea/scratchpad/samhwa_employee -o BatchMode=yes -o ConnectTimeout=10 -p 22 shcpa8f@211.115.107.58 'chcp 65001 & sqlcmd -S localhost\\\\SQLEXPRESS -E -Q \"SET NOCOUNT ON; SELECT name, state_desc FROM sys.databases; SELECT SERVERPROPERTY\\('\\\\''Edition'\\\\''\\) AS Edition, SERVERPROPERTY\\('\\\\''EngineEdition'\\\\''\\) AS EngineEdition\" & echo ---DISK--- & wmic logicaldisk get Caption,FreeSpace,Size')"
+      "Bash(ssh -i /c/Users/user/AppData/Local/Temp/claude/d--file-hyebinkim-development-samhwa/da9810bd-2ea2-47db-9a24-e1a01fc523ea/scratchpad/samhwa_employee -o BatchMode=yes -o ConnectTimeout=10 -p 22 shcpa8f@211.115.107.58 'chcp 65001 & sqlcmd -S localhost\\\\SQLEXPRESS -E -Q \"SET NOCOUNT ON; SELECT name, state_desc FROM sys.databases; SELECT SERVERPROPERTY\\('\\\\''Edition'\\\\''\\) AS Edition, SERVERPROPERTY\\('\\\\''EngineEdition'\\\\''\\) AS EngineEdition\" & echo ---DISK--- & wmic logicaldisk get Caption,FreeSpace,Size')",
+      "Bash(awk 'NR>=1024 && NR<=1400 {print NR\": \"$0}' app/company-class/page.tsx)",
+      "Bash(grep -n \"^.*: }$\")",
+      "Bash(npx --prefix \"d:/file_hyebinkim/development/samhwa\" tsc mock.ts fee-calculator.ts utils.ts auth.ts store.ts --module esnext --target es2020 --outDir out --moduleResolution node --skipLibCheck)",
+      "Bash(node -e ' *)",
+      "Bash(node test.mjs)",
+      "Bash(rm -rf out)",
+      "Bash(\"d:\\\\file_hyebinkim\\\\development\\\\samhwa\\\\node_modules\\\\.bin\\\\tsc\" fee-calculator.ts mock.ts utils.ts --module esnext --target es2020 --moduleResolution bundler --outDir out)",
+      "Bash(\"d:\\\\file_hyebinkim\\\\development\\\\samhwa\\\\node_modules\\\\.bin\\\\tsc\" test.mts --module esnext --target es2020 --moduleResolution bundler --outDir out)",
+      "Bash(node out/test.mjs)",
+      "Bash(\"d:\\\\file_hyebinkim\\\\development\\\\samhwa\\\\node_modules\\\\.bin\\\\tsc\" fee-calculator.ts mock.ts utils.ts test.mts --module esnext --target es2020 --moduleResolution bundler --outDir out)"
     ]
   }
 }

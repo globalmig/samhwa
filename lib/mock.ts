@@ -227,7 +227,7 @@ export const institutions: Institution[] = [
     status: "ACTIVE",
   },
   // inst-016~019: RDA2 "과제 구성 예시(P001·A과제)" 템플릿 재현용 신규 기관 — p-014(RDA1판)의 RDA2 대응.
-  // inst-016(주관)은 rda2AffiliatedInstitutionNames에 속한 소속기관이라 excludeLeadFromCalc가 실제로 발동한다.
+  // inst-016(주관)은 fa-006의 affiliatedInstitutionNames에 속한 소속기관이라 excludeLeadFromCalc가 실제로 발동한다.
   {
     id: "inst-016",
     name: "국립원예특작과학원",
@@ -346,9 +346,15 @@ export interface FundingAgency {
   website?: string;
   // 공문 · 세금계산서 발송 대상 — LEAD_ONLY: 주관기관만, LEAD_AND_PARTICIPANTS: 주관+참여(공동)기관 모두
   noticeRecipientScope: "LEAD_ONLY" | "LEAD_AND_PARTICIPANTS";
-  // RDA2 전용 — 주관기관명이 이 목록에 있으면 RDA1 대신 RDA2 정책이 자동 적용된다(resolveRdaAgencyId).
-  // 농촌진흥청 본청·소속기관 구성이 바뀔 수 있어 코드에 고정하지 않고 기관 데이터로 관리한다.
-  rda2AffiliatedInstitutionNames?: string[];
+  // 소속기관 자동판별 — 켜두면(autoDetectByLeadInstitution) 주관기관명이 affiliatedInstitutionNames에
+  // 있는 과제는 사용자가 다른 전담기관을 선택해도 이 전담기관으로 자동 교정된다(resolveAutoDetectedAgencyId).
+  // RDA1/RDA2(둘 다 표시명이 "농촌진흥청")처럼 같은 실제 기관을 정책상 여러 전담기관 레코드로
+  // 나눠 관리하는 경우에 쓰며, 소속기관 구성이 바뀔 수 있어 코드에 고정하지 않고 데이터로 관리한다.
+  autoDetectByLeadInstitution?: boolean;
+  affiliatedInstitutionNames?: string[];
+  // 기관별 특이사항 — 수수료 기준 관리 화면의 "수수료 산정 특성" 카드에 표시되는 자유 텍스트 메모.
+  // 정책 파라미터로부터 자동 계산되는 값이 아니라, 담당자가 직접 입력·관리하는 순수 참고용 메모다.
+  specialNotes?: string[];
 }
 
 export const fundingAgencies: FundingAgency[] = [
@@ -364,6 +370,10 @@ export const fundingAgencies: FundingAgency[] = [
     registeredAt: "2022-01-01",
     website: "https://www.keit.re.kr",
     noticeRecipientScope: "LEAD_ONLY",
+    specialNotes: [
+      "단계협약(단계별 협약) 과제 지원 — 단계 내 연차상시 + 마지막 연차 정산",
+      "자율성트랙 과제: 전 기간 산정수수료의 85% 균일 청구",
+    ],
   },
   {
     id: "fa-002",
@@ -377,6 +387,11 @@ export const fundingAgencies: FundingAgency[] = [
     registeredAt: "2022-01-01",
     website: "https://www.ketep.re.kr",
     noticeRecipientScope: "LEAD_ONLY",
+    specialNotes: [
+      "가산금 일률 방식: 공동기관 수 × 기본수수료 10% (KEIT 누진 방식과 다름)",
+      "S등급만 면제 (A~C는 면제 아님)",
+      "자율성트랙 없음",
+    ],
   },
   {
     id: "fa-003",
@@ -390,6 +405,13 @@ export const fundingAgencies: FundingAgency[] = [
     registeredAt: "2022-03-01",
     website: "https://www.iitp.kr",
     noticeRecipientScope: "LEAD_ONLY",
+    specialNotes: [
+      "위탁기관 있음 — 수수료 산정 시 공동기관과 동일하게 취급",
+      "S등급은 업무 자체를 하지 않아 산정기준액에서 완전 제외 (연차상시도 없음)",
+      "A~C 등급은 면제 없음 — 일반기관과 동일하게 위탁정산 처리",
+      "자율성트랙 없음",
+      "ICT 기금사업은 별도 정책(사업 유형: ICT 기금사업)으로 관리 — 공동기관 구분 없이 참여기관별 개별 산정, 매년 100% 청구",
+    ],
   },
   {
     id: "fa-004",
@@ -403,6 +425,11 @@ export const fundingAgencies: FundingAgency[] = [
     registeredAt: "2022-01-01",
     website: "https://www.kofpi.or.kr",
     noticeRecipientScope: "LEAD_ONLY",
+    specialNotes: [
+      "위탁기관 있음 — 수수료 산정 시 공동기관과 동일하게 취급",
+      "S·A~C 등급 관계없이 모든 기관을 일반기관으로 취급 (면제 없음)",
+      "연차상시·정산 구분 없이 항상 100% 청구 → 미청구액 개념 없음",
+    ],
   },
   {
     id: "fa-005",
@@ -416,6 +443,12 @@ export const fundingAgencies: FundingAgency[] = [
     registeredAt: "2022-07-01",
     website: "https://www.rda.go.kr",
     noticeRecipientScope: "LEAD_AND_PARTICIPANTS",
+    specialNotes: [
+      "현금 + 현물 합산 기준으로 산정 (다른 전담기관은 현금만)",
+      "S등급은 산정기준액에서 완전 제외 (연차상시도 없음)",
+      "연차별 산정수수료가 10만원 미만이면 10만원을 기준으로 하고 차액은 이월",
+      "자율성트랙 없음",
+    ],
   },
   {
     id: "fa-006",
@@ -429,13 +462,19 @@ export const fundingAgencies: FundingAgency[] = [
     registeredAt: "2023-09-01",
     website: "https://www.rda.go.kr",
     noticeRecipientScope: "LEAD_AND_PARTICIPANTS",
-    rda2AffiliatedInstitutionNames: [
+    autoDetectByLeadInstitution: true,
+    affiliatedInstitutionNames: [
       "농촌진흥청",
       "국립농업과학원",
       "국립식량과학원",
       "농촌인력자원개발센터",
       "국립원예특작과학원",
       "국립축산과학원",
+    ],
+    specialNotes: [
+      "RDA1과 동일 기준 + 주관기관(농진청 또는 소속기관)을 산정기준액에서 완전 제외하고 공동기관수 -1 보정",
+      "일반수수료를 공동기관별 사업비 비율로 배분 — 다만 공동기관별 개별 세금계산서 발행(분리 청구) 기능은 아직 미구현",
+      "연차별 산정수수료 10만원 미만 시 10만원 기준 적용, 차액 이월",
     ],
   },
 ];
@@ -819,7 +858,7 @@ export const projects: Project[] = [
     registeredAt: "2021-01-05",
   },
   // p-015: RDA2 "과제 구성 예시(P001·A과제)" 그대로 재현 — p-014(RDA1판)와 동일한 예산 구성을
-  // RDA2로 옮긴 버전. 주관기관(inst-016 국립원예특작과학원)이 rda2AffiliatedInstitutionNames에
+  // RDA2로 옮긴 버전. 주관기관(inst-016 국립원예특작과학원)이 fa-006의 affiliatedInstitutionNames에
   // 속해 있어 excludeLeadFromCalc가 적용되고, 기관B(최우수 S)는 EXCLUDE 규칙으로 완전 제외된다.
   {
     id: "p-015",

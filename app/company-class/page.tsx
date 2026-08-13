@@ -215,48 +215,14 @@ function BracketEditor({ brackets, onChange }: { brackets: FeeRateBracket[]; onC
   );
 }
 
-// ─── 기관 특이사항 메모 ───────────────────────────────────────
-const AGENCY_SPECIAL_NOTES: Record<string, string[]> = {
-  KOFPI: [
-    "위탁기관 있음 — 수수료 산정 시 공동기관과 동일하게 취급",
-    "S·A~C 등급 관계없이 모든 기관을 일반기관으로 취급 (면제 없음)",
-    "연차상시·정산 구분 없이 항상 100% 청구 → 미청구액 개념 없음",
-  ],
-  KEIT: [
-    "단계협약(단계별 협약) 과제 지원 — 단계 내 연차상시 + 마지막 연차 정산",
-    "자율성트랙 과제: 전 기간 산정수수료의 85% 균일 청구",
-  ],
-  KETEP: [
-    "가산금 일률 방식: 공동기관 수 × 기본수수료 10% (KEIT 누진 방식과 다름)",
-    "S등급만 면제 (A~C는 면제 아님)",
-    "자율성트랙 없음",
-  ],
-  IITP: [
-    "위탁기관 있음 — 수수료 산정 시 공동기관과 동일하게 취급",
-    "S등급은 업무 자체를 하지 않아 산정기준액에서 완전 제외 (연차상시도 없음)",
-    "A~C 등급은 면제 없음 — 일반기관과 동일하게 위탁정산 처리",
-    "자율성트랙 없음",
-    "ICT 기금사업은 별도 정책(사업 유형: ICT 기금사업)으로 관리 — 공동기관 구분 없이 참여기관별 개별 산정, 매년 100% 청구",
-  ],
-  RDA1: [
-    "현금 + 현물 합산 기준으로 산정 (다른 전담기관은 현금만)",
-    "S등급은 산정기준액에서 완전 제외 (연차상시도 없음)",
-    "연차별 산정수수료가 10만원 미만이면 10만원을 기준으로 하고 차액은 이월",
-    "자율성트랙 없음",
-  ],
-  RDA2: [
-    "RDA1과 동일 기준 + 주관기관(농진청 또는 소속기관)을 산정기준액에서 완전 제외하고 공동기관수 -1 보정",
-    "일반수수료를 공동기관별 사업비 비율로 배분 — 다만 공동기관별 개별 세금계산서 발행(분리 청구) 기능은 아직 미구현",
-    "연차별 산정수수료 10만원 미만 시 10만원 기준 적용, 차액 이월",
-  ],
-};
-
-
 // ─── 전담기관 수수료 산정 특성 요약 ─────────────────────────
-function AgencyFeeModelSummary({ agency, policy }: { agency: { shortName: string; name: string } | undefined; policy: FeePolicy }) {
+// 기관별 특이사항(agency.specialNotes)은 정책 파라미터에서 자동 계산되는 값이 아니라, "전담기관 관리"
+// 모달에서 담당자가 직접 입력·수정하는 순수 참고용 메모다(하드코딩 아님). 정책 자체의 경과조치
+// 안내(policy.legacyTransitionNote)만 정책별로 따로 있어 뒤에 이어 붙인다.
+function AgencyFeeModelSummary({ agency, policy }: { agency: Pick<FundingAgency, "shortName" | "name" | "specialNotes"> | undefined; policy: FeePolicy }) {
   const [showBrackets, setShowBrackets] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
-  const staticNotes = agency ? (AGENCY_SPECIAL_NOTES[agency.shortName] ?? []) : [];
+  const staticNotes = agency?.specialNotes ?? [];
   const notes = policy.legacyTransitionNote ? [...staticNotes, policy.legacyTransitionNote] : staticNotes;
 
   // 각 항목을 값(짧은 배지)과 부가설명(작은 회색 텍스트)으로 분리한다 — 예전처럼 한 줄에
@@ -728,31 +694,38 @@ function PolicyForm({ initial, onSubmit, onClose }: { initial: PolicyFormData; o
   );
 }
 
-// ─── RDA2 소속기관 자동판별 목록 편집기 ──────────────────────────
-// 주관기관명이 이 목록에 있으면 새 과제 등록/수정 시 RDA1 대신 RDA2 정책이 자동 적용된다(resolveRdaAgencyId).
-function RdaAffiliatedNamesEditor({ names, onChange }: { names: string[]; onChange: (names: string[]) => void }) {
-  function add() { onChange([...names, ""]); }
-  function remove(i: number) { onChange(names.filter((_, idx) => idx !== i)); }
-  function set(i: number, v: string) { onChange(names.map((n, idx) => (idx === i ? v : n))); }
+// ─── 소속기관 자동판별 목록 편집기 ──────────────────────────────
+// 이 전담기관 자동판별을 켜두면, 새 과제 등록/수정·엑셀 업로드 시 주관기관명이 아래 목록에 있는
+// 과제는 다른 전담기관을 선택해도 이 전담기관으로 자동 교정된다(resolveAutoDetectedAgencyId).
+// RDA1/RDA2처럼 같은 실제 기관을 정책상 여러 전담기관 레코드로 나눠 관리할 때 쓰지만,
+// 특정 전담기관 한 곳에만 국한되지 않고 어느 전담기관이든 켤 수 있다.
+// 소속기관 목록·기관별 특이사항 둘 다 "문자열 여러 줄을 추가/삭제하며 편집"하는 동일한 모양이라
+// 하나의 컴포넌트를 공유한다.
+function StringListEditor({
+  label, addLabel, placeholder, emptyText, values, onChange,
+}: {
+  label: string; addLabel: string; placeholder: string; emptyText: string;
+  values: string[]; onChange: (values: string[]) => void;
+}) {
+  function add() { onChange([...values, ""]); }
+  function remove(i: number) { onChange(values.filter((_, idx) => idx !== i)); }
+  function set(i: number, v: string) { onChange(values.map((n, idx) => (idx === i ? v : n))); }
 
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
-        <label className="block text-xs font-medium text-slate-600">
-          RDA2 소속기관 자동판별 목록
-          <span className="ml-1 text-slate-400 font-normal">· 주관기관명이 여기 있으면 RDA2로 자동 지정됨</span>
-        </label>
+        <label className="block text-xs font-medium text-slate-600">{label}</label>
         <button type="button" onClick={add} className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors">
-          <FiPlus size={11} />기관 추가
+          <FiPlus size={11} />{addLabel}
         </button>
       </div>
       <div className="border border-slate-200 rounded-lg overflow-hidden">
-        {names.length === 0 ? (
-          <p className="px-3 py-3 text-xs text-slate-400">등록된 기관명이 없습니다. "기관 추가"로 등록하세요.</p>
+        {values.length === 0 ? (
+          <p className="px-3 py-3 text-xs text-slate-400">{emptyText}</p>
         ) : (
-          names.map((name, i) => (
+          values.map((value, i) => (
             <div key={i} className="flex items-center gap-2 px-3 py-1.5 border-b border-slate-100 last:border-0">
-              <input value={name} onChange={(e) => set(i, e.target.value)} placeholder="예: 국립농업과학원"
+              <input value={value} onChange={(e) => set(i, e.target.value)} placeholder={placeholder}
                 className="flex-1 text-xs border border-slate-200 rounded px-2 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400" />
               <button type="button" onClick={() => remove(i)} className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors">
                 <FiTrash2 size={12} />
@@ -770,6 +743,9 @@ const EMPTY_AGENCY: Omit<FundingAgency, "id"> = {
   name: "", shortName: "", code: "", contactName: "", contactEmail: "",
   contactPhone: "", status: "ACTIVE", registeredAt: new Date().toISOString().slice(0, 10), website: "",
   noticeRecipientScope: "LEAD_ONLY",
+  autoDetectByLeadInstitution: false,
+  affiliatedInstitutionNames: [],
+  specialNotes: [],
 };
 
 function AgencyForm({ initial, onSubmit, onClose }: { initial: Omit<FundingAgency, "id">; onSubmit: (d: Omit<FundingAgency, "id">) => void; onClose: () => void }) {
@@ -830,12 +806,39 @@ function AgencyForm({ initial, onSubmit, onClose }: { initial: Omit<FundingAgenc
           <option value="LEAD_AND_PARTICIPANTS">주관+참여기관 모두</option>
         </select>
       </div>
-      {form.shortName === "RDA2" && (
-        <RdaAffiliatedNamesEditor
-          names={form.rda2AffiliatedInstitutionNames ?? []}
-          onChange={(names) => s("rda2AffiliatedInstitutionNames", names)}
+      <div>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" checked={form.autoDetectByLeadInstitution ?? false}
+            onChange={(e) => s("autoDetectByLeadInstitution", e.target.checked)}
+            className="rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+          <span className="text-xs font-medium text-slate-700">소속기관 자동판별</span>
+        </label>
+        <p className="text-[10px] text-slate-400 mt-1 ml-6">
+          켜두면 주관기관명이 아래 목록에 있는 과제는 다른 전담기관을 선택해도 이 전담기관으로 자동 교정됩니다
+          (예: RDA1/RDA2처럼 같은 실제 기관을 전담기관 레코드 여러 개로 나눠 관리하는 경우).
+        </p>
+        {form.autoDetectByLeadInstitution && (
+          <div className="mt-2">
+            <StringListEditor
+              label="소속기관 목록" addLabel="기관 추가" placeholder="예: 국립농업과학원"
+              emptyText='등록된 기관명이 없습니다. "기관 추가"로 등록하세요.'
+              values={form.affiliatedInstitutionNames ?? []}
+              onChange={(names) => s("affiliatedInstitutionNames", names)}
+            />
+          </div>
+        )}
+      </div>
+      <div>
+        <StringListEditor
+          label="기관별 특이사항" addLabel="특이사항 추가" placeholder="예: S등급은 산정기준액에서 완전 제외"
+          emptyText='등록된 특이사항이 없습니다. "특이사항 추가"로 등록하세요.'
+          values={form.specialNotes ?? []}
+          onChange={(notes) => s("specialNotes", notes)}
         />
-      )}
+        <p className="text-[10px] text-slate-400 mt-1">
+          &ldquo;수수료 산정 특성&rdquo; 카드의 특이사항에 그대로 표시됩니다 — 정책 값에서 자동으로 계산되지 않는 순수 참고용 메모입니다.
+        </p>
+      </div>
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
         <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
         <button onClick={() => onSubmit(form)} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">저장</button>
@@ -1071,7 +1074,7 @@ export default function CompanyClassPage() {
       : "전담기관 관리";
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 pb-16">
       {/* 탭 + 전담기관 관리 버튼 */}
       <div className="bg-white rounded-xl border border-slate-200 flex items-center overflow-hidden">
         <div className="flex overflow-x-auto flex-1">

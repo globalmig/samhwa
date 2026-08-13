@@ -44,7 +44,7 @@ import SimpleNoticeModal, { type SimpleNoticeTarget } from "@/components/common/
 import { buildNoticeEmailHtml } from "@/lib/notice-email-html";
 import { useCanWrite } from "@/lib/permissions";
 import { getCurrentUser } from "@/lib/auth";
-import { resolveRdaAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, hasStageTermDateMismatch, buildNoticeFeeRows } from "@/lib/fee-calculator";
+import { resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, hasStageTermDateMismatch, buildNoticeFeeRows } from "@/lib/fee-calculator";
 import { generateFeeInvoicePdfDataUrl, buildFeeInvoiceHtml, type FeeInvoiceTarget } from "@/lib/fee-invoice-pdf";
 
 // ── 타입 ──────────────────────────────────────────────────────
@@ -1521,10 +1521,9 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
       return;
     }
     const lead = institutions.find((i) => i.id === form.leadInstitutionId);
-    // 전담기관이 농촌진흥청 계열(RDA1/RDA2)이면 주관기관명으로 실제 트랙을 자동 교정한다 —
-    // 두 레코드 모두 표시 이름이 "농촌진흥청"이라 사람이 직접 고르면 실수하기 쉽다.
-    const rda2AffiliatedNames = fundingAgencies.find((a) => a.id === "fa-006")?.rda2AffiliatedInstitutionNames;
-    const resolvedAgencyId = resolveRdaAgencyId(form.agencyId, lead?.name ?? "", rda2AffiliatedNames);
+    // 소속기관 자동판별이 켜진 전담기관(예: RDA1/RDA2 — 둘 다 표시 이름이 "농촌진흥청")이 있으면
+    // 주관기관명으로 실제 전담기관을 자동 교정한다 — 사람이 직접 고르면 실수하기 쉽다.
+    const resolvedAgencyId = resolveAutoDetectedAgencyId(form.agencyId, lead?.name ?? "", fundingAgencies);
     const agency = fundingAgencies.find((a) => a.id === resolvedAgencyId);
     const created = addProject({
       projectNumber: form.projectNumber.trim(),

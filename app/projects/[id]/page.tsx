@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useState, useMemo, useEffect, useRef, type ReactNode } from "react";
+import { use, useState, useMemo, useEffect, useRef, type ReactNode, type MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -15,7 +15,7 @@ import {
   setTermOtherFirmHandled, setTermBillingType, setTermDates,
 } from "@/lib/store";
 import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type SystemUser, type EmailDispatch, type FeePolicy, EMPTY_NOTICE_TEMPLATE } from "@/lib/mock";
-import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveRdaAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, type CalcMember } from "@/lib/fee-calculator";
+import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, type CalcMember } from "@/lib/fee-calculator";
 import { fmtWonFull, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange } from "@/lib/utils";
 import { fmtValue, fieldLabel } from "@/lib/audit-log-format";
 import StatusBadge from "@/components/common/StatusBadge";
@@ -116,6 +116,26 @@ const BILLING_OPTIONS = [
   { value: "면제",       label: "면제",       desc: "IITP·KAIA 주관이 최우수기관이고 공동 없는 경우" },
 ] as const;
 
+// ─── 표 가로 스크롤 드래그 ─────────────────────────────────────
+// 컬럼이 많은 표는 overflow-x-auto만으로는 스크롤바를 정확히 잡아야만 옮길 수 있어 불편하다 —
+// 표 아무 곳이나 마우스로 누른 채 드래그하면 가로로 스크롤되게 해준다.
+function useDragScroll<T extends HTMLElement>() {
+  const ref = useRef<T | null>(null);
+  const dragState = useRef<{ startX: number; startScrollLeft: number } | null>(null);
+  function onMouseDown(e: ReactMouseEvent) {
+    if (!ref.current) return;
+    dragState.current = { startX: e.clientX, startScrollLeft: ref.current.scrollLeft };
+  }
+  function onMouseMove(e: ReactMouseEvent) {
+    if (!ref.current || !dragState.current) return;
+    ref.current.scrollLeft = dragState.current.startScrollLeft - (e.clientX - dragState.current.startX);
+  }
+  function endDrag() {
+    dragState.current = null;
+  }
+  return { ref, onMouseDown, onMouseMove, onMouseUp: endDrag, onMouseLeave: endDrag };
+}
+
 // ─── 연차번호 → 연도 변환 (당해시작일 기준) ───────────────────
 function termNumberToYear(startDate: string, termNumber: number): number {
   const d = new Date(startDate);
@@ -139,6 +159,13 @@ interface TermGroup {
   // 기관별 TermFee엔 이 구분이 안 남아있어 group.fees만으로는 못 갈라낸다.
   generalFee: number | null;
   exemptFeeTotal: number | null;
+  // 현금 수수료 계산(기본수수료+가산금) 상세 — 일반/면제 구간별 기본수수료·가산금을 따로 보여주기 위해
+  // TermFeeCalc에서 그대로 가져온다. 면제 쪽은 별도 필드가 없어 전체(baseFee/addonFee)에서
+  // 일반(nonExemptBaseFee/nonExemptAddonFee) 몫을 뺀 값으로 구한다.
+  baseFee: number | null;
+  addonFee: number | null;
+  nonExemptBaseFee: number | null;
+  nonExemptAddonFee: number | null;
 }
 
 // ─── 세금계산서/공문발송/수금 "청구 단위" ──────────────────────
@@ -363,10 +390,9 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
     const inst = institutions.find((i) => i.id === draft.leadInstitutionId);
     const leadInstitutionName = inst?.name ?? project!.leadInstitutionName;
     const annualBudget = (draft.govGrant ?? 0) + (draft.privateCash ?? 0) + (draft.privateInKind ?? 0);
-    // 전담기관이 농촌진흥청 계열(RDA1/RDA2)이면 주관기관명으로 실제 트랙을 자동 교정한다 —
-    // 두 레코드 모두 표시 이름이 "농촌진흥청"이라 사람이 직접 고르면 실수하기 쉽다.
-    const rda2AffiliatedNames = fundingAgencies.find((a) => a.id === "fa-006")?.rda2AffiliatedInstitutionNames;
-    const resolvedAgencyId = resolveRdaAgencyId(draft.agencyId, leadInstitutionName, rda2AffiliatedNames);
+    // 소속기관 자동판별이 켜진 전담기관(예: RDA1/RDA2 — 둘 다 표시 이름이 "농촌진흥청")이 있으면
+    // 주관기관명으로 실제 전담기관을 자동 교정한다 — 사람이 직접 고르면 실수하기 쉽다.
+    const resolvedAgencyId = resolveAutoDetectedAgencyId(draft.agencyId, leadInstitutionName, fundingAgencies);
     const resolvedAgency = fundingAgencies.find((a) => a.id === resolvedAgencyId)?.name ?? draft.agency;
     // 당해(draft.currentTerm) 정부출연금/민간현금/민간현물을 직접 수정했을 수 있으니, 연차별 이력
     // (annualFinancials)도 함께 갱신한다 — 안 그러면 다른 연차를 봤다가 돌아왔을 때 방금 수정한
@@ -2821,6 +2847,9 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
   const [expanded, setExpanded] = useState(false);
   const [showFeeDetail, setShowFeeDetail] = useState(false);
   const [showFeeBreakdown, setShowFeeBreakdown] = useState(false);
+  const [showAppliedFeeBreakdown, setShowAppliedFeeBreakdown] = useState(false);
+  const [showCumulativeUnclaimedBreakdown, setShowCumulativeUnclaimedBreakdown] = useState(false);
+  const feeTableDragScroll = useDragScroll<HTMLDivElement>();
 
   // 연차 기간 직접 지정 — 값이 있으면(TermFee.termStartDate/termEndDate) 자동계산(resolveTermDateRange)
   // 대신 이 값을 쓴다. 기관마다 1행씩인 TermFee 전체에 동일하게 반영해야 하므로 setTermDates로 일괄 저장한다.
@@ -2873,7 +2902,10 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
 
   // 탈퇴/미참여 기관 — 이 연차엔 사업비가 없어 정상 TermFee 행이 생성되지 않지만, 과거 연차에
   // 쌓인 미청구수수료가 아직 남아있는 기관. 화면에서 조용히 사라지지 않도록 별도 행으로 표시한다.
-  const activeInstitutionIds = new Set(group.fees.map((f) => f.institutionId));
+  // budget===0인 fee는 store.ts가 위탁정산 탈퇴기관의 정산 연차 이월분만 걷기 위해 만든 행이라
+  // (실제 이 연차 참여가 아님) 여기서는 "활성 참여"로 치지 않는다 — 청구액(appliedFee)은 group.fees에
+  // 그대로 남아 합계에 포함되지만, 화면에는 참여기관이 아니라 탈퇴/미참여 행으로 표시한다.
+  const activeInstitutionIds = new Set(group.fees.filter((f) => f.budget > 0).map((f) => f.institutionId));
   const departedRows = Array.from(
     new Set(
       allFees
@@ -2883,13 +2915,22 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
   )
     .map((institutionId) => {
       const cumulative = getCumulativeUnclaimed(institutionId);
-      if (cumulative <= 0) return null;
+      // 이 연차에 정산으로 걷힌 이월분(store.ts가 budget=0으로 만들어둔 행) — 참여기관 표엔 안 뜨지만
+      // group.fees(=합계 산출에 쓰이는 원본)엔 그대로 남아있으므로, 탈퇴/미참여 행에도 그 금액을
+      // 보여줘야 "수수료(적용)" 합계와 화면에 보이는 행들의 합이 일치한다.
+      const settledFee = group.fees.find((f) => f.institutionId === institutionId && f.budget === 0);
+      const billedThisTerm = settledFee?.appliedFee ?? 0;
+      if (cumulative <= 0 && billedThisTerm <= 0) return null;
       const lastFee = allFees
         .filter((af) => af.projectNumber === projectNumber && af.institutionId === institutionId && af.termNumber < group.termNumber)
         .sort((a, b) => b.termNumber - a.termNumber)[0];
-      return lastFee ? { institutionId, institutionName: lastFee.institutionName, cumulative } : null;
+      if (!lastFee) return null;
+      const gm = members.find((m) => m.institutionId === institutionId);
+      const grade = gm ? normalizeGrade(resolveMemberGradeForTerm(gm, group.termNumber)) : "일반";
+      const settlementType = gm ? resolveMemberSettlementTypeForTerm(gm, group.termNumber, defaultSettlementType) : defaultSettlementType;
+      return { institutionId, institutionName: lastFee.institutionName, cumulative, billedThisTerm, role: gm?.role, grade, settlementType };
     })
-    .filter((r): r is { institutionId: string; institutionName: string; cumulative: number } => r !== null);
+    .filter((r): r is { institutionId: string; institutionName: string; cumulative: number; billedThisTerm: number; role: ProjectMember["role"] | undefined; grade: string; settlementType: "위탁정산" | "자체정산" } => r !== null);
 
   const termLabel = `${group.termYear}년 ${group.termNumber}연차`;
 
@@ -3158,7 +3199,14 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
             </button>
           </div>
           {/* Institution fee table */}
-          <div className="overflow-x-auto">
+          <div
+            ref={feeTableDragScroll.ref}
+            onMouseDown={feeTableDragScroll.onMouseDown}
+            onMouseMove={feeTableDragScroll.onMouseMove}
+            onMouseUp={feeTableDragScroll.onMouseUp}
+            onMouseLeave={feeTableDragScroll.onMouseLeave}
+            className="overflow-x-auto cursor-grab active:cursor-grabbing select-none"
+          >
             <table className="w-full text-xs">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-100 text-slate-500 font-medium">
@@ -3177,7 +3225,7 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                 </tr>
               </thead>
               <tbody>
-                {group.fees.map((f) => {
+                {group.fees.filter((f) => f.budget > 0).map((f) => {
                   const gradeMember = members.find((m) => m.institutionId === f.institutionId);
                   const rawGrade = gradeMember ? resolveMemberGradeForTerm(gradeMember, f.termNumber) : "일반";
                   const grade = normalizeGrade(rawGrade);
@@ -3249,13 +3297,29 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                     <td className="px-4 py-2.5 text-center whitespace-nowrap">
                       <span className="text-xs font-medium px-2 py-0.5 rounded bg-slate-100 text-slate-400">탈퇴/미참여</span>
                     </td>
-                    <td className="px-4 py-2.5 text-center text-slate-300">-</td>
-                    <td className="px-4 py-2.5 text-center text-slate-300">-</td>
+                    <td className="px-4 py-2.5 text-center whitespace-nowrap">
+                      <span className={`text-xs font-medium px-2 py-0.5 rounded ${GRADE_COLOR[r.grade] ?? GRADE_COLOR["일반"]}`}>
+                        {GRADE_LABEL[r.grade] ?? r.grade}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5 text-center whitespace-nowrap">
+                      <span className={`text-xs font-medium px-2 py-0.5 rounded ${
+                        r.settlementType === "자체정산" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"
+                      }`}>
+                        {r.settlementType.replace("정산", "")}
+                      </span>
+                    </td>
                     <td className="px-4 py-2.5 text-right text-slate-300">-</td>
                     <td className="px-4 py-2.5 text-right text-slate-300">-</td>
                     <td className="px-4 py-2.5 text-center text-slate-300">-</td>
                     <td className="px-4 py-2.5 text-right text-slate-300">-</td>
-                    <td className="px-4 py-2.5 text-right text-slate-300">-</td>
+                    <td className="px-4 py-2.5 text-right font-semibold whitespace-nowrap">
+                      {r.billedThisTerm > 0
+                        ? <span className="text-slate-700" title="탈퇴/미참여 기관이지만 위탁정산이라 이 정산 연차에 이월 미청구액 전액을 청구합니다">
+                            {fmtWonFull(r.billedThisTerm)}
+                          </span>
+                        : <span className="text-slate-300">-</span>}
+                    </td>
                     <td className="px-4 py-2.5 text-right text-slate-300">-</td>
                     <td className="px-4 py-2.5 text-right whitespace-nowrap">
                       <span className="text-amber-700 font-medium" title="이 연차엔 참여가 없어 정상 행이 생성되지 않지만, 과거 연차에 쌓인 미청구수수료가 남아있습니다">
@@ -3281,37 +3345,102 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                   </td>
                   <td />
                   <td className="px-4 py-2 text-right text-xs font-semibold text-slate-700">
+                    {/* 표준수수료(100%) 합계 — 펼치면 일반·면제 각각 기본수수료+가산금 구성을 보여준다 */}
                     <div className="flex items-center justify-end gap-1">
-                      {(group.generalFee != null || group.exemptFeeTotal != null) && (
+                      {group.baseFee != null && (
                         <button type="button" onClick={() => setShowFeeBreakdown((v) => !v)}
-                          className="text-slate-300 hover:text-blue-600 transition-colors" title="일반·면제기관 수수료 합계 나눠보기">
-                          {showFeeBreakdown ? <FiChevronUp size={11} /> : <FiChevronDown size={11} />}
+                          className="text-slate-500 hover:text-blue-600 transition-colors" title="현금 수수료 계산(기본수수료+가산금) 일반·면제 나눠보기">
+                          {showFeeBreakdown ? <FiChevronUp size={14} /> : <FiChevronDown size={14} />}
                         </button>
                       )}
                       <span>{fmtWonFull(group.totalCalculated)}</span>
                     </div>
-                    {showFeeBreakdown && (group.generalFee != null || group.exemptFeeTotal != null) && (
-                      <div className="mt-1 text-[10px] font-normal text-slate-400 space-y-0.5">
-                        <div>일반 {fmtWonFull(group.generalFee ?? 0)}</div>
-                        <div>면제기관 {fmtWonFull(group.exemptFeeTotal ?? 0)}</div>
-                      </div>
-                    )}
+                    {showFeeBreakdown && group.baseFee != null && (() => {
+                      const nonExemptBase = group.nonExemptBaseFee ?? 0;
+                      const nonExemptAddon = group.nonExemptAddonFee ?? 0;
+                      const exemptBase = (group.baseFee ?? 0) - nonExemptBase;
+                      const exemptAddon = (group.addonFee ?? 0) - nonExemptAddon;
+                      return (
+                        <div className="mt-1.5 text-[10px] font-normal text-slate-400 text-left inline-grid grid-cols-[auto_auto_auto_auto_auto_auto_auto] items-center gap-x-1 gap-y-0.5">
+                          <span className="text-slate-500 font-medium">일반</span>
+                          <span>기본</span><span className="text-right tabular-nums">{fmtWonFull(nonExemptBase)}</span>
+                          <span>+ 가산</span><span className="text-right tabular-nums">{fmtWonFull(nonExemptAddon)}</span>
+                          <span>=</span><span className="text-right font-medium text-slate-600 tabular-nums">{fmtWonFull(nonExemptBase + nonExemptAddon)}</span>
+                          <span className="text-slate-500 font-medium">면제</span>
+                          <span>기본</span><span className="text-right tabular-nums">{fmtWonFull(exemptBase)}</span>
+                          <span>+ 가산</span><span className="text-right tabular-nums">{fmtWonFull(exemptAddon)}</span>
+                          <span>=</span><span className="text-right font-medium text-slate-600 tabular-nums">{fmtWonFull(exemptBase + exemptAddon)}</span>
+                        </div>
+                      );
+                    })()}
                   </td>
-                  <td className="px-4 py-2 text-right text-xs font-bold text-slate-800">{fmtWonFull(group.totalApplied)}</td>
+                  <td className="px-4 py-2 text-right text-xs font-bold text-slate-800">
+                    {/* 수수료(적용) 합계 — 펼치면 일반·면제 각각 실제 청구비율(85% 등)이 적용된 청구액을
+                        group.fees(탈퇴/미참여 기관의 정산 이월분 포함) 기준으로 그대로 더해 보여준다 —
+                        위 합계(group.totalApplied)와 항상 정확히 일치한다. */}
+                    <div className="flex items-center justify-end gap-1">
+                      {(group.generalFee != null || group.exemptFeeTotal != null) && (
+                        <button type="button" onClick={() => setShowAppliedFeeBreakdown((v) => !v)}
+                          className="text-slate-500 hover:text-blue-600 transition-colors" title="일반·면제기관 청구액(적용 수수료) 나눠보기">
+                          {showAppliedFeeBreakdown ? <FiChevronUp size={14} /> : <FiChevronDown size={14} />}
+                        </button>
+                      )}
+                      <span>{fmtWonFull(group.totalApplied)}</span>
+                    </div>
+                    {showAppliedFeeBreakdown && (group.generalFee != null || group.exemptFeeTotal != null) && (() => {
+                      const exemptGrades = policy?.exemptGrades ?? [];
+                      const parts = group.fees.map((f) => {
+                        const gm = members.find((m) => m.institutionId === f.institutionId);
+                        const rawGrade = gm ? resolveMemberGradeForTerm(gm, f.termNumber) : "일반";
+                        return { amount: f.appliedFee, isExempt: exemptGrades.includes(normalizeGrade(rawGrade)) };
+                      });
+                      const generalApplied = parts.filter((p) => !p.isExempt).reduce((s, p) => s + p.amount, 0);
+                      const exemptApplied = parts.filter((p) => p.isExempt).reduce((s, p) => s + p.amount, 0);
+                      return (
+                        <div className="mt-1 text-[10px] font-normal text-slate-400 space-y-0.5">
+                          <div>일반 {fmtWonFull(generalApplied)}</div>
+                          <div>면제기관 {fmtWonFull(exemptApplied)}</div>
+                        </div>
+                      );
+                    })()}
+                  </td>
                   <td className="px-4 py-2 text-right text-xs text-amber-600 font-medium">
                     {fmtWonFull(group.fees.reduce((s, f) => s + (f.unclaimedFee ?? 0), 0))}
                   </td>
-                  {showFeeDetail && (
-                    <td className="px-4 py-2 text-right text-xs text-amber-700 font-medium">
-                      {fmtWonFull(
-                        group.fees.reduce((s, f) => {
-                          const gm = members.find((m) => m.institutionId === f.institutionId);
-                          const st = gm ? resolveMemberSettlementTypeForTerm(gm, f.termNumber, defaultSettlementType) : defaultSettlementType;
-                          return s + getUnclaimedDisplay(f, st).amount;
-                        }, 0) + departedRows.reduce((s, r) => s + r.cumulative, 0)
-                      )}
-                    </td>
-                  )}
+                  {showFeeDetail && (() => {
+                    const exemptGrades = policy?.exemptGrades ?? [];
+                    const activeParts = group.fees.filter((f) => f.budget > 0).map((f) => {
+                      const gm = members.find((m) => m.institutionId === f.institutionId);
+                      const st = gm ? resolveMemberSettlementTypeForTerm(gm, f.termNumber, defaultSettlementType) : defaultSettlementType;
+                      const rawGrade = gm ? resolveMemberGradeForTerm(gm, f.termNumber) : "일반";
+                      return { amount: getUnclaimedDisplay(f, st).amount, isExempt: exemptGrades.includes(normalizeGrade(rawGrade)) };
+                    });
+                    const departedParts = departedRows.map((r) => {
+                      const gm = members.find((m) => m.institutionId === r.institutionId);
+                      const rawGrade = gm ? resolveMemberGradeForTerm(gm, group.termNumber) : "일반";
+                      return { amount: r.cumulative, isExempt: exemptGrades.includes(normalizeGrade(rawGrade)) };
+                    });
+                    const parts = [...activeParts, ...departedParts];
+                    const generalCumulative = parts.filter((p) => !p.isExempt).reduce((s, p) => s + p.amount, 0);
+                    const exemptCumulative = parts.filter((p) => p.isExempt).reduce((s, p) => s + p.amount, 0);
+                    return (
+                      <td className="px-4 py-2 text-right text-xs text-amber-700 font-medium">
+                        <div className="flex items-center justify-end gap-1">
+                          <button type="button" onClick={() => setShowCumulativeUnclaimedBreakdown((v) => !v)}
+                            className="text-slate-500 hover:text-blue-600 transition-colors" title="일반·면제기관 미청구수수료 누적 나눠보기">
+                            {showCumulativeUnclaimedBreakdown ? <FiChevronUp size={14} /> : <FiChevronDown size={14} />}
+                          </button>
+                          <span>{fmtWonFull(generalCumulative + exemptCumulative)}</span>
+                        </div>
+                        {showCumulativeUnclaimedBreakdown && (
+                          <div className="mt-1 text-[10px] font-normal text-slate-400 space-y-0.5 text-left">
+                            <div>일반 {fmtWonFull(generalCumulative)}</div>
+                            <div>면제 {fmtWonFull(exemptCumulative)}</div>
+                          </div>
+                        )}
+                      </td>
+                    );
+                  })()}
                   <td />
                 </tr>
               </tfoot>
@@ -3434,6 +3563,10 @@ function FeeManagementTab({ projectId }: { projectId: string }) {
         key, termYear: y, termNumber: n, fees, totalApplied, totalCalculated, invoice, receivable, unclaimed, termStatus,
         generalFee: calc?.generalFee ?? null,
         exemptFeeTotal: calc?.exemptFeeTotal ?? null,
+        baseFee: calc?.baseFee ?? null,
+        addonFee: calc?.addonFee ?? null,
+        nonExemptBaseFee: calc?.nonExemptBaseFee ?? null,
+        nonExemptAddonFee: calc?.nonExemptAddonFee ?? null,
       };
     }).sort((a, b) => b.termYear !== a.termYear ? b.termYear - a.termYear : b.termNumber - a.termNumber);
   }, [project, termFees, termFeeCalcs, taxInvoices, receivables, unclaimedFees, members]);

@@ -28,7 +28,7 @@ import {
 } from "@/lib/store";
 import type { Project, ProjectMember, AnnualBudget, AnnualFinancials } from "@/lib/mock";
 import { getCurrentUser } from "@/lib/auth";
-import { isSettlementTerm, resolveRdaAgencyId } from "@/lib/fee-calculator";
+import { isSettlementTerm, resolveAutoDetectedAgencyId } from "@/lib/fee-calculator";
 
 type InstitutionGrade = NonNullable<ProjectMember["institutionGrade"]>;
 
@@ -2282,11 +2282,10 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
 
     // 주관기관 정보 보정 — 과제 생성 시점엔 어느 행이 주관기관인지 알 수 없어 비워뒀으므로,
     // 참여기관 등록이 끝난 뒤 role="LEAD"로 판별된 기관으로 채워 넣는다.
-    // 전담기관이 농촌진흥청 계열(RDA1="fa-005"/RDA2="fa-006")인 경우, 엑셀의 "전문기관명"은 두 정책이
-    // 똑같이 "농촌진흥청"이라 어느 쪽인지 이름만으론 구분이 안 된다 — 지금까지야 registeredAgencies가
+    // 소속기관 자동판별이 켜진 전담기관(예: RDA1="fa-005"/RDA2="fa-006" — 둘 다 표시 이름이 "농촌진흥청")이
+    // 있으면, 엑셀의 "전문기관명"만으론 어느 쪽인지 이름으로 구분이 안 된다 — 지금까지야 registeredAgencies가
     // 이름 하나에 id 하나만 담을 수 있어 항상 같은 쪽으로 쏠렸다. 여기서 주관기관명이 확정된 시점에
-    // resolveRdaAgencyId로 실제 트랙을 다시 판별해 agencyId/agency를 바로잡는다.
-    const rda2AffiliatedNames = fundingAgencies.find((a) => a.id === "fa-006")?.rda2AffiliatedInstitutionNames;
+    // resolveAutoDetectedAgencyId로 실제 전담기관을 다시 판별해 agencyId/agency를 바로잡는다.
     for (const agg of memberAggregates) {
       if (agg.role !== "LEAD") continue;
       const projectId = registeredProjects.get(normProjectNum(agg.projectNumber));
@@ -2300,7 +2299,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       // newProjectAgencyId를 우선 쓰고, 그래도 없으면(기존 과제 경로 등) existingProject로 보완한다.
       const currentAgencyId = newProjectAgencyId.get(normProjectNum(agg.projectNumber)) ?? existingProject?.agencyId;
       const resolvedAgencyId = currentAgencyId
-        ? resolveRdaAgencyId(currentAgencyId, agg.institutionName, rda2AffiliatedNames)
+        ? resolveAutoDetectedAgencyId(currentAgencyId, agg.institutionName, fundingAgencies)
         : undefined;
       const resolvedAgency = resolvedAgencyId && resolvedAgencyId !== currentAgencyId
         ? fundingAgencies.find((a) => a.id === resolvedAgencyId)?.name
