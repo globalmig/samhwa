@@ -3170,8 +3170,8 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                   <th className="text-right px-4 py-2.5">현금+현물 사업비</th>
                   <th className="text-center px-4 py-2.5">요율</th>
                   <th className="text-right px-4 py-2.5">표준수수료</th>
-                  <th className="text-right px-4 py-2.5">미청구수수료</th>
                   <th className="text-right px-4 py-2.5">수수료(적용)</th>
+                  <th className="text-right px-4 py-2.5">미청구수수료</th>
                   {showFeeDetail && <th className="text-right px-4 py-2.5">미청구수수료 누적</th>}
                   <th className="text-center px-4 py-2.5">상태</th>
                 </tr>
@@ -3211,11 +3211,6 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                       <td className="px-4 py-2.5 text-right text-slate-600 whitespace-nowrap">{fmtWonFull(f.budget)}</td>
                       <td className="px-4 py-2.5 text-center text-blue-700 font-medium">{f.feeRate}%</td>
                       <td className="px-4 py-2.5 text-right text-slate-700 whitespace-nowrap">{fmtWonFull(f.calculatedFee)}</td>
-                      <td className="px-4 py-2.5 text-right whitespace-nowrap">
-                        {(f.unclaimedFee ?? 0) === 0
-                          ? <span className="text-slate-300">-</span>
-                          : <span className="text-amber-600 font-medium">{fmtWonFull(f.unclaimedFee ?? 0)}</span>}
-                      </td>
                       <td className="px-4 py-2.5 text-right font-semibold whitespace-nowrap">
                         <AppliedFeeCell
                           fee={f}
@@ -3223,6 +3218,11 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                           projectId={project.id}
                           zeroReasons={f.appliedFee === 0 ? zeroFeeReasons(f, gradeMember?.role, grade, policy) : []}
                         />
+                      </td>
+                      <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                        {(f.unclaimedFee ?? 0) === 0
+                          ? <span className="text-slate-300">-</span>
+                          : <span className="text-amber-600 font-medium">{fmtWonFull(f.unclaimedFee ?? 0)}</span>}
                       </td>
                       {showFeeDetail && (
                         <td className="px-4 py-2.5 text-right whitespace-nowrap">
@@ -3297,10 +3297,10 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                       </div>
                     )}
                   </td>
+                  <td className="px-4 py-2 text-right text-xs font-bold text-slate-800">{fmtWonFull(group.totalApplied)}</td>
                   <td className="px-4 py-2 text-right text-xs text-amber-600 font-medium">
                     {fmtWonFull(group.fees.reduce((s, f) => s + (f.unclaimedFee ?? 0), 0))}
                   </td>
-                  <td className="px-4 py-2 text-right text-xs font-bold text-slate-800">{fmtWonFull(group.totalApplied)}</td>
                   {showFeeDetail && (
                     <td className="px-4 py-2 text-right text-xs text-amber-700 font-medium">
                       {fmtWonFull(
