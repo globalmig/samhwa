@@ -444,6 +444,18 @@ export const fundingAgencies: FundingAgency[] = [
 // 과제 관리
 // ============================================================
 
+// Project.govGrant/privateCash/privateInKind("당해" 필드)는 지금 진행 중인 연차(currentTerm) 값만
+// 담는 단일 값이다 — 참여기관의 annualBudgets와 달리 연차별 이력이 없었다. 이 타입은 그 연차별
+// 이력을 담는 배열(Project.annualFinancials)의 원소로, 엑셀 업로드에서 연차·기관별로 입력받은
+// 정부출연금/민간현금/민간현물을 참여기관 전체 합산해 연차마다 채운다.
+export interface AnnualFinancials {
+  termYear: number;
+  termNumber: number;
+  govGrant: number;
+  privateCash: number;
+  privateInKind: number;
+}
+
 export interface Project {
   id: string;
   projectNumber: string;
@@ -462,20 +474,18 @@ export interface Project {
   finalEndDate?: string;   // 최종종료일 (과제 전체 종료일)
   stageStartDate?: string; // 단계시작일
   stageEndDate?: string;   // 단계종료일
-  govGrant?: number;             // 당해 정부출연금
-  privateCash?: number;          // 당해 민간원금
-  privateInKind?: number;        // 당해 민간현물
+  govGrant?: number;             // 당해(currentTerm) 정부출연금
+  privateCash?: number;          // 당해(currentTerm) 민간원금
+  privateInKind?: number;        // 당해(currentTerm) 민간현물
+  // 연차별 정부출연금/민간현금/민간현물 이력 — 위 세 필드는 이 배열에서 currentTerm에 해당하는
+  // 원소와 항상 같은 값으로 유지된다(둘 다 업데이트). 다른 연차를 조회할 때만 이 배열을 쓴다.
+  annualFinancials?: AnnualFinancials[];
   usageReportDeadline?: string;  // 사용실적 제출기한
   agencyAssignedAt?: string;     // 전담기관 배정일자
   internalAssignedAt?: string;   // 내부 배정일
   projectCategory?: string;      // 과제 구분
   researchLead?: string;         // 연구책임자
-  projectCode?: string;          // 전담기관 과제코드
-  // 과거에 쓰였던 과제코드 이력 — RCMS에서 과제코드가 재부여된 뒤에도 누군가 예전 코드가 적힌
-  // 엑셀을 다시 올리는 경우가 있어, 그때 같은 과제로 인식하기 위해 유지한다(엑셀 업로드 로직 참고).
-  // 코드가 실제로 갱신될 때 이전 값이 여기로 옮겨지고, 이력에 이미 있는 코드는 다시 현재값으로
-  // 되돌리지 않는다.
-  previousProjectCodes?: string[];
+  projectCode?: string;          // 전담기관 과제코드 (전담기관 약칭-순번, 등록 시 시스템이 자동 생성)
   projectDivision?: "위탁" | "공동"; // 과제 구분 (위탁/공동)
   billingType?: "정발행" | "역발행요청" | "역발행" | "대상아님" | "면제"; // 발행구분 (없으면 계산서 유무로 자동 판별)
   // 협약 구조
@@ -768,6 +778,11 @@ export const projects: Project[] = [
     totalTerms: 5,
     currentTerm: 5,
     status: "ACTIVE",
+    // 매년 총사업비(현금+현물) 350,000,000원 고정(참여기관 annualBudgets와 동일)에 맞춰 구성 —
+    // 현물사업비는 참여기관 쪽에서도 항상 0이라 privateInKind도 0으로 맞춘다.
+    govGrant: 280_000_000,
+    privateCash: 70_000_000,
+    privateInKind: 0,
     agreementType: "STAGED",
     stages: [
       { stageNumber: 1, startTermNumber: 1, endTermNumber: 3 },
@@ -2506,7 +2521,8 @@ export const taxInvoices: TaxInvoice[] = [
 // ============================================================
 
 // emailType: TAX_INVOICE=세금계산서 공문(청구서/역발행 요청), FEE_DETAIL=수수료 산출내역 안내,
-//            SETTLEMENT_NOTICE=정산절차 안내 공문, OTHER=기타 공문(자유 양식)
+//            SETTLEMENT_NOTICE=정산절차 안내 공문, DOC_REQUEST=계산서발행 서류 요청,
+//            PAYMENT_REMINDER=입금 확인 요청, OTHER=기타 공문(자유 양식)
 // feeCategory: TAX_INVOICE일 때만 사용 — ANNUAL=연차상시점검수수료, SETTLEMENT=위탁정산수수료
 // isReverseRequest: TAX_INVOICE이면서 역발행 요청 공문으로 발송된 경우 true
 // 발송 당시 실제 화면에 표시됐던 정산절차 안내 공문 내용을 그대로 재현하기 위한 스냅샷.
@@ -2529,7 +2545,7 @@ export interface EmailDispatch {
   recipientInstitution: string;
   recipientEmail: string;
   subject: string;
-  emailType: "TAX_INVOICE" | "FEE_DETAIL" | "SETTLEMENT_NOTICE" | "OTHER";
+  emailType: "TAX_INVOICE" | "FEE_DETAIL" | "SETTLEMENT_NOTICE" | "DOC_REQUEST" | "PAYMENT_REMINDER" | "OTHER";
   feeCategory?: "ANNUAL" | "SETTLEMENT";
   isReverseRequest?: boolean;
   attachments: string[];
@@ -3079,9 +3095,9 @@ export interface FeeInvoiceTemplate {
   bodyIntro: string[];      // 본문 안내문 2줄
   periodLabel: string;      // 대상과제현황 표의 기간 행 라벨. 예: "당해사업연도" | "정산대상기간"
   feeSectionTitle: string;  // "■ ..." 수수료 표 섹션 제목
-  feeStdLabel: string;      // 수수료 표준액 행 라벨
-  surchargeLabel: string;   // 가산금 행 라벨
-  feeTotalLabel: string;    // 합계 행 라벨
+  feeStdLabel: string;      // 공급가액 행 라벨
+  surchargeLabel: string;   // 부가세 행 라벨
+  feeTotalLabel: string;    // 합계(VAT 포함) 행 라벨
 }
 // 카테고리(category) 안에 여러 템플릿을 등록할 수 있되, isDefault로 표시된 하나만 발송 시 자동
 // 적용되는 대표양식이다 — 카테고리마다 정확히 1개씩 있어야 한다. ANNUAL/SETTLEMENT는 TermFee 등
@@ -3255,8 +3271,8 @@ export const EMPTY_FEE_INVOICE_TEMPLATE: FeeInvoiceTemplate = {
   bodyIntro: ["귀 기관의 일익 번창하심을 기원합니다.", ""],
   periodLabel: "당해사업연도",
   feeSectionTitle: "",
-  feeStdLabel: "수수료 표준액",
-  surchargeLabel: "가산금",
+  feeStdLabel: "수수료 공급가액",
+  surchargeLabel: "부가세",
   feeTotalLabel: "",
 };
 
@@ -3278,8 +3294,8 @@ export const feeInvoiceTemplates: FeeInvoiceTemplateEntry[] = [
       ],
       periodLabel: "당해사업연도",
       feeSectionTitle: "연차상시점검 수수료",
-      feeStdLabel: "수수료 표준액",
-      surchargeLabel: "가산금",
+      feeStdLabel: "수수료 공급가액",
+      surchargeLabel: "부가세",
       feeTotalLabel: "연차상시점검 수수료",
     },
   },
@@ -3296,8 +3312,8 @@ export const feeInvoiceTemplates: FeeInvoiceTemplateEntry[] = [
       ],
       periodLabel: "정산대상기간",
       feeSectionTitle: "위탁정산수수료(VAT 포함 금액)",
-      feeStdLabel: "정산수수료 표준액",
-      surchargeLabel: "가산금",
+      feeStdLabel: "정산수수료 공급가액",
+      surchargeLabel: "부가세",
       feeTotalLabel: "정산수수료",
     },
     defaultAttachments: [{ id: "fia-settlement-detail", name: "위탁정산내역서.pdf" }],
@@ -3315,8 +3331,8 @@ export const feeInvoiceTemplates: FeeInvoiceTemplateEntry[] = [
       ],
       periodLabel: "당해사업연도",
       feeSectionTitle: "역발행 수수료",
-      feeStdLabel: "수수료 표준액",
-      surchargeLabel: "가산금",
+      feeStdLabel: "수수료 공급가액",
+      surchargeLabel: "부가세",
       feeTotalLabel: "역발행 수수료",
     },
   },
@@ -3333,9 +3349,99 @@ export const feeInvoiceTemplates: FeeInvoiceTemplateEntry[] = [
       ],
       periodLabel: "당해사업연도",
       feeSectionTitle: "수수료",
-      feeStdLabel: "수수료 표준액",
-      surchargeLabel: "가산금",
+      feeStdLabel: "수수료 공급가액",
+      surchargeLabel: "부가세",
       feeTotalLabel: "수수료",
+    },
+  },
+];
+
+// ============================================================
+// 간단 안내 메일 양식 (계산서발행 서류 요청 / 입금 확인 요청)
+// ============================================================
+// 청구서(FeeInvoiceTemplate)와 달리 첨부파일·수수료 표가 없는, 본문 텍스트 하나만 보내는 안내
+// 메일이라 별도의 단순한 구조로 관리한다. subject/body 안의 {토큰}은 발송 시 실제 과제 정보로
+// 치환된다 — 사용 가능한 토큰: {과제번호} {과제명} {전담기관명} {기관명} {당해연구개발기간}
+// {연구책임자} {참여기관수} {수수료금액}(입금 확인 요청 전용) {세금계산서발행일}(입금 확인 요청 전용)
+export interface SimpleNoticeTemplate {
+  subject: string;
+  body: string;
+}
+export interface SimpleNoticeTemplateEntry {
+  id: string;
+  category: "DOC_REQUEST" | "PAYMENT_REMINDER";
+  name: string;
+  isDefault: boolean;
+  content: SimpleNoticeTemplate;
+}
+
+export const EMPTY_SIMPLE_NOTICE_TEMPLATE: SimpleNoticeTemplate = { subject: "", body: "" };
+
+export const simpleNoticeTemplates: SimpleNoticeTemplateEntry[] = [
+  {
+    id: "snt-doc-request-default",
+    category: "DOC_REQUEST",
+    name: "계산서발행 서류 요청 (기본)",
+    isDefault: true,
+    content: {
+      subject: "[{과제번호}]({전담기관명}) 세금계산서 발행을 위한 자료요청 안내_{기관명}",
+      body: `안녕하십니까?
+
+귀 기관이 수행하시는 아래의 과제와 관련하여 전문기관과 회계법인의 협약에 따라
+당사에서 위탁정산수수료 세금계산서를 연구개발기관 앞으로 발행해 드려야 하며,
+위탁정산수수료 세금계산서 발행을 위하여 다음의 서류를 요청드립니다.
+
+■ 요청자료
+1. 사업자등록증 사본
+2. 연구개발계획서 : 당해 예산 총액 및 참여기관 확인이 가능한 부분만 보내도 됩니다.
+
+당사에서 요청드리는 자료를 보내주셔야 정확한 수수료 산출이 가능하며,
+해당 수수료는 수행기관의 예산에 반영하고 연구개발비로 당사에 송금하시면 됩니다.
+(단, 영리기관 등 매입부가세를 공제 받는 기관은 매입부가세는 연구개발비로 집행 불가하며, 연구개발기관의 자체 자금으로 송금해야 합니다.)
+
+■ 연구개발과제 정보
+1. 과제번호 : {과제번호}
+2. 과제명 : {과제명}
+3. 당해 연구개발기간 : {당해연구개발기간}
+4. 주관기관 : {기관명}
+5. 총괄책임자 : {연구책임자}
+6. 참여기관 수 : {참여기관수}
+
+감사합니다.`,
+    },
+  },
+  {
+    id: "snt-payment-reminder-default",
+    category: "PAYMENT_REMINDER",
+    name: "입금 확인 요청 (기본)",
+    isDefault: true,
+    content: {
+      subject: "[{과제번호}]({전담기관명}) 수수료 입금 확인 요청의 건_{기관명}",
+      body: `안녕하십니까?
+
+귀 기관이 수행하시는 아래의 과제와 관련하여 전문기관과 회계법인의 협약에 따라 당사에서 상시점검(또는 위탁정산수수료) 세금계산서를 연구개발기관 앞으로 발행해 드렸습니다,
+
+다만 현재까지 해당 금액이 입금이 확인되지 않고 있습니다.
+확인 후 사업비로 집행하여 주시기 바라며, 입금이 지연되고 있는 사유가 있으신 경우 회신 부탁드립니다.
+
+아울러, 본 메일은 세금계산서 발행일로부터 상당 기간이 경과하여 사업비 집행 과정에서 누락되는 것을 방지하기 위해 안내드리는 메일입니다. 사업비 잔액이 없는 경우에는 기관의 자부담으로 처리될 수 있으므로, 사업비 집행 시 누락되지 않도록 유의하여 주시기 바랍니다.
+
+※ 이미 입금을 완료하셨음에도 본 메일을 받으신 경우에는 입금증을 회신해 주시면 확인 후 반영하겠습니다.
+
+
+■ 연구개발과제 정보
+1. 과제번호 : {과제번호}
+2. 과제명 : {과제명}
+3. 당해 연구개발기간 : {당해연구개발기간}
+
+4. 기관명 : {기관명}
+5. 연구책임자 : {연구책임자}
+6. 수수료 금액 : {수수료금액}
+7. 세금계산서 발행일: {세금계산서발행일}
+8. 입금 가상계좌번호 : 전자세금계산서 비고란 참고
+9. 입금 기한: 당해 과제 종료일 전까지
+
+감사합니다.`,
     },
   },
 ];

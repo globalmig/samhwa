@@ -8,15 +8,17 @@ import { type EmailDispatch } from "@/lib/mock";
 import StatusBadge from "@/components/common/StatusBadge";
 import NoticeLetterPreview from "@/components/common/NoticeLetterPreview";
 
-const TYPE_MAP: Record<EmailDispatch["emailType"], { label: string; color: "blue" | "indigo" | "purple" | "slate" }> = {
+const TYPE_MAP: Record<EmailDispatch["emailType"], { label: string; color: "blue" | "indigo" | "purple" | "slate" | "amber" | "red" }> = {
   TAX_INVOICE: { label: "세금계산서 공문", color: "blue" },
   FEE_DETAIL: { label: "수수료 산출내역 안내", color: "indigo" },
   SETTLEMENT_NOTICE: { label: "정산절차 안내 공문", color: "purple" },
+  DOC_REQUEST: { label: "계산서발행 서류 요청", color: "amber" },
+  PAYMENT_REMINDER: { label: "입금 확인 요청", color: "red" },
   OTHER: { label: "기타 공문", color: "slate" },
 };
 
 // 세금계산서 공문 중 역발행 요청으로 발송된 건은 구분되는 유형으로 표시한다.
-function displayType(e: EmailDispatch): { label: string; color: "blue" | "indigo" | "purple" | "slate" | "teal" } {
+function displayType(e: EmailDispatch): { label: string; color: "blue" | "indigo" | "purple" | "slate" | "teal" | "amber" | "red" } {
   if (e.emailType === "TAX_INVOICE" && e.isReverseRequest) return { label: "역발행 수수료 공문", color: "teal" };
   return TYPE_MAP[e.emailType];
 }

@@ -157,7 +157,7 @@ export default function NoticeLetterPreview({
         <h1 className="text-3xl font-extrabold tracking-[0.3em] text-slate-900">{spaced(companyInfo.name)}</h1>
       </div>
       <p className="text-sm text-slate-500 py-2 border-b border-slate-200">
-        {companyInfo.addressLine} Tel : {companyInfo.tel} Fax : {companyInfo.fax} 담당 : {companyInfo.preparedBy}
+        {companyInfo.addressLine} Tel : {companyInfo.tel} Fax : {companyInfo.fax}
       </p>
 
       {/* 문서 메타 */}

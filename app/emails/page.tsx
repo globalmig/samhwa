@@ -14,17 +14,19 @@ function getEmailProject(e: EmailDispatch, projects: Project[]): Project | undef
   return projectNumber ? projects.find((p) => p.projectNumber === projectNumber) : undefined;
 }
 
-const TYPE_MAP: Record<EmailDispatch["emailType"], { label: string; color: "blue" | "indigo" | "purple" | "slate" | "teal" }> = {
+const TYPE_MAP: Record<EmailDispatch["emailType"], { label: string; color: "blue" | "indigo" | "purple" | "slate" | "teal" | "amber" | "red" }> = {
   TAX_INVOICE: { label: "세금계산서 공문", color: "blue" },
   FEE_DETAIL: { label: "수수료 산출내역 안내", color: "indigo" },
   SETTLEMENT_NOTICE: { label: "정산절차 안내 공문", color: "purple" },
+  DOC_REQUEST: { label: "계산서발행 서류 요청", color: "amber" },
+  PAYMENT_REMINDER: { label: "입금 확인 요청", color: "red" },
   OTHER: { label: "기타 공문", color: "slate" },
 };
 const REVERSE_TYPE = { label: "역발행 수수료 공문", color: "teal" as const };
 
 // 실제 emailType(TAX_INVOICE 등)과 별개로, 역발행 요청 여부를 반영한 "표시용 유형"을 계산한다 —
 // 역발행 요청 공문은 세금계산서 공문과 발송 목적이 달라 목록/필터에서 구분해서 보여줘야 한다.
-function displayType(e: EmailDispatch): { key: string; label: string; color: "blue" | "indigo" | "purple" | "slate" | "teal" } {
+function displayType(e: EmailDispatch): { key: string; label: string; color: "blue" | "indigo" | "purple" | "slate" | "teal" | "amber" | "red" } {
   if (e.emailType === "TAX_INVOICE" && e.isReverseRequest) return { key: "REVERSE_INVOICE", ...REVERSE_TYPE };
   return { key: e.emailType, ...TYPE_MAP[e.emailType] };
 }
@@ -126,6 +128,8 @@ export default function EmailDispatchesPage() {
             <option value="REVERSE_INVOICE">역발행 수수료 공문</option>
             <option value="FEE_DETAIL">수수료 산출내역 안내</option>
             <option value="SETTLEMENT_NOTICE">정산절차 안내 공문</option>
+            <option value="DOC_REQUEST">계산서발행 서류 요청</option>
+            <option value="PAYMENT_REMINDER">입금 확인 요청</option>
             <option value="OTHER">기타 공문</option>
           </select>
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="text-xs border border-slate-200 rounded-lg px-3 py-1.5 text-slate-600 bg-white">

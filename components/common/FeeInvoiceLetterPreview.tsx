@@ -95,7 +95,7 @@ export default function FeeInvoiceLetterPreview({
 }: {
   template: FeeInvoiceTemplate;
   status: FeeInvoiceStatusData;
-  feeAmounts: { standard: number; surcharge: number; total: number };
+  feeAmounts: { supply: number; tax: number; total: number };
   docNumber?: string;
   issuedDate?: string;
   previewMode?: boolean;
@@ -118,7 +118,7 @@ export default function FeeInvoiceLetterPreview({
         <h1 className="text-3xl font-extrabold tracking-[0.3em] text-slate-900">{spaced(companyInfo.name)}</h1>
       </div>
       <p className="text-sm text-slate-500 py-2 border-b border-slate-200">
-        {companyInfo.addressLine} Tel : {companyInfo.tel} Fax : {companyInfo.fax} 담당 : {companyInfo.preparedBy}
+        {companyInfo.addressLine} Tel : {companyInfo.tel} Fax : {companyInfo.fax}
       </p>
 
       {/* 문서 메타 */}
@@ -236,7 +236,7 @@ export default function FeeInvoiceLetterPreview({
                     template.feeStdLabel
                   )}
                 </td>
-                <td className="px-3 py-2.5 text-right text-slate-500">{fmtWonFull(feeAmounts.standard)}</td>
+                <td className="px-3 py-2.5 text-right text-slate-500">{fmtWonFull(feeAmounts.supply)}</td>
               </tr>
               <tr className="border-t border-slate-300">
                 <td className="px-2 py-2 text-center border-r border-slate-300 align-middle">
@@ -246,7 +246,7 @@ export default function FeeInvoiceLetterPreview({
                     template.surchargeLabel
                   )}
                 </td>
-                <td className="px-3 py-2.5 text-right text-slate-500">{fmtWonFull(feeAmounts.surcharge)}</td>
+                <td className="px-3 py-2.5 text-right text-slate-500">{fmtWonFull(feeAmounts.tax)}</td>
               </tr>
               <tr className="border-t border-slate-300 bg-slate-50">
                 <td className="px-2 py-2 text-center font-bold border-r border-slate-300 align-middle">

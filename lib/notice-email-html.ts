@@ -165,7 +165,7 @@ export function buildNoticeEmailHtml({
     <h1 style="font-size:26px;font-weight:800;letter-spacing:6px;margin:0;">${esc(companyInfo.name)}</h1>
   </div>
   <p style="font-size:13px;color:#64748b;padding:8px 0;border-bottom:1px solid #e2e8f0;">
-    ${esc(companyInfo.addressLine)} Tel : ${esc(companyInfo.tel)} Fax : ${esc(companyInfo.fax)} 담당 : ${esc(companyInfo.preparedBy)}
+    ${esc(companyInfo.addressLine)} Tel : ${esc(companyInfo.tel)} Fax : ${esc(companyInfo.fax)}
   </p>
   <table style="width:100%;border-collapse:collapse;border-top:2px solid #334155;margin-top:16px;margin-bottom:20px;">
     ${metaHtml}

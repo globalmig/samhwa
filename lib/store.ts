@@ -18,6 +18,7 @@ import {
   fundingAgencies as initialFundingAgencies,
   agencyNoticeTemplates as initialAgencyNoticeTemplates,
   feeInvoiceTemplates as initialFeeInvoiceTemplates,
+  simpleNoticeTemplates as initialSimpleNoticeTemplates,
   notices as initialNotices,
   standardAttachments as initialStandardAttachments,
   COMPANY_INFO as initialCompanyInfo,
@@ -42,6 +43,8 @@ import {
   type AgencyNoticeTemplateEntry,
   type FeeInvoiceTemplate,
   type FeeInvoiceTemplateEntry,
+  type SimpleNoticeTemplate,
+  type SimpleNoticeTemplateEntry,
   type Notice,
   type StandardAttachment,
 } from "./mock";
@@ -82,6 +85,7 @@ export const ENTITY_NAMES: Record<string, string> = {
   notice: "공지사항",
   standardAttachment: "표준 첨부서류",
   feeInvoiceTemplate: "수수료 청구서 양식",
+  simpleNoticeTemplate: "간단 안내 메일 양식",
   companyInfo: "공문 발신 회사 정보",
 };
 
@@ -110,6 +114,7 @@ interface StoreState {
   agencyGuides: Record<string, AgencyGuideTab[]>;
   agencyNoticeTemplates: AgencyNoticeTemplateEntry[];
   feeInvoiceTemplates: FeeInvoiceTemplateEntry[];
+  simpleNoticeTemplates: SimpleNoticeTemplateEntry[];
   standardAttachments: StandardAttachment[];
   companyInfo: CompanyInfo;
 }
@@ -252,6 +257,7 @@ let _state: StoreState = {
   agencyGuides: {},
   agencyNoticeTemplates: [...initialAgencyNoticeTemplates],
   feeInvoiceTemplates: [...initialFeeInvoiceTemplates],
+  simpleNoticeTemplates: [...initialSimpleNoticeTemplates],
   standardAttachments: [...initialStandardAttachments],
   companyInfo: { ...initialCompanyInfo },
 };
@@ -485,8 +491,23 @@ function ensureLeadMember(project: Project): void {
   });
 }
 
+// 과제코드(전담기관 약칭-순번, 예: KEIT-00001) — 사람이 엑셀에 입력한 값을 그대로 쓰던 방식을
+// 버리고, 같은 전담기관 코드를 쓰는 기존 과제 중 가장 큰 순번 다음 번호를 시스템이 매긴다.
+function nextProjectCode(agencyShortName: string): string {
+  const prefix = `${agencyShortName}-`;
+  let max = 0;
+  for (const p of _state.projects) {
+    if (!p.projectCode?.startsWith(prefix)) continue;
+    const n = parseInt(p.projectCode.slice(prefix.length), 10);
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  return `${prefix}${String(max + 1).padStart(5, "0")}`;
+}
+
 export function addProject(data: Omit<Project, "id">): Project {
-  const item: Project = { registeredAt: new Date().toISOString().slice(0, 10), ...data, id: genId("p") };
+  const agency = _state.fundingAgencies.find((a) => a.id === data.agencyId);
+  const projectCode = data.projectCode ?? (agency ? nextProjectCode(agency.shortName) : undefined);
+  const item: Project = { registeredAt: new Date().toISOString().slice(0, 10), ...data, projectCode, id: genId("p") };
   _state = { ..._state, projects: [..._state.projects, item] };
   record("project", item.id, item.projectName, "CREATE");
   ensureLeadMember(item);
@@ -1395,6 +1416,54 @@ export function setDefaultFeeInvoiceTemplate(id: string): void {
 }
 
 // ============================================================
+// SIMPLE NOTICE TEMPLATES (계산서발행 서류 요청 / 입금 확인 요청 — 첨부 없이 본문 하나만 보내는 안내 메일)
+// ============================================================
+
+export function addSimpleNoticeTemplate(
+  category: SimpleNoticeTemplateEntry["category"],
+  name: string,
+  content: SimpleNoticeTemplate
+): SimpleNoticeTemplateEntry {
+  const item: SimpleNoticeTemplateEntry = { id: genId("snt"), category, name, isDefault: false, content };
+  _state = { ..._state, simpleNoticeTemplates: [..._state.simpleNoticeTemplates, item] };
+  record("simpleNoticeTemplate", item.id, name, "CREATE");
+  notify();
+  return item;
+}
+
+export function updateSimpleNoticeTemplate(id: string, data: Partial<Pick<SimpleNoticeTemplateEntry, "name" | "content">>): void {
+  const before = _state.simpleNoticeTemplates.find((t) => t.id === id);
+  if (!before) return;
+  const after = { ...before, ...data };
+  _state = { ..._state, simpleNoticeTemplates: _state.simpleNoticeTemplates.map((t) => (t.id === id ? after : t)) };
+  record("simpleNoticeTemplate", id, `${after.name} 수정`, "UPDATE");
+  notify();
+}
+
+// 대표양식(isDefault)은 카테고리마다 항상 최소 1개 있어야 발송(SimpleNoticeModal) 흐름이 깨지지 않으므로
+// 삭제를 거부한다 — 다른 템플릿을 먼저 대표로 지정한 뒤에만 지울 수 있다.
+export function deleteSimpleNoticeTemplate(id: string): void {
+  const item = _state.simpleNoticeTemplates.find((t) => t.id === id);
+  if (!item || item.isDefault) return;
+  _state = { ..._state, simpleNoticeTemplates: _state.simpleNoticeTemplates.filter((t) => t.id !== id) };
+  record("simpleNoticeTemplate", id, `${item.name} 삭제`, "DELETE");
+  notify();
+}
+
+export function setDefaultSimpleNoticeTemplate(id: string): void {
+  const item = _state.simpleNoticeTemplates.find((t) => t.id === id);
+  if (!item) return;
+  _state = {
+    ..._state,
+    simpleNoticeTemplates: _state.simpleNoticeTemplates.map((t) =>
+      t.category === item.category ? { ...t, isDefault: t.id === id } : t
+    ),
+  };
+  record("simpleNoticeTemplate", id, `${item.name} 대표양식으로 지정`, "UPDATE");
+  notify();
+}
+
+// ============================================================
 // 연차 수수료 자동 산정
 // ============================================================
 
@@ -1422,18 +1491,63 @@ export function autoGenerateTermFees(projectId: string): void {
     return stage?.stageNumber ?? 1;
   }
 
-  // CONFIRMED/BILLED로 확정된 연차별 항목과, 담당자가 금액을 직접 수정(manualOverride)한 항목은
-  // 자동/수동 생성 여부와 무관하게 보존한다.
-  const keptFees = _state.termFees.filter(
-    (tf) => tf.projectNumber !== project.projectNumber ||
-      tf.status === "CONFIRMED" || tf.status === "BILLED" || tf.manualOverride
-  );
+  // 그 단계의 정산연차(마지막 연차)가 이미 CONFIRMED/BILLED로 확정됐는지 — 그렇다면 그 단계는
+  // "끝난" 것으로 보고 기존처럼 안에 있는 연차들을 보호한다. 아직 정산연차에 이르지 않았다면(그
+  // 단계가 진행 중이라면) 정산구분·등급 등 기관 정보가 도중에 바뀔 수 있고, 그러면 이미 확정·발행된
+  // 연차라도 단계 전체가 새 정보로 다시 맞아떨어지도록 재계산 대상에 포함해야 한다 — 정산 전까지는
+  // 연차상시 청구가 잠정치라는 뜻이다.
+  function isStageSettled(stageNumber: number): boolean {
+    const settlementTermNumber = isBatch
+      ? project!.totalTerms
+      : stages.find((s) => s.stageNumber === stageNumber)?.endTermNumber ?? project!.totalTerms;
+    return _state.termFees.some(
+      (tf) => tf.projectNumber === project!.projectNumber && tf.termNumber === settlementTermNumber &&
+        (tf.status === "CONFIRMED" || tf.status === "BILLED")
+    );
+  }
+
+  // CONFIRMED/BILLED로 확정된 연차별 항목은, 그 연차가 속한 단계의 정산이 이미 끝난 경우에만 보존한다.
+  // 담당자가 금액을 직접 수정(manualOverride)한 항목은 단계 진행 상태와 무관하게 항상 보존한다.
+  const keptFees = _state.termFees.filter((tf) => {
+    if (tf.projectNumber !== project.projectNumber) return true;
+    if (tf.manualOverride) return true;
+    if (tf.status !== "CONFIRMED" && tf.status !== "BILLED") return false;
+    return isStageSettled(getStageNumber(tf.termNumber));
+  });
   // 이미 확정되어 보존되는 기관×연차 조합 — 아래 생성 루프에서 덮어쓰지 않도록 건너뛴다.
   const lockedKeys = new Set(
     keptFees
       .filter((tf) => tf.projectNumber === project.projectNumber)
       .map((tf) => `${tf.termYear}|${tf.termNumber}|${tf.institutionId}`)
   );
+
+  // 정산구분(자체/위탁)은 사실상 "단계" 단위 특성이다 — 단계 도중에 위탁으로 바뀌면 그 단계
+  // 시작 연차부터 전부 같은 값으로 다시 계산돼야 한다(단계가 끝나기 전까지 연차상시 청구는
+  // 잠정치라는 뜻). 그래서 단계가 아직 안 끝났다면 연차별 override를 그 연차만 따로 보지 않고,
+  // 그 단계 안에서 지정된 override 중 가장 늦은(가장 큰) 연차의 값을 단계 전체에 적용한다.
+  // 단계 정산이 이미 끝났으면(과거 단계) 기존처럼 그 연차 자체의 override만 그대로 쓴다.
+  function resolveSettlementTypeForCalc(
+    member: Pick<ProjectMember, "settlementType" | "settlementTypeOverrides">,
+    termNumber: number,
+    stageNumber: number,
+    defaultSettlementType: "위탁정산" | "자체정산"
+  ): "위탁정산" | "자체정산" {
+    const stageRange = isBatch
+      ? { startTermNumber: 1, endTermNumber: project!.totalTerms }
+      : stages.find((s) => s.stageNumber === stageNumber);
+    if (!stageRange || isStageSettled(stageNumber)) {
+      return resolveMemberSettlementTypeForTerm(member, termNumber, defaultSettlementType);
+    }
+    const stageOverrides = (member.settlementTypeOverrides ?? []).filter(
+      (o) => o.termNumber >= stageRange.startTermNumber && o.termNumber <= stageRange.endTermNumber
+    );
+    if (stageOverrides.length === 0) return member.settlementType ?? defaultSettlementType;
+    const latest = stageOverrides.reduce((a, b) => (b.termNumber > a.termNumber ? b : a));
+    return latest.settlementType;
+  }
+  // 이미 세금계산서가 발행(BILLED)된 연차인데 단계가 아직 안 끝나 재계산 대상에 포함된 경우 —
+  // 실제로 청구액이 달라지면 담당자에게 알려야 한다(발행된 세금계산서 금액과 어긋날 수 있음).
+  const billedAmountChanges: { termNumber: number; institutionName: string; before: number; after: number }[] = [];
   const keptCalcs = _state.termFeeCalcs.filter(
     (c) => !(c.projectNumber === project.projectNumber && c.status === "DRAFT")
   );
@@ -1482,7 +1596,7 @@ export function autoGenerateTermFees(projectId: string): void {
         role: m.role,
         grade: normalizeGrade(resolveMemberGradeForTerm(m, termNumber)),
         institutionType: m.institutionType,
-        settlementType: resolveMemberSettlementTypeForTerm(m, termNumber, policy.defaultSettlementType ?? "자체정산"),
+        settlementType: resolveSettlementTypeForCalc(m, termNumber, stageNumber, policy.defaultSettlementType ?? "자체정산"),
         cashBudget: ab.cashBudget,
         inKindBudget: ab.inKindBudget,
       });
@@ -1605,6 +1719,14 @@ export function autoGenerateTermFees(projectId: string): void {
 
       if (isLocked) continue;
 
+      // 이미 CONFIRMED/BILLED였던 연차가 단계가 안 끝나 재계산 대상에 포함된 경우 — 그 상태(확정/발행
+      // 여부)는 그대로 유지한다. 여기서 feeStatus(달력 기준 DRAFT/SCHEDULED)로 되돌리면 실제로는 세금
+      // 계산서가 이미 발행된 연차인데 상태만 초안으로 되돌아가는 불일치가 생긴다.
+      const preservedStatus = prevFee && (prevFee.status === "CONFIRMED" || prevFee.status === "BILLED") ? prevFee.status : feeStatus;
+      if (prevFee?.status === "BILLED" && prevFee.appliedFee !== instAppliedFee) {
+        billedAmountChanges.push({ termNumber, institutionName: cm.institutionName, before: prevFee.appliedFee, after: instAppliedFee });
+      }
+
       newFees.push({
         id: genId("tf"),
         projectNumber: project.projectNumber,
@@ -1620,7 +1742,7 @@ export function autoGenerateTermFees(projectId: string): void {
         appliedFee: instAppliedFee,
         standardFee: instStandardFee,
         unclaimedFee: instUnclaimedFee,
-        status: feeStatus,
+        status: preservedStatus,
         isAutoGenerated: true,
         otherFirmHandled: prevFee?.otherFirmHandled,
         termStartDate: ab?.termStartDate,
@@ -1692,6 +1814,29 @@ export function autoGenerateTermFees(projectId: string): void {
     termFees: [...keptFees, ...newFees],
     termFeeCalcs: [...keptCalcs, ...newCalcs],
   };
+
+  // 단계가 아직 안 끝나 이미 발행된 연차까지 재계산됐고, 그 결과 청구액이 실제로 달라진 경우 —
+  // 이미 나간 세금계산서 금액과 어긋날 수 있으니 이슈로 남겨 담당자·회계담당자가 재발행 여부를 확인하게 한다.
+  if (billedAmountChanges.length > 0) {
+    const termList = billedAmountChanges
+      .sort((a, b) => a.termNumber - b.termNumber)
+      .map((c) => `${c.termNumber}연차 ${c.institutionName}: ${c.before.toLocaleString()}원 → ${c.after.toLocaleString()}원`)
+      .join("\n");
+    addProjectIssue({
+      projectId: project.id,
+      projectNumber: project.projectNumber,
+      content:
+        `정산구분 등 참여기관 정보 변경으로 이미 세금계산서가 발행된 연차의 청구액이 재계산되어 달라졌습니다(해당 단계 정산이 아직 끝나지 않아 자동 반영됨).\n` +
+        `${termList}\n` +
+        `이미 발행된 세금계산서 금액과 다르니, 재발행이 필요한지 확인해주세요.`,
+      author: getCurrentUser()?.name ?? "시스템",
+      createdAt: new Date().toISOString().replace("T", " ").slice(0, 16),
+      priority: "HIGH",
+      status: "OPEN",
+      recipientGroups: ["MANAGER", "ACCOUNTANT"],
+    });
+  }
+
   notify();
 }
 

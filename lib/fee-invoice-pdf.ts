@@ -1,4 +1,5 @@
 import { COMPANY_INFO, type CompanyInfo, type FeeInvoiceTemplate } from "./mock";
+import { splitVatInclusive } from "./utils";
 
 // 수수료 청구서(위탁정산 / 연차상시) PDF 생성.
 // 실제 대표이사 직인 이미지(public/CEO_stamp.png)는 공문 발송(NoticeLetterPreview)에서 이미
@@ -66,9 +67,8 @@ export function buildFeeInvoiceHtml(target: FeeInvoiceTarget, content: FeeInvoic
   const feeTotalLabel = content.feeTotalLabel;
   const feeStdLabel = content.feeStdLabel;
   const surchargeLabel = content.surchargeLabel;
-  const standardFee = target.totalAmount;
-  const surcharge = 0;
-  const totalFee = standardFee + surcharge;
+  const totalFee = target.totalAmount;
+  const { supplyAmount, taxAmount } = splitVatInclusive(totalFee);
 
   const row = (label: string, value: string) => `
     <div style="display:flex;border-bottom:1px dashed #94a3b8;">
@@ -123,11 +123,11 @@ export function buildFeeInvoiceHtml(target: FeeInvoiceTarget, content: FeeInvoic
         <tbody>
           <tr>
             <td style="border:1px solid #94a3b8;padding:7px 12px;text-align:center;">${esc(feeStdLabel)}</td>
-            <td style="border:1px solid #94a3b8;padding:7px 12px;text-align:right;">${won(standardFee)}</td>
+            <td style="border:1px solid #94a3b8;padding:7px 12px;text-align:right;">${won(supplyAmount)}</td>
           </tr>
           <tr>
             <td style="border:1px solid #94a3b8;padding:7px 12px;text-align:center;">${esc(surchargeLabel)}</td>
-            <td style="border:1px solid #94a3b8;padding:7px 12px;text-align:right;">${won(surcharge)}</td>
+            <td style="border:1px solid #94a3b8;padding:7px 12px;text-align:right;">${won(taxAmount)}</td>
           </tr>
           <tr style="background:#f8fafc;">
             <td style="border:1px solid #94a3b8;padding:7px 12px;text-align:center;font-weight:700;">${esc(feeTotalLabel)}</td>

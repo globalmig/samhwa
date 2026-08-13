@@ -40,6 +40,7 @@ import InstitutionQuickAdd from "@/components/common/InstitutionQuickAdd";
 import MoneyInput from "@/components/common/MoneyInput";
 import AgreementStructureEditor, { type Stage } from "@/components/common/AgreementStructureEditor";
 import NoticeLetterPreview, { type NoticeStatusRow } from "@/components/common/NoticeLetterPreview";
+import SimpleNoticeModal, { type SimpleNoticeTarget } from "@/components/common/SimpleNoticeModal";
 import { buildNoticeEmailHtml } from "@/lib/notice-email-html";
 import { useCanWrite } from "@/lib/permissions";
 import { getCurrentUser } from "@/lib/auth";
@@ -202,6 +203,7 @@ type ModalState =
   | { mode: "sales-issue"; target: SalesTarget }
   | { mode: "sales-cancel"; target: SalesTarget }
   | { mode: "dispatch"; target: DispatchTarget }
+  | { mode: "simple-notice"; target: SimpleNoticeTarget }
   | { mode: "info-edit"; target: InfoEditTarget };
 
 const BILLING_TYPE_COLOR: Record<string, string> = {
@@ -463,6 +465,14 @@ function SalesCancelModal({ target, onClose }: { target: SalesTarget; onClose: (
       if (target.currentBillingType === "정발행") {
         setTermBillingType(target.projectNumber, target.termYear, target.termNumber, undefined, target.institutionId);
       }
+      // 발행 시 BILLED/CONFIRMED로 잠갔던 이 청구 단위의 연차를 다시 풀어서, 재발행 전까지 정산구분·
+      // 금액 등을 다시 수정할 수 있게 한다(수정 후 재발행을 요청하는 기관 대응). 담당자가 직접 수정한
+      // (manualOverride) 값은 발행 여부와 무관한 별도 보호라 여기서는 건드리지 않는다.
+      target.fees.forEach((f) => {
+        if (!f.manualOverride && (f.status === "BILLED" || f.status === "CONFIRMED")) {
+          updateTermFee(f.id, { status: "DRAFT" });
+        }
+      });
     } else {
       if (!newDate) return;
       updateTaxInvoice(target.taxInvoiceId, { issuedAt: newDate, status: "MODIFIED" });
@@ -601,7 +611,8 @@ function fileToDataUrl(file: File): Promise<string> {
 
 type DispatchChoice =
   | { kind: "REGULAR" | "REVERSE"; feeCategory: "ANNUAL" | "SETTLEMENT" }
-  | { kind: "OTHER" };
+  | { kind: "OTHER" }
+  | { kind: "DOC_REQUEST" | "PAYMENT_REMINDER" };
 
 function DispatchDropdown({
   onSelect,
@@ -659,6 +670,18 @@ function DispatchDropdown({
             onClick={() => pick({ kind: "OTHER" })}
           >
             기타 공문
+          </button>
+          <button
+            className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors border-t border-slate-100"
+            onClick={() => pick({ kind: "DOC_REQUEST" })}
+          >
+            계산서발행 서류 요청
+          </button>
+          <button
+            className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors border-t border-slate-100"
+            onClick={() => pick({ kind: "PAYMENT_REMINDER" })}
+          >
+            입금 확인 요청
           </button>
         </div>
       )}
@@ -1604,13 +1627,21 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
         </div>
         <p className="text-xs text-slate-500">당해 사업비 합계: <strong className="text-slate-800">{fmtWon(totalBudget)}</strong></p>
       </div>
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-4 gap-4">
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">상태</label>
           <select className={selectCls} value={form.status} onChange={(e) => s("status", e.target.value as Project["status"])}>
             <option value="ACTIVE">진행중</option>
             <option value="COMPLETED">완료</option>
             <option value="SUSPENDED">중단</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">과제구분</label>
+          <select className={selectCls} value={form.projectDivision} onChange={(e) => s("projectDivision", e.target.value as NewProjectDraft["projectDivision"])}>
+            <option value="">미지정</option>
+            <option value="위탁">위탁</option>
+            <option value="공동">공동</option>
           </select>
         </div>
         <div>
@@ -2613,18 +2644,18 @@ export default function FeesPage() {
     switch (colKey) {
       case "agencyShortName":
         return row.agencyShortName ? (
-          <Link href={`/projects/${row.projectId}`} className="inline-block max-w-full truncate font-mono text-sm font-bold text-indigo-700 bg-indigo-50 px-2 py-1 rounded hover:bg-indigo-100 transition-colors">
+          <Link href={`/projects/${row.projectId}?term=${row.termNumber}`} className="inline-block max-w-full truncate font-mono text-sm font-bold text-indigo-700 bg-indigo-50 px-2 py-1 rounded hover:bg-indigo-100 transition-colors">
             {row.agencyShortName}
           </Link>
         ) : <span className="text-slate-300">—</span>;
 
       case "projectNumber":
-        return <Link href={`/projects/${row.projectId}`} className="block truncate font-mono text-[11px] text-slate-500 hover:text-blue-600 hover:underline transition-colors" title={row.projectNumber}>{row.projectNumber}</Link>;
+        return <Link href={`/projects/${row.projectId}?term=${row.termNumber}`} className="block truncate font-mono text-[11px] text-slate-500 hover:text-blue-600 hover:underline transition-colors" title={row.projectNumber}>{row.projectNumber}</Link>;
 
       case "projectName":
         return (
           <div>
-            <Link href={`/projects/${row.projectId}`} className="block w-full font-medium text-blue-600 hover:underline hover:text-blue-800 text-xs line-clamp-2" title={row.projectName}>
+            <Link href={`/projects/${row.projectId}?term=${row.termNumber}`} className="block w-full font-medium text-blue-600 hover:underline hover:text-blue-800 text-xs line-clamp-2" title={row.projectName}>
               {row.projectName}
             </Link>
             <div className="flex items-center gap-1 flex-wrap">
@@ -3288,6 +3319,29 @@ export default function FeesPage() {
                             onSelect={(choice) => {
                               const dispatchProject = projects.find((p) => p.id === row.projectId);
                               const dispatchAgency = fundingAgencies.find((a) => a.id === dispatchProject?.agencyId);
+                              // 계산서발행 서류 요청 / 입금 확인 요청 — 첨부파일 없이 본문 하나만 보내는
+                              // 간단 안내 메일이라, 청구서 PDF·첨부 로직이 있는 DispatchModal이 아니라
+                              // 과제상세 페이지와 동일한 SimpleNoticeModal을 그대로 재사용한다.
+                              if (choice.kind === "DOC_REQUEST" || choice.kind === "PAYMENT_REMINDER") {
+                                setModal({
+                                  mode: "simple-notice",
+                                  target: {
+                                    kind:                choice.kind,
+                                    projectNumber:       row.projectNumber,
+                                    projectName:         row.projectName,
+                                    agencyName:          dispatchAgency?.name ?? row.agencyShortName,
+                                    leadInstitutionName: row.billedInstitutionName,
+                                    termStart:           row.startDate,
+                                    termEnd:             row.endDate,
+                                    researchLead:        row.researchLead,
+                                    participantCount:    projectMembers.filter((m) => m.projectId === row.projectId && m.role !== "LEAD").length,
+                                    recipientEmail:      row.recipientEmail,
+                                    totalAmount:         row.totalInvoiceAmount,
+                                    invoiceIssuedAt:     row.invoiceIssuedAt,
+                                  },
+                                });
+                                return;
+                              }
                               setModal({
                                 mode: "dispatch",
                                 target: {
@@ -3300,7 +3354,7 @@ export default function FeesPage() {
                                   termNumber:          row.termNumber,
                                   recipientEmail:      row.recipientEmail,
                                   recipientName:       row.recipientName,
-                                  feeCategory:         choice.kind === "OTHER" ? "ANNUAL" : choice.feeCategory,
+                                  feeCategory:         (choice.kind === "REGULAR" || choice.kind === "REVERSE") ? choice.feeCategory : "ANNUAL",
                                   supplyAmount:        row.supplyAmount,
                                   taxAmount:           row.taxAmount,
                                   totalAmount:         row.totalInvoiceAmount,
@@ -3563,6 +3617,9 @@ export default function FeesPage() {
         >
           <DispatchModal target={modal.target} onClose={() => setModal(null)} />
         </Modal>
+      )}
+      {modal?.mode === "simple-notice" && (
+        <SimpleNoticeModal target={modal.target} onClose={() => setModal(null)} />
       )}
       {modal?.mode === "info-edit" && (
         <Modal title="과제 정보 수정" onClose={() => setModal(null)} size="md">

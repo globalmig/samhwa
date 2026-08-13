@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node _debug_extract.mjs)",
+      "Bash(node _debug_calc.mjs)",
+      "Bash(npx --no-install tsc lib/fee-calculator.ts lib/mock.ts lib/utils.ts --outDir _tsout --module commonjs --target es2020 --esModuleInterop --skipLibCheck)",
+      "Bash(node _debug_verify.mjs)",
+      "Bash(npx --no-install tsc lib/store.ts lib/auth.ts lib/fee-calculator.ts lib/mock.ts lib/utils.ts --outDir _tsout --module commonjs --target es2020 --esModuleInterop --skipLibCheck --lib es2020,dom)",
+      "Bash(node _debug_stagecascade.mjs)",
+      "Bash(rm -rf _tsout)",
+      "Bash(ssh -i /c/Users/user/AppData/Local/Temp/claude/d--file-hyebinkim-development-samhwa/da9810bd-2ea2-47db-9a24-e1a01fc523ea/scratchpad/samhwa_employee -o BatchMode=yes -o ConnectTimeout=10 -p 22 shcpa8f@211.115.107.58 'chcp 65001 & sqlcmd -S localhost,1433 -U samhwafee_app -P Sf_96869a36db0e2735! -d SamhwaFee -Q \"SELECT DB_NAME\\(\\) AS ConnectedDB, SYSTEM_USER AS LoginUser, GETDATE\\(\\) AS ServerTime\"')",
+      "Bash(mkdir -p \"/c/Users/user/AppData/Local/Temp/claude/d--file-hyebinkim-development-samhwa/da9810bd-2ea2-47db-9a24-e1a01fc523ea/scratchpad\")",
+      "Bash(cat)",
+      "Bash(ssh -i /c/Users/user/AppData/Local/Temp/claude/d--file-hyebinkim-development-samhwa/da9810bd-2ea2-47db-9a24-e1a01fc523ea/scratchpad/samhwa_employee -o BatchMode=yes -o ConnectTimeout=10 -p 22 shcpa8f@211.115.107.58 'chcp 65001 & sqlcmd -S localhost\\\\SQLEXPRESS -E -Q \"SET NOCOUNT ON; SELECT name, state_desc FROM sys.databases; SELECT SERVERPROPERTY\\('\\\\''Edition'\\\\''\\) AS Edition, SERVERPROPERTY\\('\\\\''EngineEdition'\\\\''\\) AS EngineEdition\" & echo ---DISK--- & wmic logicaldisk get Caption,FreeSpace,Size')"
+    ]
+  }
+}

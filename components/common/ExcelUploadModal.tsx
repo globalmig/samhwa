@@ -26,7 +26,7 @@ import {
   recalcProjectTotalBudget,
   setTermOtherFirmHandled,
 } from "@/lib/store";
-import type { Project, ProjectMember, AnnualBudget } from "@/lib/mock";
+import type { Project, ProjectMember, AnnualBudget, AnnualFinancials } from "@/lib/mock";
 import { getCurrentUser } from "@/lib/auth";
 import { isSettlementTerm, resolveRdaAgencyId } from "@/lib/fee-calculator";
 
@@ -56,7 +56,6 @@ interface ExtractedRow {
   institutionName: string;
   bizNumber: string;
   institutionRole: string;
-  billingType: string;
   sheetKey: string;
 }
 
@@ -151,19 +150,6 @@ function parseGrade(raw: string): InstitutionGrade | undefined {
   return undefined;
 }
 
-// 발행구분 원문 텍스트 → project.billingType 값으로 변환. 인식 안 되면 undefined
-// (undefined면 등록 시 필드를 비워두고, 기존 기본 동작대로 세금계산서 유무로 자동 판별된다).
-function parseBillingType(raw: string): Project["billingType"] | undefined {
-  const s = raw.trim();
-  if (!s) return undefined;
-  if (s.includes("역발행") && s.includes("요청")) return "역발행요청";
-  if (s.includes("역발행")) return "역발행";
-  if (s.includes("대상") && s.includes("아님")) return "대상아님";
-  if (s.includes("면제")) return "면제";
-  if (s.includes("정발행")) return "정발행";
-  return undefined;
-}
-
 // ============================================================
 // 유틸
 // ============================================================
@@ -226,29 +212,17 @@ function toDateStr(raw: string): string {
 
 // "연차별기관별"(연차·예산) + "단계기관별"(정산형태·역할) 시트를 과제+기관 단위로 합산해
 // 참여기관(ProjectMember) 등록에 쓸 데이터를 만든다. 이게 있어야 등록 시 연차 수수료가 자동 계산된다.
-// existingProjects/stageAggregates: 단계협약 과제는 "연차별기관별" 시트의 "연차" 값이 그 단계 안에서
-// 1부터 다시 세는 상대값으로 입력되는 경우가 많아("2단계 1연차"), 과제 전체 기준 절대연차로 바꾸는 데 쓴다.
+// "연차별기관별" 시트는 실무상 "현재 진행 중인 연차"만 담아 올리는 실적 시트이므로, 그 "연차" 값은
+// 항상 과제 전체 기준 절대연차로 그대로 신뢰한다("단계" 컬럼이 있어도 오프셋을 더하지 않음).
+// "단계기관별" 시트는 과제 전체 계획(단계 구조·총연차)을 나타낼 뿐, 이 절대연차 해석에는 관여하지 않는다.
 function buildMemberAggregates(
-  sheets: ParsedSheet[],
-  existingProjects: Project[],
-  stageAggregates: Map<string, ProjectStageInfo>
+  sheets: ParsedSheet[]
 ): {
   members: MemberAggregate[];
   projectMaxTerm: Map<string, number>;
 } {
   const memberMap = new Map<string, MemberAggregate>();
   const projectMaxTerm = new Map<string, number>();
-  // 프로젝트별 "단계 내 상대연차 → 절대연차" 오프셋 — 같은 과제가 여러 행에 걸쳐 나오므로 한 번만 계산해 재사용한다.
-  const offsetsByProject = new Map<string, Map<number, number>>();
-  function getStageOffsets(normNum: string): Map<number, number> {
-    let offsets = offsetsByProject.get(normNum);
-    if (!offsets) {
-      const existing = existingProjects.find((p) => normProjectNum(p.projectNumber) === normNum);
-      offsets = computeStageOffsets(stageAggregates.get(normNum), existing?.stages);
-      offsetsByProject.set(normNum, offsets);
-    }
-    return offsets;
-  }
 
   for (const sheet of sheets) {
     const get = (field: string, row: Record<string, string>) => {
@@ -320,16 +294,10 @@ function buildMemberAggregates(
 
       if (sheet.def.key === "annual") {
         // rcms-columns.ts 상 field명은 "termYear"지만 실제로는 "연차"(회차) 값이고,
-        // 달력상 실제 연도는 "supportYear"(지원연도) 컬럼이 담당한다.
-        // 단계협약 과제는 이 "연차"가 그 단계 안에서 1부터 다시 세는 상대값으로 입력되는 경우가
-        // 대부분이라("2단계 1연차"), "단계" 컬럼이 있으면 오프셋을 더해 과제 전체 기준 절대연차로
-        // 바꾼다. "단계"가 비어 있으면(일괄협약 등) 기존처럼 그대로 절대값으로 취급한다.
-        const rawTermNumber = parseInt(get("termYear", row), 10) || 1;
-        const rawStageNumber = parseInt(get("term", row), 10);
-        const stageOffset = Number.isFinite(rawStageNumber) && rawStageNumber > 0
-          ? getStageOffsets(normNum).get(rawStageNumber) ?? 0
-          : 0;
-        const termNumber = stageOffset + rawTermNumber;
+        // 달력상 실제 연도는 "supportYear"(지원연도) 컬럼이 담당한다. "단계" 컬럼 값과 무관하게
+        // 항상 과제 전체 기준 절대연차로 그대로 쓴다 — "단계기관별" 시트는 전체 계획(단계 구조)만
+        // 나타낼 뿐, 이 시트에 실제로 몇 연차까지 올라왔는지와는 무관하기 때문이다.
+        const termNumber = parseInt(get("termYear", row), 10) || 1;
         const supportYear = parseInt(get("supportYear", row), 10) || new Date().getFullYear();
         // "연차_기관_총사업비(현금/현물)"처럼 이 연차 전용 컬럼이 있으면 그쪽을 우선한다 —
         // 일부 RCMS 파일엔 과제 전체 누적 총액 컬럼("현금사업비 총액")도 같이 있어서 그걸 그대로
@@ -370,7 +338,6 @@ function buildMemberAggregates(
 export interface ProjectScalarInfo {
   projectNames: Set<string>;
   assignedManagers: Set<string>;
-  projectCodes: Set<string>;      // 과제번호(숫자)
   researchLeads: Set<string>;     // 주관기관 기관책임자
   isAutonomyTrack: boolean;
   projectCategories: Set<string>;    // 과제구분(연차상시/정산)
@@ -388,7 +355,7 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
     let info = map.get(normNum);
     if (!info) {
       info = {
-        projectNames: new Set(), assignedManagers: new Set(), projectCodes: new Set(), researchLeads: new Set(),
+        projectNames: new Set(), assignedManagers: new Set(), researchLeads: new Set(),
         isAutonomyTrack: false, projectCategories: new Set(), agencyAssignedAts: new Set(), internalAssignedAts: new Set(),
         startDates: new Set(),
       };
@@ -418,9 +385,6 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
       if (manager) info.assignedManagers.add(manager);
 
       if (get("autonomyTrack", row) === "자율성트랙") info.isAutonomyTrack = true;
-
-      const codeNumeric = get("projectNumberNumeric", row);
-      if (codeNumeric) info.projectCodes.add(codeNumeric);
 
       // 연구책임자는 "주관"기관 행의 기관책임자만 채택 — 공동기관 책임자는 과제 전체의
       // 연구책임자가 아니므로 섞이면 안 된다.
@@ -459,6 +423,41 @@ function sumTermFinancials(
     privateInKind += b.privateInKind;
   }
   return { govGrant, privateCash, privateInKind };
+}
+
+// 특정 과제의 "파일에 담긴 모든 연차"의 정부출연금/민간현금/민간현물을 참여기관 전체에서 합산한다.
+// sumTermFinancials는 연차 하나만 골라 Project의 단일 필드(당해 값)를 채우는 데 쓰이는 반면,
+// 이건 Project.annualFinancials(연차별 이력 배열)를 채우는 데 쓴다 — 참여기관 annualBudgets와
+// 동일하게, 재업로드로 여러 연차가 한 파일에 섞여 들어와도 연차별로 정확히 쌓이게 하기 위함.
+function sumAllTermFinancials(
+  memberAggregates: MemberAggregate[],
+  normNum: string,
+): AnnualFinancials[] {
+  const byTerm = new Map<number, AnnualFinancials>();
+  for (const agg of memberAggregates) {
+    if (normProjectNum(agg.projectNumber) !== normNum) continue;
+    for (const [termNumber, b] of agg.budgetsByTerm) {
+      const entry = byTerm.get(termNumber) ?? { termYear: b.termYear, termNumber, govGrant: 0, privateCash: 0, privateInKind: 0 };
+      entry.termYear = b.termYear;
+      entry.govGrant += b.govGrant;
+      entry.privateCash += b.privateCash;
+      entry.privateInKind += b.privateInKind;
+      byTerm.set(termNumber, entry);
+    }
+  }
+  return Array.from(byTerm.values()).sort((a, b) => a.termNumber - b.termNumber);
+}
+
+// 이번에 업로드된 연차만 덮어쓰고, 파일에 없는 과거/미래 연차의 기존 기록은 그대로 보존한다 —
+// ProjectMember.annualBudgets를 갱신할 때와 동일한 병합 규칙.
+function mergeAnnualFinancials(
+  existing: AnnualFinancials[] | undefined,
+  updates: AnnualFinancials[],
+): AnnualFinancials[] | undefined {
+  if (updates.length === 0) return existing;
+  const updatedTermNumbers = new Set(updates.map((u) => u.termNumber));
+  const kept = (existing ?? []).filter((e) => !updatedTermNumbers.has(e.termNumber));
+  return [...kept, ...updates].sort((a, b) => a.termNumber - b.termNumber);
 }
 
 // "단계기관별" 시트의 정산대상시작/종료단계·연차 값으로 과제별 단계 구조(Project.stages)를 추정한다.
@@ -749,26 +748,15 @@ function computeTermCalendarMismatches(
 }
 
 // RCMS 과제번호가 재부여되어 문자열이 바뀌는 경우가 있어(같은 실제 과제인데 번호만 달라짐),
-// 새 과제를 만들기 전에 "이미 등록된 같은 과제"인지 먼저 확인한다.
-// 1순위: 과제코드(전담기관 과제코드) 일치. 2순위: 과제명+시작일+종료일이 전부 동일.
+// 새 과제를 만들기 전에 "이미 등록된 같은 과제"인지 과제명+시작일+종료일이 전부 동일한지로 확인한다.
+// (과제코드는 이제 엑셀에서 입력받지 않고 시스템이 자동으로 매기므로 매칭 기준에서 뺐다.)
 // 후보가 2개 이상 나오면(우연한 일치 가능성) 판단하지 않고 ambiguousCandidates로 넘겨 이슈로 남긴다.
 function resolveRenamedProject(
   projectName: string,
   startDate: string,
   endDate: string,
-  projectCode: string | undefined,
   existingProjects: Project[]
 ): { project: Project | null; ambiguousCandidates: Project[] } {
-  if (projectCode) {
-    // 현재 과제코드든, 예전에 쓰였던 과제코드(이력)든 일치하면 같은 과제로 본다 — 과제코드가
-    // 재부여된 뒤에도 누군가 예전 코드가 적힌 파일을 다시 올리는 경우가 있어서다.
-    const byCode = existingProjects.filter(
-      (p) => (p.projectCode && p.projectCode === projectCode) || (p.previousProjectCodes?.includes(projectCode) ?? false)
-    );
-    if (byCode.length === 1) return { project: byCode[0], ambiguousCandidates: [] };
-    if (byCode.length > 1) return { project: null, ambiguousCandidates: byCode };
-    // byCode.length === 0 → 이 과제코드로 등록된(과거 이력 포함) 기존 과제가 없음 → 이름+기간으로 폴백
-  }
   const byNameDate = existingProjects.filter(
     (p) => p.projectName === projectName && p.startDate === startDate && p.endDate === endDate
   );
@@ -1136,6 +1124,18 @@ function PreviewStep({
   const newMemberCount = newMembers.length;
 
   const dupRows = previewRows.filter((r) => r.duplicates.length > 0);
+  // 같은 기관/과제/전담기관이 여러 행(예: 같은 기관이 여러 과제에 참여하거나, 같은 과제에 여러
+  // 참여기관이 딸린 경우)에 걸쳐 반복 등장해도, 화면엔 "이미 등록됨" 메시지를 유형+key당 한 번만 보여준다.
+  const dedupedDuplicates = useMemo(() => {
+    const seen = new Map<string, DuplicateInfo>();
+    for (const r of dupRows) {
+      for (const d of r.duplicates) {
+        const dedupeKey = `${d.type}|${d.key}`;
+        if (!seen.has(dedupeKey)) seen.set(dedupeKey, d);
+      }
+    }
+    return Array.from(seen.values());
+  }, [dupRows]);
   const totalNew = newAgency + newProject + newInst + newMemberCount;
   const approvedUpdateCount = projectUpdates.filter(
     (u) => updateChoices[u.normNum] ?? defaultChoiceForStatus(u.status)
@@ -1249,23 +1249,21 @@ function PreviewStep({
             {activeTab === "review" && (
               reviewCount === 0 ? <EmptyTabNote>확인이 필요한 항목이 없습니다.</EmptyTabNote> : (
                 <div className="divide-y divide-slate-200">
-                  {/* 중복/유사 경고 */}
-                  {dupRows.length > 0 && (
+                  {/* 중복/유사 경고 — 같은 기관·과제·전담기관이 여러 행에 걸쳐 나와도 유형+key당 한 번만 표시 */}
+                  {dedupedDuplicates.length > 0 && (
                     <div>
                       <div className="px-4 py-2 bg-amber-50 flex items-center gap-1.5">
                         <FiAlertTriangle size={13} className="text-amber-500 shrink-0" />
-                        <p className="text-xs font-semibold text-amber-700">중복/유사 항목 ({dupRows.length}건) — 등록에서 자동 제외됩니다</p>
+                        <p className="text-xs font-semibold text-amber-700">중복/유사 항목 ({dedupedDuplicates.length}건) — 등록에서 자동 제외됩니다</p>
                       </div>
                       <div className="divide-y divide-slate-100">
-                        {dupRows.map((r, i) => (
-                          <div key={i} className="px-4 py-2 space-y-0.5">
-                            {r.duplicates.map((d, j) => (
-                              <p key={j} className="text-[11px] text-slate-600">
-                                <span className="font-medium text-slate-700">{d.type === "agency" ? "전담기관" : d.type === "project" ? "과제" : "기관"}</span>
-                                {" · "}{d.key}
-                                {d.status === "similar" ? ` — 유사 ${d.score}% ("${d.existing}"와 비교)` : " — 이미 등록됨"}
-                              </p>
-                            ))}
+                        {dedupedDuplicates.map((d, j) => (
+                          <div key={j} className="px-4 py-2">
+                            <p className="text-[11px] text-slate-600">
+                              <span className="font-medium text-slate-700">{d.type === "agency" ? "전담기관" : d.type === "project" ? "과제" : "기관"}</span>
+                              {" · "}{d.key}
+                              {d.status === "similar" ? ` — 유사 ${d.score}% ("${d.existing}"와 비교)` : " — 이미 등록됨"}
+                            </p>
                           </div>
                         ))}
                       </div>
@@ -1482,7 +1480,7 @@ export async function downloadExcelTemplate() {
     "※필수 (YYYY-MM-DD)", "※필수 (YYYY-MM-DD)",
     "선택", "※필수 (이 행의 사업비가 몇 연차 것인지 — 비면 1연차로 잘못 등록됨)", "선택",
     "※필수", "※필수 (000-00-00000)",
-    "선택 (주관/공동/위탁)", "선택 (S/A/B/C, 미입력시 등급 없음)", "선택 (위탁정산/자체정산)",
+    "선택 (주관/공동/위탁)", "선택 (최우수/우수/일반, 미입력시 등급 없음)", "선택 (위탁정산/자체정산)",
     "선택 (삼화가 아니면 이 연차를 타회계법인 진행으로 자동 표시)",
     "선택 (연차상시/정산, 미입력시 협약구조로 자동판정 — \"정산형태\"와는 다른 값)",
     "선택 (주관기관 행에만, 없으면 단계기관별 시트의 값을 사용)",
@@ -1518,7 +1516,7 @@ export async function downloadExcelTemplate() {
       "홍길동", "",
       "2024-03-01", "2027-02-28", "1", "1", "2024",
       "삼화기술경영(주)", "123-45-67890",
-      "주관", "A", "위탁정산", "",
+      "주관", "우수", "위탁정산", "",
       "연차상시", "박연구",
       "2024-01-15", "2024-02-01",
       "2024-03-01", "2025-02-28",
@@ -1546,7 +1544,7 @@ export async function downloadExcelTemplate() {
       "김담당", "자율성트랙",
       "2024-06-01", "2026-05-31", "0", "1", "2024",
       "에너지연구소", "345-67-89012",
-      "주관", "S", "자체정산", "",
+      "주관", "최우수", "자체정산", "",
       "연차상시", "이연구",
       "2024-04-20", "2024-05-10",
       "2024-06-01", "2025-05-31",
@@ -1568,43 +1566,42 @@ export async function downloadExcelTemplate() {
   styleTemplateDataRows(ws, 3, 2 + TEMPLATE_BLANK_ROWS, headers.length);
   applyDropdown(ws, headers.indexOf("자율성트랙") + 1, ["", "자율성트랙"], 3, 2 + TEMPLATE_BLANK_ROWS);
   applyDropdown(ws, headers.indexOf("기관역할구분") + 1, ["주관", "공동", "위탁"], 3, 2 + TEMPLATE_BLANK_ROWS);
-  applyDropdown(ws, headers.indexOf("등급") + 1, ["S", "A", "B", "C", "D", "E", "F", ""], 3, 2 + TEMPLATE_BLANK_ROWS);
+  applyDropdown(ws, headers.indexOf("등급") + 1, ["최우수", "우수", "일반", ""], 3, 2 + TEMPLATE_BLANK_ROWS);
   applyDropdown(ws, headers.indexOf("정산형태") + 1, ["위탁정산", "자체정산"], 3, 2 + TEMPLATE_BLANK_ROWS);
   applyDropdown(ws, headers.indexOf("과제구분") + 1, ["", "연차상시", "정산"], 3, 2 + TEMPLATE_BLANK_ROWS);
 
   const stageNotes = [
-    "선택", "※필수", "선택", "※필수", "※필수",
+    "※필수", "선택", "※필수", "※필수",
     "※필수 (YYYY-MM-DD)", "※필수 (YYYY-MM-DD)",
     "선택 (0=일괄협약, 1 이상=단계협약)", "선택 (연차 숫자)", "선택 (시작단계와 동일해야 함)", "선택 (연차 숫자)",
     "선택 (YYYY-MM-DD, 이 단계의 실제 시작일)", "선택 (YYYY-MM-DD, 이 단계의 실제 종료일)",
     "선택",
-    "선택 (정발행/역발행요청/역발행/대상아님/면제, 미입력시 정발행)",
     "※필수", "※필수 (000-00-00000)", "선택 (주관/공동/위탁)", "선택 (최우수/우수/일반)", "선택 (주관기관 행에만)",
     "※필수 (원 단위)", "선택 (원 단위)",
   ];
   const stageHeaders = [
-    "과제번호(숫자)", "전문기관명", "RCMS사업명", "과제번호", "과제명",
+    "전문기관명", "RCMS사업명", "과제번호", "과제명",
     "총개발시작일자", "총개발종료일자",
     "정산대상시작단계", "정산대상시작연차", "정산대상종료단계", "정산대상종료연차",
     "단계시작일자", "단계종료일자",
-    "정산형태구분", "발행구분",
+    "정산형태구분",
     "연구기관명", "기관사업자등록번호", "기관역할구분", "기관등급", "연구책임자",
     "기관_총사업비(현금)", "기관_총사업비(현물)",
   ];
   const stageRows = [
     [
-      "1", "한국산업기술기획평가원", "스마트제조혁신사업", "RS-2024-00000001", "스마트 제조 AI 시스템 개발",
-      "2024-03-01", "2027-02-28", "1", "1", "1", "3", "2024-03-01", "2027-02-28", "위탁정산", "정발행",
+      "한국산업기술기획평가원", "스마트제조혁신사업", "RS-2024-00000001", "스마트 제조 AI 시스템 개발",
+      "2024-03-01", "2027-02-28", "1", "1", "1", "3", "2024-03-01", "2027-02-28", "위탁정산",
       "삼화기술경영(주)", "123-45-67890", "주관", "일반", "홍길동", "500000000", "0",
     ],
     [
-      "1", "한국산업기술기획평가원", "스마트제조혁신사업", "RS-2024-00000001", "스마트 제조 AI 시스템 개발",
-      "2024-03-01", "2027-02-28", "1", "1", "1", "3", "2024-03-01", "2027-02-28", "위탁정산", "정발행",
+      "한국산업기술기획평가원", "스마트제조혁신사업", "RS-2024-00000001", "스마트 제조 AI 시스템 개발",
+      "2024-03-01", "2027-02-28", "1", "1", "1", "3", "2024-03-01", "2027-02-28", "위탁정산",
       "참여기업(주)", "234-56-78901", "공동", "우수", "", "200000000", "0",
     ],
     [
-      "2", "한국에너지기술평가원", "신재생에너지핵심기술개발", "RS-2024-00000002", "신재생에너지 효율화 연구",
-      "2024-06-01", "2026-05-31", "0", "1", "0", "4", "2024-06-01", "2026-05-31", "위탁정산", "역발행요청",
+      "한국에너지기술평가원", "신재생에너지핵심기술개발", "RS-2024-00000002", "신재생에너지 효율화 연구",
+      "2024-06-01", "2026-05-31", "0", "1", "0", "4", "2024-06-01", "2026-05-31", "위탁정산",
       "에너지연구소", "345-67-89012", "주관", "최우수", "박연구", "800000000", "50000000",
     ],
   ];
@@ -1617,7 +1614,6 @@ export async function downloadExcelTemplate() {
   styleTemplateHeader(stageWs, stageNotes, 2);
   styleTemplateDataRows(stageWs, 3, 2 + TEMPLATE_BLANK_ROWS, stageHeaders.length);
   applyDropdown(stageWs, stageHeaders.indexOf("정산형태구분") + 1, ["위탁정산", "자체정산"], 3, 2 + TEMPLATE_BLANK_ROWS);
-  applyDropdown(stageWs, stageHeaders.indexOf("발행구분") + 1, ["정발행", "역발행요청", "역발행", "대상아님", "면제"], 3, 2 + TEMPLATE_BLANK_ROWS);
   applyDropdown(stageWs, stageHeaders.indexOf("기관역할구분") + 1, ["주관", "공동", "위탁"], 3, 2 + TEMPLATE_BLANK_ROWS);
   applyDropdown(stageWs, stageHeaders.indexOf("기관등급") + 1, ["최우수", "우수", "일반"], 3, 2 + TEMPLATE_BLANK_ROWS);
 
@@ -1670,8 +1666,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
 
   // "연차별기관별" + "단계기관별" 시트를 과제+기관 단위로 합산 — 참여기관(ProjectMember) 등록에 사용
   const { members: memberAggregates, projectMaxTerm } = useMemo(
-    () => buildMemberAggregates(parsedSheets, projects, stageAggregates),
-    [parsedSheets, projects, stageAggregates]
+    () => buildMemberAggregates(parsedSheets),
+    [parsedSheets]
   );
 
   // 과제담당자·자율성트랙·과제코드·연구책임자 등 과제 레벨 단일값 — 여러 행에 값이 갈리면 등록하지 않고 이슈로 남긴다
@@ -1790,6 +1786,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
   // ── 중복 검사 + 미리보기 생성 ───────────────────────────────
 
   function buildPreview() {
+    setError(null);
     const rowMap = new Map<string, ExtractedRow>();
 
     for (const sheet of parsedSheets) {
@@ -1812,7 +1809,6 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             institutionName: get("institutionName", row),
             bizNumber: get("bizNumber", row),
             institutionRole: get("institutionRole", row),
-            billingType: get("billingType", row),
             sheetKey: sheet.def.key,
           });
         }
@@ -1970,22 +1966,21 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         const agencyId = registeredAgencies.get(row.agencyName) ?? "";
         const startDateStr = row.startDate || today;
 
-        // 과제담당자·과제코드·연구책임자·자율성트랙 — 같은 과제의 여러 행에서 값이 하나로 모아질 때만 채택.
-        // 값이 갈리면(예: 같은 과제인데 코드가 다르게 찍힘) 여기서 비워두고, 아래에서 이슈로 남겨 확인을 요청한다.
+        // 과제담당자·연구책임자·자율성트랙 — 같은 과제의 여러 행에서 값이 하나로 모아질 때만 채택.
+        // 값이 갈리면 여기서 비워두고, 아래에서 이슈로 남겨 확인을 요청한다.
         const scalarInfo = scalarAggregates.get(normNum);
         const assignedManager = scalarInfo?.assignedManagers.size === 1 ? [...scalarInfo.assignedManagers][0] : undefined;
-        const projectCode = scalarInfo?.projectCodes.size === 1 ? [...scalarInfo.projectCodes][0] : undefined;
         const researchLead = scalarInfo?.researchLeads.size === 1 ? [...scalarInfo.researchLeads][0] : undefined;
         const agencyAssignedAt = scalarInfo?.agencyAssignedAts.size === 1 ? [...scalarInfo.agencyAssignedAts][0] : undefined;
         const internalAssignedAt = scalarInfo?.internalAssignedAts.size === 1 ? [...scalarInfo.internalAssignedAts][0] : undefined;
         const explicitProjectCategory = scalarInfo?.projectCategories.size === 1 ? [...scalarInfo.projectCategories][0] : undefined;
 
         // 새로 만들기 전에 "과제번호만 바뀐 기존 과제"인지 먼저 확인한다 — RCMS에서 과제번호가
-        // 재부여되는 경우가 있어, 문자열이 달라도 과제코드나 (과제명+기간)이 같으면 같은 과제로 본다.
+        // 재부여되는 경우가 있어, 문자열이 달라도 (과제명+기간)이 같으면 같은 과제로 본다.
         // 아래 단계 구조를 상대연차→절대연차로 바꿀 때 "이 과제가 이미 어디까지 진행됐는지"가
         // 기준이 되므로, 단계 계산보다 먼저 판단해야 한다.
         const { project: renamedFrom, ambiguousCandidates } = resolveRenamedProject(
-          row.projectName || "미입력", startDateStr, row.endDate || today, projectCode, projects
+          row.projectName || "미입력", startDateStr, row.endDate || today, projects
         );
 
         const stageInfo = stageAggregates.get(normNum);
@@ -1999,6 +1994,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
 
         // 당해(현재 연차) 정부출연금/민간현금/민간현물 — 참여기관 전체 합산
         const { govGrant, privateCash, privateInKind } = sumTermFinancials(memberAggregates, normNum, currentTerm);
+        // 파일에 담긴 연차 전체의 정부출연금/민간현금/민간현물 — Project.annualFinancials에 연차별로 쌓는다.
+        const allTermFinancials = sumAllTermFinancials(memberAggregates, normNum);
 
         // 현재 연차가 속한 단계의 실제 날짜 범위(있으면) → 단계시작일/단계종료일
         const currentStage = stages?.find((s) => currentTerm >= s.startTermNumber && currentTerm <= s.endTermNumber);
@@ -2027,23 +2024,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         } else if (renamedFrom) {
           // 과제번호 변경으로 판단 — 새로 만들지 않고 기존 과제를 그대로 갱신한다. updateProject의
           // 변경이력 기록이 "이전 과제번호 → 새 과제번호"를 감사로그에 자동으로 남긴다.
-          //
-          // 과제코드는 조금 다르게 다룬다 — 코드가 재부여된 뒤에 누군가 예전 코드가 적힌 파일을
-          // 다시 올리는 경우가 있어서, "이력에 이미 있는 예전 코드"가 들어오면 현재 코드를 그걸로
-          // 되돌리지 않는다. 진짜 새 코드일 때만 지금 코드를 이력에 넣고 교체한다.
-          let nextProjectCode = renamedFrom.projectCode;
-          let nextPreviousCodes = renamedFrom.previousProjectCodes;
-          if (projectCode && projectCode !== renamedFrom.projectCode) {
-            const isKnownOldCode = renamedFrom.previousProjectCodes?.includes(projectCode) ?? false;
-            if (!isKnownOldCode) {
-              nextPreviousCodes = renamedFrom.projectCode
-                ? [...new Set([...(renamedFrom.previousProjectCodes ?? []), renamedFrom.projectCode])]
-                : renamedFrom.previousProjectCodes;
-              nextProjectCode = projectCode;
-            }
-            // isKnownOldCode === true면 nextProjectCode/nextPreviousCodes를 그대로 둬서(변경 없음) 되돌리지 않는다.
-          }
-
+          // 과제코드는 시스템이 최초 등록 시 자동으로 매긴 값이라 여기서는 건드리지 않는다.
           updateProject(renamedFrom.id, {
             projectNumber: row.projectNumber,
             projectName: row.projectName || renamedFrom.projectName,
@@ -2053,7 +2034,6 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             endDate: row.endDate || today,
             totalTerms: Math.max(renamedFrom.totalTerms, totalTerms),
             currentTerm,
-            billingType: parseBillingType(row.billingType) ?? renamedFrom.billingType,
             agreementType: agreementType ?? renamedFrom.agreementType,
             stages: stages ?? renamedFrom.stages,
             projectCategory,
@@ -2061,13 +2041,12 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             govGrant: govGrant > 0 ? govGrant : renamedFrom.govGrant,
             privateCash: privateCash > 0 ? privateCash : renamedFrom.privateCash,
             privateInKind: privateInKind > 0 ? privateInKind : renamedFrom.privateInKind,
+            annualFinancials: mergeAnnualFinancials(renamedFrom.annualFinancials, allTermFinancials),
             stageStartDate: stageDateRange?.start ?? renamedFrom.stageStartDate,
             stageEndDate: stageDateRange?.end ?? renamedFrom.stageEndDate,
             firstStartDate: overallStartDate ?? renamedFrom.firstStartDate,
             finalEndDate: overallEndDate ?? renamedFrom.finalEndDate,
             assignedManager: assignedManager ?? renamedFrom.assignedManager,
-            projectCode: nextProjectCode,
-            previousProjectCodes: nextPreviousCodes,
             researchLead: researchLead ?? renamedFrom.researchLead,
             agencyAssignedAt: agencyAssignedAt ?? renamedFrom.agencyAssignedAt,
             internalAssignedAt: internalAssignedAt ?? renamedFrom.internalAssignedAt,
@@ -2091,7 +2070,6 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             totalTerms,
             currentTerm,
             status: "ACTIVE",
-            billingType: parseBillingType(row.billingType),
             agreementType,
             stages,
             projectCategory,
@@ -2099,12 +2077,12 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             govGrant: govGrant > 0 ? govGrant : undefined,
             privateCash: privateCash > 0 ? privateCash : undefined,
             privateInKind: privateInKind > 0 ? privateInKind : undefined,
+            annualFinancials: allTermFinancials.length > 0 ? allTermFinancials : undefined,
             stageStartDate: stageDateRange?.start,
             stageEndDate: stageDateRange?.end,
             firstStartDate: overallStartDate,
             finalEndDate: overallEndDate,
             assignedManager,
-            projectCode,
             researchLead,
             agencyAssignedAt,
             internalAssignedAt,
@@ -2271,14 +2249,14 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         // 참여기관 전체 합산해 갱신한다. 이 값들은 매년 바뀌는데 지금까지는 여기서 빠져 있어
         // 재업로드로 연차만 넘어가고 당해 사업비는 예전 값 그대로 남는 문제가 있었다.
         const { govGrant, privateCash, privateInKind } = sumTermFinancials(memberAggregates, info.normNum, nextCurrentTerm);
+        const allTermFinancials = sumAllTermFinancials(memberAggregates, info.normNum);
 
-        // 과제담당자·과제코드·연구책임자·배정일 — 신규/이름변경 과제(위쪽 분기)와 달리 이 "기존 과제
+        // 과제담당자·연구책임자·배정일 — 신규/이름변경 과제(위쪽 분기)와 달리 이 "기존 과제
         // 연차 갱신" 분기는 지금까지 이 필드들을 전혀 건드리지 않아서, 최초 등록 때 값이 갈려(row마다
         // 값이 달라) 비어 있었으면 이후 아무리 재업로드해도 영영 채워지지 않는 문제가 있었다.
         // scalarInfo가 이번 파일에서 값을 하나로 특정하지 못하면(비어 있거나 여전히 갈리면) 기존 값을 유지한다.
         const scalarInfo = scalarAggregates.get(info.normNum);
         const assignedManager = scalarInfo?.assignedManagers.size === 1 ? [...scalarInfo.assignedManagers][0] : undefined;
-        const projectCode = scalarInfo?.projectCodes.size === 1 ? [...scalarInfo.projectCodes][0] : undefined;
         const researchLead = scalarInfo?.researchLeads.size === 1 ? [...scalarInfo.researchLeads][0] : undefined;
         const agencyAssignedAt = scalarInfo?.agencyAssignedAts.size === 1 ? [...scalarInfo.agencyAssignedAts][0] : undefined;
         const internalAssignedAt = scalarInfo?.internalAssignedAts.size === 1 ? [...scalarInfo.internalAssignedAts][0] : undefined;
@@ -2289,8 +2267,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           govGrant: govGrant > 0 ? govGrant : existingProject.govGrant,
           privateCash: privateCash > 0 ? privateCash : existingProject.privateCash,
           privateInKind: privateInKind > 0 ? privateInKind : existingProject.privateInKind,
+          annualFinancials: mergeAnnualFinancials(existingProject.annualFinancials, allTermFinancials),
           assignedManager: assignedManager ?? existingProject.assignedManager,
-          projectCode: projectCode ?? existingProject.projectCode,
           researchLead: researchLead ?? existingProject.researchLead,
           agencyAssignedAt: agencyAssignedAt ?? existingProject.agencyAssignedAt,
           internalAssignedAt: internalAssignedAt ?? existingProject.internalAssignedAt,
@@ -2386,9 +2364,6 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       if (scalarInfo) {
         if (scalarInfo.projectNames.size > 1) {
           reasons.push(`같은 과제번호인데 과제명이 서로 다릅니다: ${[...scalarInfo.projectNames].join(" / ")}`);
-        }
-        if (scalarInfo.projectCodes.size > 1) {
-          reasons.push(`같은 과제번호인데 과제코드(과제번호(숫자))가 서로 달라 등록하지 않았습니다: ${[...scalarInfo.projectCodes].join(" / ")}`);
         }
         if (scalarInfo.assignedManagers.size > 1) {
           reasons.push(`같은 과제인데 과제담당자가 서로 달라 등록하지 않았습니다: ${[...scalarInfo.assignedManagers].join(" / ")}`);

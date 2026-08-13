@@ -238,13 +238,6 @@ const annualColumns: ColumnDef[] = [
 // ── 시트 2: 단계기관별 ────────────────────────────────────────────
 const stageColumns: ColumnDef[] = [
   {
-    field: "projectNumberNumeric",
-    label: "과제번호(숫자)",
-    aliases: ["과제번호(숫자)", "과제번호 숫자", "과제번호숫자"],
-    required: false,
-    description: "전담기관 과제코드(Project.projectCode)로 등록",
-  },
-  {
     field: "agencyName",
     label: "전문기관명",
     aliases: ["전문기관명", "전담기관명", "주관기관명"],
@@ -326,13 +319,6 @@ const stageColumns: ColumnDef[] = [
     label: "정산형태구분",
     aliases: ["정산형태구분", "정산형태", "정산구분"],
     required: false,
-  },
-  {
-    field: "billingType",
-    label: "발행구분",
-    aliases: ["발행구분", "발행 구분", "세금계산서발행구분", "세금계산서 발행구분"],
-    required: false,
-    description: "정발행/역발행요청/역발행/대상아님/면제 — 미입력 시 정발행으로 처리",
   },
   {
     field: "institutionName",

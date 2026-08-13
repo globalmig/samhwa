@@ -3,7 +3,7 @@
 import { use, useState, useMemo, useEffect, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   FiEdit2, FiCheck, FiX, FiPlus, FiSend, FiChevronDown, FiChevronUp, FiTrash2, FiFileText,
   FiHash, FiCalendar, FiLayers, FiDollarSign, FiInfo,
@@ -23,6 +23,7 @@ import Modal from "@/components/common/Modal";
 import MoneyInput from "@/components/common/MoneyInput";
 import DateInput from "@/components/common/DateInput";
 import NoticeLetterPreview, { type NoticeStatusRow } from "@/components/common/NoticeLetterPreview";
+import SimpleNoticeModal, { type SimpleNoticeTarget } from "@/components/common/SimpleNoticeModal";
 import { buildNoticeEmailHtml } from "@/lib/notice-email-html";
 import InstitutionQuickAdd from "@/components/common/InstitutionQuickAdd";
 import UserMultiSelect from "@/components/common/UserMultiSelect";
@@ -88,6 +89,17 @@ const GRADE_COLOR: Record<string, string> = {
 const GRADE_LABEL: Record<string, string> = { S: "최우수(S)", A: "우수(A)", B: "우수(B)", C: "우수(C)", 일반: "일반" };
 const ROLE_LABEL: Record<"LEAD" | "PARTICIPANT" | "ENTRUSTED", string> = { LEAD: "주관", PARTICIPANT: "공동", ENTRUSTED: "위탁" };
 
+// ─── 참여기관 정렬: 주관기관을 맨 위로, 나머지는 기관명 가나다순 ─────────────
+// 참여기관 목록·수수료 관리 탭 모두 업로드된 순서 그대로 보여주던 걸 통일한다.
+function sortByLeadThenName<T>(list: T[], isLead: (item: T) => boolean, nameOf: (item: T) => string): T[] {
+  return [...list].sort((a, b) => {
+    const aLead = isLead(a);
+    const bLead = isLead(b);
+    if (aLead !== bLead) return aLead ? -1 : 1;
+    return nameOf(a).localeCompare(nameOf(b), "ko");
+  });
+}
+
 // ─── 발행구분 (수수료 청구관리 목록과 동일한 옵션 — TermFee.billingType 필드 공유) ──
 const BILLING_TYPE_COLOR: Record<string, string> = {
   "정발행":     "bg-blue-100 text-blue-700",
@@ -139,8 +151,8 @@ interface BillingUnit {
   billingLabel: string;           // 화면 표시 + leadInstitutionName에 저장할 값
   recipients: { institutionName: string; email: string }[]; // 공문 발송 대상
   amount: number;
-  billedFees: { id: string; status: TermFee["status"] }[];      // 발행 시 BILLED로 갱신
-  confirmedFees: { id: string; status: TermFee["status"] }[];   // 발행 시 (초안/예정이면) CONFIRMED로 갱신
+  billedFees: { id: string; status: TermFee["status"]; manualOverride?: boolean }[];      // 발행 시 BILLED로 갱신
+  confirmedFees: { id: string; status: TermFee["status"]; manualOverride?: boolean }[];   // 발행 시 (초안/예정이면) CONFIRMED로 갱신
   billingType?: TermFee["billingType"]; // 이 단위(연차 전체 또는 분리된 기관)의 발행구분 — TermFee에서 대표값을 가져온다
   invoice: TaxInvoice | null;
   receivable: Receivable | null;
@@ -151,6 +163,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   const canEditProjects = useCanWrite('projects');
   const canEditIssues = useCanWrite('issues');
   const canManageIssues = useCanWrite('issues-manage');
+  const searchParams = useSearchParams();
   const { projects, projectMembers, institutions, projectIssues, auditLog, fundingAgencies, feePolicies, termFeeCalcs, termFees, users } = useStore();
   const selectableUsers = users.filter((u) => u.status === "ACTIVE");
 
@@ -211,11 +224,19 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   // 참여기관 목록에서 "지금 보고 있는 연차" — 기본은 현재 진행 연차이지만, 참여기관·등급·정산구분·
   // 사업비가 연차마다 바뀔 수 있어 탭으로 다른 연차를 훑어볼 수 있게 한다. 인라인 일괄수정("기관 수정")은
   // 항상 실제 진행 연차(currentTerm) 기준으로만 동작하므로, 편집 모드에 들어가면 이 값을 되돌린다.
-  const [viewTerm, setViewTerm] = useState(() => project?.currentTerm ?? 1);
+  // 수수료 관리 목록(연차별로 나뉜 행)에서 특정 연차를 클릭해 들어온 경우 URL의 ?term= 값을 우선 적용한다.
+  const [viewTerm, setViewTerm] = useState(() => {
+    const termParam = Number(searchParams.get("term"));
+    return Number.isInteger(termParam) && termParam >= 1 ? termParam : project?.currentTerm ?? 1;
+  });
 
   if (!project) return null;
 
-  const members = projectMembers.filter((m) => m.projectId === projectId);
+  const members = sortByLeadThenName(
+    projectMembers.filter((m) => m.projectId === projectId),
+    (m) => m.role === "LEAD",
+    (m) => m.institutionName,
+  );
   const issues = [...projectIssues.filter((i) => i.projectId === projectId)]
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const history = auditLog
@@ -347,6 +368,14 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
     const rda2AffiliatedNames = fundingAgencies.find((a) => a.id === "fa-006")?.rda2AffiliatedInstitutionNames;
     const resolvedAgencyId = resolveRdaAgencyId(draft.agencyId, leadInstitutionName, rda2AffiliatedNames);
     const resolvedAgency = fundingAgencies.find((a) => a.id === resolvedAgencyId)?.name ?? draft.agency;
+    // 당해(draft.currentTerm) 정부출연금/민간현금/민간현물을 직접 수정했을 수 있으니, 연차별 이력
+    // (annualFinancials)도 함께 갱신한다 — 안 그러면 다른 연차를 봤다가 돌아왔을 때 방금 수정한
+    // 값과 이력이 어긋난다.
+    const savedTermYear = termNumberToYear(draft.startDate, draft.currentTerm);
+    const annualFinancials = [
+      ...(draft.annualFinancials ?? []).filter((a) => a.termNumber !== draft.currentTerm),
+      { termYear: savedTermYear, termNumber: draft.currentTerm, govGrant: draft.govGrant ?? 0, privateCash: draft.privateCash ?? 0, privateInKind: draft.privateInKind ?? 0 },
+    ].sort((a, b) => a.termNumber - b.termNumber);
     updateProject(projectId, {
       ...draft,
       agencyId: resolvedAgencyId,
@@ -355,6 +384,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       totalBudget: annualBudget > 0 ? annualBudget : draft.totalBudget,
       firstStartDate: resolvedFirstStartDate,
       finalEndDate: resolvedFinalEndDate,
+      annualFinancials,
     });
     setSavedMsg(true);
     setTimeout(() => setSavedMsg(false), 2000);
@@ -419,6 +449,18 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   // 바로 반영되어야 하니까), 탭으로 다른 연차를 보고 있을 때는 그 연차 기준(calcMembers)으로 다시 더한다.
   const viewTotalCashBudget = editingMembers ? totalCashBudget : calcMembers.reduce((s, m) => s + m.cashBudget, 0);
   const viewTotalInKindBudget = editingMembers ? totalInKindBudget : calcMembers.reduce((s, m) => s + (m.inKindBudget ?? 0), 0);
+
+  // "사업비 구분" 카드(정부출연금/민간현금/민간현물)는 연차 탭(viewTerm)에 맞춰 보여준다 — currentTerm이면
+  // 지금 수정 중인 draft 값(입력 가능)을, 다른 연차는 annualFinancials 이력에서 찾은 값을 읽기 전용으로
+  // 보여준다. annualFinancials는 엑셀 업로드로만 채워지므로 다른 연차 값은 여기서 직접 수정하지 않는다
+  // (참여기관 인라인 편집이 항상 currentTerm 기준으로만 동작하는 것과 동일한 원칙).
+  const isCurrentTermFinancials = viewTerm === currentTerm;
+  const viewFinancialsRecord = project.annualFinancials?.find((a) => a.termNumber === viewTerm);
+  const viewFinancials = isCurrentTermFinancials
+    ? { govGrant: draft.govGrant ?? 0, privateCash: draft.privateCash ?? 0, privateInKind: draft.privateInKind ?? 0 }
+    : { govGrant: viewFinancialsRecord?.govGrant ?? 0, privateCash: viewFinancialsRecord?.privateCash ?? 0, privateInKind: viewFinancialsRecord?.privateInKind ?? 0 };
+  const viewAnnualBudget = viewFinancials.govGrant + viewFinancials.privateCash + viewFinancials.privateInKind;
+  const hasFinancialsForViewTerm = isCurrentTermFinancials || viewFinancialsRecord !== undefined;
 
   function startMemberEdit() { setMemberDrafts({}); setBudgetDrafts({}); setBudgetMismatchError(""); setViewTerm(currentTerm); setEditingMembers(true); }
   function cancelMemberEdit() { setEditingMembers(false); setMemberDrafts({}); setBudgetDrafts({}); setBudgetMismatchError(""); }
@@ -517,12 +559,17 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             <p className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
               <FiHash size={12} className="text-slate-400" /> 기본 식별 정보
             </p>
-            {/* 과제코드 + 상태 */}
-            <div className="grid grid-cols-2 gap-4">
+            {/* 과제코드 + 상태 + 과제구분 */}
+            <div className="grid grid-cols-3 gap-4">
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">과제코드</label>
-                <input className={`${inp} w-full font-mono bg-white`} value={draft.projectCode ?? ""}
-                  onChange={(e) => setDraft((p) => ({ ...p, projectCode: e.target.value }))} />
+                <input
+                  className={`${inp} w-full font-mono bg-slate-50 text-slate-500 cursor-not-allowed`}
+                  value={draft.projectCode ?? ""}
+                  disabled
+                  readOnly
+                  title="과제코드는 직접 수정할 수 없습니다 — 과제 등록 시 전담기관 약칭과 순번으로 시스템이 자동 생성합니다."
+                />
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">상태</label>
@@ -531,6 +578,15 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                   <option value="ACTIVE">진행중</option>
                   <option value="COMPLETED">완료</option>
                   <option value="SUSPENDED">중단</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">과제구분</label>
+                <select className={`${sel} w-full`} value={draft.projectDivision ?? ""}
+                  onChange={(e) => setDraft((p) => ({ ...p, projectDivision: (e.target.value || undefined) as Project["projectDivision"] }))}>
+                  <option value="">미지정</option>
+                  <option value="위탁">위탁</option>
+                  <option value="공동">공동</option>
                 </select>
               </div>
             </div>
@@ -586,12 +642,24 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
           <div className="rounded-lg border border-slate-100 bg-slate-50/50 px-4 py-4 space-y-3">
             <p className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
               <FiDollarSign size={12} className="text-slate-400" /> 사업비 구분 (총사업비 / 현금사업비 / 현물사업비)
+              {!isCurrentTermFinancials && (
+                <span className="text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{viewTerm}연차 기준 · 읽기전용</span>
+              )}
             </p>
+            {!isCurrentTermFinancials && !hasFinancialsForViewTerm && (
+              <p className="text-[10px] text-amber-600">⚠ {viewTerm}연차의 정부출연금/민간현금/민간현물 기록이 없습니다(엑셀 업로드로만 채워집니다).</p>
+            )}
             <div className="grid grid-cols-2 gap-x-6 gap-y-3">
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">당해 정부출연금 (원)</label>
-                <MoneyInput className={`${inp} w-full`} value={draft.govGrant ?? 0}
-                  onChange={(v) => setDraft((p) => ({ ...p, govGrant: v }))} />
+                {isCurrentTermFinancials ? (
+                  <MoneyInput className={`${inp} w-full`} value={viewFinancials.govGrant}
+                    onChange={(v) => setDraft((p) => ({ ...p, govGrant: v }))} />
+                ) : (
+                  <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500">
+                    {fmtWonFull(viewFinancials.govGrant)}
+                  </div>
+                )}
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">공동기관 수</label>
@@ -602,8 +670,14 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">당해 민간현금 (원)</label>
-                <MoneyInput className={`${inp} w-full`} value={draft.privateCash ?? 0}
-                  onChange={(v) => setDraft((p) => ({ ...p, privateCash: v }))} />
+                {isCurrentTermFinancials ? (
+                  <MoneyInput className={`${inp} w-full`} value={viewFinancials.privateCash}
+                    onChange={(v) => setDraft((p) => ({ ...p, privateCash: v }))} />
+                ) : (
+                  <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500">
+                    {fmtWonFull(viewFinancials.privateCash)}
+                  </div>
+                )}
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">
@@ -615,8 +689,14 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">당해 민간현물 (원)</label>
-                <MoneyInput className={`${inp} w-full`} value={draft.privateInKind ?? 0}
-                  onChange={(v) => setDraft((p) => ({ ...p, privateInKind: v }))} />
+                {isCurrentTermFinancials ? (
+                  <MoneyInput className={`${inp} w-full`} value={viewFinancials.privateInKind}
+                    onChange={(v) => setDraft((p) => ({ ...p, privateInKind: v }))} />
+                ) : (
+                  <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500">
+                    {fmtWonFull(viewFinancials.privateInKind)}
+                  </div>
+                )}
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">전담기관 배정일자</label>
@@ -626,7 +706,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">당해 현금사업비 (자동계산)</label>
                 <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-white font-bold text-slate-700">
-                  {fmtWonFull((draft.govGrant ?? 0) + (draft.privateCash ?? 0))}
+                  {fmtWonFull(viewFinancials.govGrant + viewFinancials.privateCash)}
                 </div>
               </div>
               <div>
@@ -637,8 +717,13 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">당해 사업비 (자동계산)</label>
                 <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-white font-bold text-slate-700">
-                  {fmtWonFull(annualBudget)}
+                  {fmtWonFull(viewAnnualBudget)}
                 </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">삼화담당자</label>
+                <input className={`${inp} w-full bg-white`} value={draft.assignedManager ?? ""}
+                  onChange={(e) => setDraft((p) => ({ ...p, assignedManager: e.target.value }))} placeholder="담당자명" />
               </div>
             </div>
           </div>
@@ -2055,7 +2140,7 @@ function AppliedFeeCell({ fee, canEdit, projectId, zeroReasons }: { fee: TermFee
 function FeeAggregateSummary({ group, canEdit, projectId }: { group: TermGroup; canEdit: boolean; projectId: string }) {
   const { auditLog } = useStore();
   const [editing, setEditing] = useState(false);
-  const [supplyDraft, setSupplyDraft] = useState(0);
+  const [totalDraft, setTotalDraft] = useState(0);
   const [reason, setReason] = useState("");
   const [showHistory, setShowHistory] = useState(false);
 
@@ -2064,9 +2149,10 @@ function FeeAggregateSummary({ group, canEdit, projectId }: { group: TermGroup; 
   // 세금계산서가 이미 발행된(BILLED) 연차는 청구액을 여기서 더 건드릴 수 없다 — 발행 취소 후 수정.
   const canEditThis = canEdit && group.termStatus !== "BILLED";
 
-  // 합계는 공급가액에서 파생되는 값이라(합계 = 공급가액 × 1.1) 공급가액만 입력받으면 충분하다 —
-  // 둘 다 입력란으로 두면 어느 쪽이 기준인지 헷갈리고 서로 어긋난 값을 입력할 여지가 생긴다.
-  const totalDraft = Math.round(supplyDraft * 1.1);
+  // 공급가액·부가세는 합계(부가세 포함액)에서 파생되는 값이라(splitVatInclusive) 합계만
+  // 입력받으면 충분하다 — 여러 값을 입력란으로 두면 어느 쪽이 기준인지 헷갈리고 서로 어긋난
+  // 값을 입력할 여지가 생긴다.
+  const { supplyAmount: draftSupply, taxAmount: draftTax } = splitVatInclusive(totalDraft);
 
   // 수정이력 — TermFee.manualOverrideReason은 값을 덮어쓰므로 화면엔 최신 사유만 남지만, 실제 변경
   // 기록은 updateTermFee가 매번 감사로그(auditLog)에 남긴다. 그걸 모아 이 연차의 직접수정 이력으로 보여준다.
@@ -2088,12 +2174,12 @@ function FeeAggregateSummary({ group, canEdit, projectId }: { group: TermGroup; 
     .sort((a, b) => b.performedAt.localeCompare(a.performedAt));
 
   function startEdit() {
-    setSupplyDraft(aggSupply);
+    setTotalDraft(group.totalApplied);
     setReason("");
     setEditing(true);
   }
-  function changeSupply(v: number) {
-    setSupplyDraft(v);
+  function changeTotal(v: number) {
+    setTotalDraft(v);
   }
   function save() {
     if (!reason.trim()) return;
@@ -2121,16 +2207,16 @@ function FeeAggregateSummary({ group, canEdit, projectId }: { group: TermGroup; 
         <div className="flex items-center justify-end gap-6">
           <div className="text-right">
             <p className="text-[10px] text-slate-400 mb-1">공 급 가 액</p>
-            <MoneyInput value={supplyDraft} onChange={changeSupply}
-              className="w-36 text-right text-sm border border-blue-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/30" />
+            <p className="text-sm font-semibold text-slate-500 py-1.5">{fmtWonFull(draftSupply)}</p>
           </div>
           <div className="text-right">
             <p className="text-[10px] text-slate-400 mb-1">부 가 세</p>
-            <p className="text-sm font-semibold text-slate-500 py-1.5">{fmtWonFull(totalDraft - supplyDraft)}</p>
+            <p className="text-sm font-semibold text-slate-500 py-1.5">{fmtWonFull(draftTax)}</p>
           </div>
           <div className="text-right">
             <p className="text-[10px] font-semibold text-slate-500 mb-1 tracking-widest uppercase">합 계</p>
-            <p className="text-sm font-bold text-slate-800 py-1.5">{fmtWonFull(totalDraft)}</p>
+            <MoneyInput value={totalDraft} onChange={changeTotal}
+              className="w-36 text-right text-sm font-bold border border-blue-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/30" />
           </div>
         </div>
         <div>
@@ -2237,11 +2323,10 @@ function BillingBlock({
 
   // 발행구분 — 연차(TermFee)마다 다르게 발행될 수 있어 TermFee.billingType을 우선 쓰고, 이 연차에
   // 아직 값이 없으면 과제 단위 기본값(project.billingType, 엑셀 업로드 등으로 들어온 값)으로 대체한다.
-  // RDA2처럼 연차를 기관별로 쪼개 발행하는 unit(institutionId 있음)은 이 화면에서는 표시하지 않는다
-  // (cancelInvoice의 기존 가드와 동일한 이유 — 기관마다 따로 관리하려면 별도 UI가 더 필요함).
-  const showBillingType = unit.institutionId === null;
+  // RDA2처럼 연차를 기관별로 쪼개 발행하는 unit(institutionId 있음)도 기관마다 따로 표시·저장한다 —
+  // setTermBillingType에 unit.institutionId를 넘기면 그 기관의 TermFee 행만 갱신된다.
   const billingType = unit.billingType ?? project.billingType ?? "정발행";
-  const isNoBill = showBillingType && (billingType === "대상아님" || billingType === "면제");
+  const isNoBill = billingType === "대상아님" || billingType === "면제";
 
   // 공문 수신자 — 분리단위(RDA2)면 그 기관, 아니면 주관기관의 참여기관 레코드에서 담당자 정보를 가져온다.
   // 연차별로 담당자가 바뀔 수 있어(recipientOverrides) 이 연차(termNumber) 기준으로 조회·저장한다.
@@ -2249,6 +2334,27 @@ function BillingBlock({
   const recipient = recipientMember ? resolveMemberRecipientForTerm(recipientMember, termNumber) : null;
   const [editingRecipient, setEditingRecipient] = useState(false);
   const [recipientDraft, setRecipientDraft] = useState({ recipientName: "", recipientEmail: "", recipientPhone: "" });
+
+  // 계산서발행 서류 요청 / 입금 확인 요청 — 첨부파일 없이 메일 본문 하나만 보내는 간단 안내 메일.
+  const [simpleNotice, setSimpleNotice] = useState<SimpleNoticeTarget | null>(null);
+  const termRangeForEmail = resolveTermDateRange(project, termNumber);
+  const coInstitutionCount = members.filter((m) => m.role !== "LEAD").length;
+  function openSimpleNotice(kind: SimpleNoticeTarget["kind"]) {
+    setSimpleNotice({
+      kind,
+      projectNumber,
+      projectName: project.projectName,
+      agencyName: project.agency,
+      leadInstitutionName: unit.billingLabel,
+      termStart: termRangeForEmail.start,
+      termEnd: termRangeForEmail.end,
+      researchLead: project.researchLead ?? "",
+      participantCount: coInstitutionCount,
+      recipientEmail: recipient?.recipientEmail ?? "",
+      totalAmount: unit.invoice?.totalAmount ?? unit.amount,
+      invoiceIssuedAt: unit.invoice?.issuedAt ?? "",
+    });
+  }
 
   function startEditRecipient() {
     if (!recipient) return;
@@ -2294,10 +2400,11 @@ function BillingBlock({
     setIssuingInvoice(true);
   }
 
-  // 합계(=산정된 수수료)는 고정, 공급가액을 조정하면 부가세가 차액만큼 재계산된다
-  function handleSupplyChange(v: number) {
-    const tax = unit.amount - v;
-    setInvForm((p) => ({ ...p, supplyAmount: v, taxAmount: tax, totalAmount: unit.amount }));
+  // 합계(부가세 포함액)를 입력받아 공급가액·부가세를 파생한다 — splitVatInclusive가 절사(반올림 없이)로
+  // 공급가액을 구하고, 부가세는 합계에서 공급가액을 뺀 나머지로 잡아서 절사로 인한 1원 차이를 없앤다.
+  function handleTotalChange(v: number) {
+    const { supplyAmount, taxAmount } = splitVatInclusive(v);
+    setInvForm((p) => ({ ...p, totalAmount: v, supplyAmount, taxAmount }));
   }
 
   function saveInvoice() {
@@ -2341,11 +2448,19 @@ function BillingBlock({
     if (!unit.invoice) return;
     if (!window.confirm("세금계산서 발행을 취소할까요? 발행일이 삭제되고 상태가 '취소'로 변경됩니다.")) return;
     updateTaxInvoice(unit.invoice.id, { issuedAt: "", status: "CANCELED" });
-    // billingType이 이 연차에 "정발행"으로 저장되어 있으면 취소 후에도 목록에서 계속 그 표시가
-    // 남으므로 초기화한다. (기관별 개별 청구 단위는 이 화면에서 다루지 않으므로 건드리지 않는다.)
-    if (unit.institutionId === null && unit.billingType === "정발행") {
-      setTermBillingType(projectNumber, termYear, termNumber, undefined);
+    // billingType이 이 연차(+분리 청구 기관)에 "정발행"으로 저장되어 있으면 취소 후에도 목록에서
+    // 계속 그 표시가 남으므로 초기화한다.
+    if (unit.billingType === "정발행") {
+      setTermBillingType(projectNumber, termYear, termNumber, undefined, unit.institutionId ?? undefined);
     }
+    // 발행 시 BILLED/CONFIRMED로 잠갔던 이 청구 단위의 연차를 다시 풀어서, 재발행 전까지 정산구분·
+    // 금액 등을 다시 수정할 수 있게 한다(수정 후 재발행을 요청하는 기관 대응). 담당자가 직접 수정한
+    // (manualOverride) 값은 발행 여부와 무관한 별도 보호라 여기서는 건드리지 않는다.
+    [...unit.billedFees, ...unit.confirmedFees].forEach((f) => {
+      if (!f.manualOverride && (f.status === "BILLED" || f.status === "CONFIRMED")) {
+        updateTermFee(f.id, { status: "DRAFT" });
+      }
+    });
   }
 
   function openRvForm() {
@@ -2469,25 +2584,23 @@ function BillingBlock({
         </div>
       )}
 
-      {/* 발행구분 — 연차(TermFee) 단위로 저장되어 연차마다 다르게 설정할 수 있다 */}
-      {showBillingType && (
-        <div className="flex items-center gap-3">
-          <span className="text-xs font-semibold text-slate-600 w-24 shrink-0">발행구분</span>
-          <select
-            value={billingType}
-            disabled={!canEditInvoices}
-            onChange={(e) => setTermBillingType(projectNumber, termYear, termNumber, e.target.value as TermFee["billingType"])}
-            className={`text-xs font-medium border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-50 disabled:cursor-not-allowed ${BILLING_TYPE_COLOR[billingType] ?? "bg-white text-slate-700"}`}
-          >
-            {BILLING_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-          <span className="text-[11px] text-slate-400">
-            {BILLING_OPTIONS.find((o) => o.value === billingType)?.desc}
-          </span>
-        </div>
-      )}
+      {/* 발행구분 — 연차(TermFee) 단위(RDA2 등 분리 청구 단위는 기관 단위)로 저장되어 다르게 설정할 수 있다 */}
+      <div className="flex items-center gap-3">
+        <span className="text-xs font-semibold text-slate-600 w-24 shrink-0">발행구분</span>
+        <select
+          value={billingType}
+          disabled={!canEditInvoices}
+          onChange={(e) => setTermBillingType(projectNumber, termYear, termNumber, e.target.value as TermFee["billingType"], unit.institutionId ?? undefined)}
+          className={`text-xs font-medium border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400 disabled:opacity-50 disabled:cursor-not-allowed ${BILLING_TYPE_COLOR[billingType] ?? "bg-white text-slate-700"}`}
+        >
+          {BILLING_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+        <span className="text-[11px] text-slate-400">
+          {BILLING_OPTIONS.find((o) => o.value === billingType)?.desc}
+        </span>
+      </div>
 
       <div className="flex items-start gap-3">
         <span className="text-xs font-semibold text-slate-600 w-24 shrink-0 pt-1">세금계산서</span>
@@ -2509,6 +2622,12 @@ function BillingBlock({
                   title={unit.recipients.length > 1 ? `${unit.recipients.length}곳으로 발송됩니다` : "발송됩니다"}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 transition-colors">
                   <FiSend size={12} /> 공문 발송{unit.recipients.length > 1 ? ` (${unit.recipients.length}곳)` : ""}
+                </button>
+              )}
+              {canEditEmails && (
+                <button onClick={() => openSimpleNotice("DOC_REQUEST")}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-50 transition-colors">
+                  <FiSend size={12} /> 서류 요청
                 </button>
               )}
               {canEditInvoices && (
@@ -2538,6 +2657,12 @@ function BillingBlock({
                 <FiPlus size={12} /> 세금계산서 발행
               </button>
             )}
+            {canEditEmails && (
+              <button onClick={() => openSimpleNotice("DOC_REQUEST")}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-50 transition-colors">
+                <FiSend size={12} /> 서류 요청
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -2552,17 +2677,17 @@ function BillingBlock({
                 onChange={(v) => setInvForm((p) => ({ ...p, issuedAt: v }))} />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">공급가액 (원)</label>
-              <MoneyInput className={`${inp} w-full`} value={invForm.supplyAmount}
-                onChange={(v) => handleSupplyChange(v)} />
+              <label className="block text-xs font-medium text-slate-600 mb-1">공급가액 (자동)</label>
+              <div className="text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-600">{fmtWonFull(invForm.supplyAmount)}</div>
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1">부가세 (자동)</label>
               <div className="text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-600">{fmtWonFull(invForm.taxAmount)}</div>
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">합계</label>
-              <div className="text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 font-bold text-slate-700">{fmtWonFull(invForm.totalAmount)}</div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">합계 (원)</label>
+              <MoneyInput className={`${inp} w-full font-bold`} value={invForm.totalAmount}
+                onChange={(v) => handleTotalChange(v)} />
             </div>
           </div>
           <div className="flex items-center justify-between">
@@ -2590,16 +2715,30 @@ function BillingBlock({
               미수금 {fmtWonFull(unit.receivable.receivableAmount)}
             </span>
             <StatusBadge label={RECEIVABLE_STATUS[unit.receivable.status].label} color={RECEIVABLE_STATUS[unit.receivable.status].color} />
-            {canEditReceivables && (
-              <button onClick={openRvForm}
-                className="ml-auto flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
-                <FiEdit2 size={12} /> 수금 입력
-              </button>
-            )}
+            <div className="ml-auto flex items-center gap-2">
+              {canEditEmails && unit.receivable.receivableAmount > 0 && (
+                <button onClick={() => openSimpleNotice("PAYMENT_REMINDER")}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-red-700 border border-red-200 rounded-lg hover:bg-red-50 transition-colors">
+                  <FiSend size={12} /> 입금 확인 요청
+                </button>
+              )}
+              {canEditReceivables && (
+                <button onClick={openRvForm}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                  <FiEdit2 size={12} /> 수금 입력
+                </button>
+              )}
+            </div>
           </div>
         ) : unit.invoice ? (
           <div className="flex items-center gap-3">
             <span className="text-xs text-slate-400">수금 내역 없음</span>
+            {canEditEmails && (
+              <button onClick={() => openSimpleNotice("PAYMENT_REMINDER")}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-red-700 border border-red-200 rounded-lg hover:bg-red-50 transition-colors">
+                <FiSend size={12} /> 입금 확인 요청
+              </button>
+            )}
             {canEditReceivables && (
               <button onClick={openRvForm}
                 className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors">
@@ -2638,6 +2777,10 @@ function BillingBlock({
             </div>
           </div>
         </div>
+      )}
+
+      {simpleNotice && (
+        <SimpleNoticeModal target={simpleNotice} onClose={() => setSimpleNotice(null)} />
       )}
     </div>
   );
@@ -2754,7 +2897,7 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
   // 묶는 대신 실제 수수료가 발생하는(appliedFee > 0) 기관마다 별도의 BillingUnit을 만든다.
   // 그 외 전담기관은 지금까지와 동일하게 연차 전체를 통합 1건으로 처리한다.
   const isRda2 = project.agencyId === "fa-006";
-  const feeRef = (f: TermFee) => ({ id: f.id, status: f.status });
+  const feeRef = (f: TermFee) => ({ id: f.id, status: f.status, manualOverride: f.manualOverride });
 
   const billingUnits: BillingUnit[] = isRda2
     ? group.fees.filter((f) => f.appliedFee > 0).map((f) => ({
@@ -3260,6 +3403,7 @@ function FeeManagementTab({ projectId }: { projectId: string }) {
   const termGroups = useMemo<TermGroup[]>(() => {
     if (!project) return [];
     const projectNumber = project.projectNumber;
+    const leadInstitutionIds = new Set(members.filter((m) => m.role === "LEAD").map((m) => m.institutionId));
     const myFees = termFees.filter((f) => f.projectNumber === projectNumber);
     const grouped = new Map<string, TermFee[]>();
     myFees.forEach((f) => {
@@ -3267,8 +3411,9 @@ function FeeManagementTab({ projectId }: { projectId: string }) {
       if (!grouped.has(k)) grouped.set(k, []);
       grouped.get(k)!.push(f);
     });
-    return Array.from(grouped.entries()).map(([key, fees]) => {
+    return Array.from(grouped.entries()).map(([key, rawFees]) => {
       const [y, n] = key.split("|").map(Number);
+      const fees = sortByLeadThenName(rawFees, (f) => leadInstitutionIds.has(f.institutionId), (f) => f.institutionName);
       const totalApplied = fees.reduce((s, f) => s + f.appliedFee, 0);
       const totalCalculated = fees.reduce((s, f) => s + f.calculatedFee, 0);
       const termStatus: TermFee["status"] = fees.some((f) => f.status === "DRAFT")
@@ -3291,7 +3436,7 @@ function FeeManagementTab({ projectId }: { projectId: string }) {
         exemptFeeTotal: calc?.exemptFeeTotal ?? null,
       };
     }).sort((a, b) => b.termYear !== a.termYear ? b.termYear - a.termYear : b.termNumber - a.termNumber);
-  }, [project, termFees, termFeeCalcs, taxInvoices, receivables, unclaimedFees]);
+  }, [project, termFees, termFeeCalcs, taxInvoices, receivables, unclaimedFees, members]);
 
   if (!project) return null;
 
