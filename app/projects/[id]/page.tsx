@@ -3102,9 +3102,9 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                 다만 정산 연차에 삼화가 걷어야 할 <strong>미청구수수료(15%)</strong>는 계속 추적할 수 있도록 아래에 표시합니다.
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full text-xs">
+                <table className="min-w-full text-xs">
                   <thead>
-                    <tr className="bg-slate-50 border-b border-slate-100 text-slate-500 font-medium">
+                    <tr className="bg-slate-50 border-b border-slate-100 text-slate-500 font-medium whitespace-nowrap">
                       <th className="text-left px-4 py-2.5">기관명</th>
                       <th className="text-center px-4 py-2.5">역할</th>
                       <th className="text-center px-4 py-2.5">구분</th>
@@ -3127,7 +3127,7 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                       const cumulativeUnclaimed = getCumulativeUnclaimed(f.institutionId);
                       return (
                         <tr key={f.id} className="border-b border-slate-50">
-                          <td className="px-4 py-2.5 font-medium text-slate-800">{f.institutionName}</td>
+                          <td className="px-4 py-2.5 font-medium text-slate-800 whitespace-nowrap">{f.institutionName}</td>
                           <td className="px-4 py-2.5 text-center whitespace-nowrap">
                             <StatusBadge
                               label={ROLE_LABEL[gradeMember?.role ?? "PARTICIPANT"]}
@@ -3207,9 +3207,9 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
             onMouseLeave={feeTableDragScroll.onMouseLeave}
             className="overflow-x-auto cursor-grab active:cursor-grabbing select-none"
           >
-            <table className="w-full text-xs">
+            <table className="min-w-full text-xs">
               <thead>
-                <tr className="bg-slate-50 border-b border-slate-100 text-slate-500 font-medium">
+                <tr className="bg-slate-50 border-b border-slate-100 text-slate-500 font-medium whitespace-nowrap">
                   <th className="text-left px-4 py-2.5">기관명</th>
                   <th className="text-center px-4 py-2.5">역할</th>
                   <th className="text-center px-4 py-2.5">구분</th>
@@ -3236,7 +3236,7 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                   const cashBudget = gradeMember?.annualBudgets?.find((a) => a.termNumber === f.termNumber)?.cashBudget ?? f.budget;
                   return (
                     <tr key={f.id} className="border-b border-slate-50 hover:bg-slate-50/50">
-                      <td className="px-4 py-2.5 font-medium text-slate-800">{f.institutionName}</td>
+                      <td className="px-4 py-2.5 font-medium text-slate-800 whitespace-nowrap">{f.institutionName}</td>
                       <td className="px-4 py-2.5 text-center whitespace-nowrap">
                         <StatusBadge
                           label={ROLE_LABEL[gradeMember?.role ?? "PARTICIPANT"]}
@@ -3293,7 +3293,7 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                 })}
                 {showFeeDetail && departedRows.map((r) => (
                   <tr key={r.institutionId} className="border-b border-slate-50 bg-slate-50/40">
-                    <td className="px-4 py-2.5 font-medium text-slate-500">{r.institutionName}</td>
+                    <td className="px-4 py-2.5 font-medium text-slate-500 whitespace-nowrap">{r.institutionName}</td>
                     <td className="px-4 py-2.5 text-center whitespace-nowrap">
                       <span className="text-xs font-medium px-2 py-0.5 rounded bg-slate-100 text-slate-400">탈퇴/미참여</span>
                     </td>
@@ -3408,34 +3408,28 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                     {fmtWonFull(group.fees.reduce((s, f) => s + (f.unclaimedFee ?? 0), 0))}
                   </td>
                   {showFeeDetail && (() => {
-                    const exemptGrades = policy?.exemptGrades ?? [];
                     const activeParts = group.fees.filter((f) => f.budget > 0).map((f) => {
                       const gm = members.find((m) => m.institutionId === f.institutionId);
                       const st = gm ? resolveMemberSettlementTypeForTerm(gm, f.termNumber, defaultSettlementType) : defaultSettlementType;
-                      const rawGrade = gm ? resolveMemberGradeForTerm(gm, f.termNumber) : "일반";
-                      return { amount: getUnclaimedDisplay(f, st).amount, isExempt: exemptGrades.includes(normalizeGrade(rawGrade)) };
+                      return { amount: getUnclaimedDisplay(f, st).amount, isEntrusted: st === "위탁정산" };
                     });
-                    const departedParts = departedRows.map((r) => {
-                      const gm = members.find((m) => m.institutionId === r.institutionId);
-                      const rawGrade = gm ? resolveMemberGradeForTerm(gm, group.termNumber) : "일반";
-                      return { amount: r.cumulative, isExempt: exemptGrades.includes(normalizeGrade(rawGrade)) };
-                    });
+                    const departedParts = departedRows.map((r) => ({ amount: r.cumulative, isEntrusted: r.settlementType === "위탁정산" }));
                     const parts = [...activeParts, ...departedParts];
-                    const generalCumulative = parts.filter((p) => !p.isExempt).reduce((s, p) => s + p.amount, 0);
-                    const exemptCumulative = parts.filter((p) => p.isExempt).reduce((s, p) => s + p.amount, 0);
+                    const entrustedCumulative = parts.filter((p) => p.isEntrusted).reduce((s, p) => s + p.amount, 0);
+                    const selfCumulative = parts.filter((p) => !p.isEntrusted).reduce((s, p) => s + p.amount, 0);
                     return (
                       <td className="px-4 py-2 text-right text-xs text-amber-700 font-medium">
                         <div className="flex items-center justify-end gap-1">
                           <button type="button" onClick={() => setShowCumulativeUnclaimedBreakdown((v) => !v)}
-                            className="text-slate-500 hover:text-blue-600 transition-colors" title="일반·면제기관 미청구수수료 누적 나눠보기">
+                            className="text-slate-500 hover:text-blue-600 transition-colors" title="위탁·자체정산 미청구수수료 누적 나눠보기">
                             {showCumulativeUnclaimedBreakdown ? <FiChevronUp size={14} /> : <FiChevronDown size={14} />}
                           </button>
-                          <span>{fmtWonFull(generalCumulative + exemptCumulative)}</span>
+                          <span>{fmtWonFull(entrustedCumulative + selfCumulative)}</span>
                         </div>
                         {showCumulativeUnclaimedBreakdown && (
-                          <div className="mt-1 text-[10px] font-normal text-slate-400 space-y-0.5 text-left">
-                            <div>일반 {fmtWonFull(generalCumulative)}</div>
-                            <div>면제 {fmtWonFull(exemptCumulative)}</div>
+                          <div className="mt-1 text-[10px] font-normal text-slate-400 space-y-0.5">
+                            <div>위탁 {fmtWonFull(entrustedCumulative)}</div>
+                            <div>자체 {fmtWonFull(selfCumulative)}</div>
                           </div>
                         )}
                       </td>
