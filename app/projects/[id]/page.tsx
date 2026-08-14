@@ -292,9 +292,15 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
 
   function getCurrentTermBudget(m: ProjectMember): { cashBudget: number; inKindBudget: number } {
     const ab = m.annualBudgets?.find((a) => a.termNumber === currentTerm);
+    if (ab) return { cashBudget: ab.cashBudget, inKindBudget: ab.inKindBudget ?? 0 };
+    // 연차별 사업비를 한 번이라도 입력한 기관인데 이번(진행) 연차엔 항목이 없다면, 그 연차엔 참여하지
+    // 않는다는 뜻이다(중간 탈퇴 등) — 이걸 기관 총액(m.cashBudget/m.budget)으로 되돌리면 이미 빠진
+    // 기관이 참여기관 목록에서 여전히 이번 연차에 활성 참여 중인 것처럼 보인다. 연차별 입력을 아예
+    // 써본 적 없는 기관(annualBudgets 없음, 단일 총액 모드)만 기관 총액으로 대체한다.
+    if ((m.annualBudgets?.length ?? 0) > 0) return { cashBudget: 0, inKindBudget: 0 };
     return {
-      cashBudget: ab?.cashBudget ?? m.cashBudget ?? m.budget ?? 0,
-      inKindBudget: ab?.inKindBudget ?? m.inKindBudget ?? 0,
+      cashBudget: m.cashBudget ?? m.budget ?? 0,
+      inKindBudget: m.inKindBudget ?? 0,
     };
   }
   function getMemberBudgetVal(m: ProjectMember, field: "cashBudget" | "inKindBudget"): number {
@@ -373,6 +379,14 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
     const ratio = totalNonExemptCash > 0 ? getMemberAmount(cm, feeBasis) / totalNonExemptCash : 0;
     return Math.round(feeResult.generalFee * ratio);
   };
+
+  // 이번 연차 참여가 없는(중간 탈퇴 등) 위탁정산 기관도 정산 연차엔 그동안 쌓인 미청구액을 전액
+  // 청구해야 하므로, 참여기관 목록에서도 그 누적액만은 계속 보여준다 — fee-calculator.ts의 정산
+  // 로직(위탁정산은 이월분 전액 청구)과 같은 원칙을 참여기관 목록 화면에도 그대로 반영한 것이다.
+  const getCumulativeUnclaimedForList = (institutionId: string): number =>
+    termFees
+      .filter((tf) => tf.projectNumber === project!.projectNumber && tf.institutionId === institutionId && tf.termNumber <= viewTerm)
+      .reduce((s, tf) => s + (tf.unclaimedFee ?? 0), 0);
 
   const totalCalcFee = feeResult?.calculatedFee ?? members.reduce((s, m) => s + m.calculatedFee, 0);
 
@@ -690,9 +704,13 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">공동기관 수</label>
                 <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-white text-slate-500">
-                  {members.filter((m) => m.role === "PARTICIPANT").length}개
+                  {members.filter((m) => {
+                    if (m.role !== "PARTICIPANT") return false;
+                    const b = getViewTermBudget(m, viewTerm);
+                    return b.cashBudget > 0 || b.inKindBudget > 0;
+                  }).length}개
                 </div>
-                <p className="text-[10px] text-slate-400 mt-1">참여기관 목록에서 기관을 추가·삭제하면 자동 반영됩니다</p>
+                <p className="text-[10px] text-slate-400 mt-1">{viewTerm}연차에 사업비가 있는 공동기관 수 — 참여기관 목록의 연차별 사업비에 따라 자동 반영됩니다</p>
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">당해 민간현금 (원)</label>
@@ -993,18 +1011,30 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 const cashBudget = editingMembers ? getMemberBudgetVal(m, "cashBudget") : getViewTermBudget(m, viewTerm).cashBudget;
                 const inKindBudget = editingMembers ? getMemberBudgetVal(m, "inKindBudget") : getViewTermBudget(m, viewTerm).inKindBudget;
                 const isParticipatingThisTerm = cashBudget > 0 || inKindBudget > 0;
+                // 위탁정산 기관은 이 연차에 참여가 없어도(중간 탈퇴 등) 정산 연차엔 그동안 쌓인
+                // 미청구액을 전액 청구하므로, 그 금액만은 계속 활성 상태로 보여준다 — 자체정산
+                // 기관은 정산 연차에도 이월분을 걷지 못하고 소멸하므로(매몰비용) 따로 보여줄 값이 없다.
+                const showCumulativeFee = !isParticipatingThisTerm && displaySettlementType === "위탁정산";
+                const cumulativeUnclaimed = showCumulativeFee ? getCumulativeUnclaimedForList(m.institutionId) : 0;
+                // opacity는 자식에게 그대로 상속되어 특정 셀만 다시 진하게 되돌릴 수 없으므로, <tr> 전체가
+                // 아니라 비활성화해야 할 셀 각각에 개별적으로 적용한다 — 그래야 누적 수수료 셀만 예외로
+                // 활성 상태를 유지할 수 있다.
+                const dim = !isParticipatingThisTerm ? "opacity-50" : "";
                 return (
-                  <tr key={m.id} className={`border-b border-slate-50 hover:bg-slate-50 ${!isParticipatingThisTerm ? "opacity-50" : ""}`}>
+                  <tr key={m.id} className="border-b border-slate-50 hover:bg-slate-50">
                     <td className="px-4 py-3">
-                      <Link href={`/institutions/${m.institutionId}`}
-                        className="text-sm text-blue-600 hover:underline font-medium">{m.institutionName}</Link>
-                      {!isParticipatingThisTerm && (
-                        <span className="ml-1.5 text-[10px] font-medium text-slate-400" title={`${viewTerm}연차 사업비가 입력되지 않아 이 연차 계산에서 빠집니다`}>
-                          · {viewTerm}연차 미참여
-                        </span>
-                      )}
+                      <div className={dim}>
+                        <Link href={`/institutions/${m.institutionId}`}
+                          className="text-sm text-blue-600 hover:underline font-medium">{m.institutionName}</Link>
+                        {!isParticipatingThisTerm && (
+                          <span className="ml-1.5 text-[10px] font-medium text-slate-400" title={`${viewTerm}연차 사업비가 입력되지 않아 이 연차 계산에서 빠집니다`}>
+                            · {viewTerm}연차 미참여
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-center">
+                      <div className={dim}>
                       {editingMembers ? (
                         <select
                           value={getMemberVal(m, "role")}
@@ -1020,8 +1050,10 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                           color={m.role === "LEAD" ? "blue" : m.role === "ENTRUSTED" ? "amber" : "slate"}
                         />
                       )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-center">
+                      <div className={dim}>
                       {editingMembers ? (
                         <select
                           value={rawGrade}
@@ -1050,8 +1082,10 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                           <span className="text-[10px] font-medium">{m.gradeOverrides!.length}</span>
                         )}
                       </button>
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-center">
+                      <div className={dim}>
                       {editingMembers ? (
                         <select
                           value={getMemberVal(m, "settlementType") ?? defaultSettlementType}
@@ -1079,8 +1113,10 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                           <span className="text-[10px] font-medium">{m.settlementTypeOverrides!.length}</span>
                         )}
                       </button>
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-right">
+                      <div className={dim}>
                       {editingMembers ? (
                         <MoneyInput
                           value={cashBudget}
@@ -1090,8 +1126,10 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                       ) : (
                         <span className="text-sm text-slate-700">{fmtWonFull(cashBudget)}</span>
                       )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-right">
+                      <div className={dim}>
                       {editingMembers ? (
                         <MoneyInput
                           value={inKindBudget}
@@ -1101,32 +1139,49 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                       ) : (
                         <span className="text-sm text-slate-700">{fmtWonFull(inKindBudget)}</span>
                       )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <span className="text-sm font-medium text-slate-800">{fmtWonFull(cashBudget + inKindBudget)}</span>
+                      <div className={dim}>
+                        <span className="text-sm font-medium text-slate-800">{fmtWonFull(cashBudget + inKindBudget)}</span>
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-center">
+                      <div className={dim}>
                       {excludedIds.has(m.institutionId)
                         ? <span className="text-xs font-medium px-2 py-0.5 rounded bg-red-100 text-red-600">제외</span>
                         : exemptIds.has(m.institutionId)
                         ? <span className="text-xs font-medium px-2 py-0.5 rounded bg-purple-100 text-purple-700">면제</span>
                         : <span className="text-xs font-medium px-2 py-0.5 rounded bg-slate-100 text-slate-500">일반</span>}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-right font-bold text-slate-800">
-                      {feeResult
-                        ? fmtWonFull(getInstCalcFee(m.institutionId))
-                        : fmtWonFull(m.calculatedFee)}
+                      {showCumulativeFee ? (
+                        <span title={`${viewTerm}연차엔 미참여지만 위탁정산 기관이라 정산 연차엔 그동안 쌓인 미청구 누적액을 전액 청구합니다`}>
+                          <span className="text-amber-700">{fmtWonFull(cumulativeUnclaimed)}</span>
+                          <span className="ml-1 text-[10px] font-normal text-amber-500 align-middle">누적</span>
+                        </span>
+                      ) : (
+                        <div className={dim}>
+                          {feeResult
+                            ? fmtWonFull(getInstCalcFee(m.institutionId))
+                            : fmtWonFull(m.calculatedFee)}
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <button
-                        onClick={() => setEditingBudgetMember(m)}
-                        className="text-[11px] font-medium text-blue-600 border border-blue-200 rounded-lg px-2 py-1 hover:bg-blue-50 transition-colors"
-                      >
-                        {(m.annualBudgets?.length ?? 0) > 0 ? `${m.annualBudgets!.length}개 연차` : "입력"}
-                      </button>
+                      <div className={dim}>
+                        <button
+                          onClick={() => setEditingBudgetMember(m)}
+                          className="text-[11px] font-medium text-blue-600 border border-blue-200 rounded-lg px-2 py-1 hover:bg-blue-50 transition-colors"
+                        >
+                          {(m.annualBudgets?.length ?? 0) > 0 ? `${m.annualBudgets!.length}개 연차` : "입력"}
+                        </button>
+                      </div>
                     </td>
                     {canEditProjects && (
                       <td className="px-4 py-3 text-center">
+                        <div className={dim}>
                         <button
                           onClick={() => {
                             // 연차 탭이 여러 개인 과제에서 "삭제"는 그 연차부터 이후 연차까지 전부 빠지는
@@ -1153,6 +1208,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                           title={maxViewableTerm > 1 ? `${viewTerm}연차부터 이후 연차 전부 제외` : "참여기관에서 제외"}>
                           <FiTrash2 size={13} />
                         </button>
+                        </div>
                       </td>
                     )}
                   </tr>
