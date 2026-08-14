@@ -14,7 +14,7 @@ import {
   updateProjectMember, autoGenerateTermFees, addProjectMember, deleteProjectMember, deleteProject,
   setTermOtherFirmHandled, setTermBillingType, setTermDates,
 } from "@/lib/store";
-import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type SystemUser, type EmailDispatch, type FeePolicy, EMPTY_NOTICE_TEMPLATE } from "@/lib/mock";
+import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type SystemUser, type EmailDispatch, type FeePolicy, type AnnualFinancials, EMPTY_NOTICE_TEMPLATE } from "@/lib/mock";
 import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, type CalcMember } from "@/lib/fee-calculator";
 import { fmtWonFull, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange } from "@/lib/utils";
 import { fmtValue, fieldLabel } from "@/lib/audit-log-format";
@@ -197,11 +197,30 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   const project = projects.find((p) => p.id === projectId) ?? null;
 
   // All hooks before conditional return
-  const [draft, setDraft] = useState<Project>(() => project ?? {
-    id: "", projectNumber: "", projectName: "", agencyId: "", agency: "",
-    leadInstitutionId: "", leadInstitutionName: "",
-    totalBudget: 0, startDate: "", endDate: "",
-    totalTerms: 1, currentTerm: 1, status: "ACTIVE",
+  const [draft, setDraft] = useState<Project>(() => {
+    if (!project) {
+      return {
+        id: "", projectNumber: "", projectName: "", agencyId: "", agency: "",
+        leadInstitutionId: "", leadInstitutionName: "",
+        totalBudget: 0, startDate: "", endDate: "",
+        totalTerms: 1, currentTerm: 1, status: "ACTIVE",
+      };
+    }
+    // 정부출연금/민간현금/민간현물(govGrant/privateCash/privateInKind)은 과제 단일값이라 이 카드에서
+    // 직접 입력하거나 엑셀 업로드 시에만 채워진다 — 연차만 termText로 수동 진행시키고 그 연차의
+    // 엑셀은 아직 안 올렸다면, 과제 단일값은 비어있는데 annualFinancials엔 이미 그 연차 이력이 있는
+    // 경우가 생긴다(예: 마지막 연차로 넘어간 직후). doSaveEdit이 저장할 때마다 이 단일값을 그대로
+    // annualFinancials[currentTerm]에 덮어쓰므로(411~418행), draft 쪽을 비워둔 채로 두면 다른 필드만
+    // 고쳐 저장해도 이미 있던 그 연차의 올바른 이력이 0으로 덮어써진다 — 그래서 화면 표시뿐 아니라
+    // draft 자체를 처음부터 이력값으로 채워둔다(사용자가 실제로 입력한 적 없는 값만 대체, ??라서
+    // 명시적 0은 그대로 유지됨).
+    const currentTermRecord = project.annualFinancials?.find((a) => a.termNumber === project.currentTerm);
+    return {
+      ...project,
+      govGrant: project.govGrant ?? currentTermRecord?.govGrant,
+      privateCash: project.privateCash ?? currentTermRecord?.privateCash,
+      privateInKind: project.privateInKind ?? currentTermRecord?.privateInKind,
+    };
   });
   // "현재연차/총연차"(예: 2/3)를 하나의 입력란으로 받는다 — 매 입력마다 draft로 되돌리면
   // "2/" 처럼 아직 완성되지 않은 중간 입력 상태에서 커서가 튀므로, 표시값이 draft와 다를 때만 동기화한다.
@@ -226,6 +245,12 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   const [editingMembers, setEditingMembers] = useState(false);
   const [memberDrafts, setMemberDrafts] = useState<Record<string, Partial<ProjectMember>>>({});
   const [budgetDrafts, setBudgetDrafts] = useState<Record<string, { cashBudget: number; inKindBudget: number }>>({});
+  // 등급·정산구분은 institutionGrade/settlementType(기본값)과 gradeOverrides/settlementTypeOverrides
+  // (연차별 예외)로 나뉘어 있다 — "기관 수정" 인라인 편집은 항상 진행 연차(currentTerm) 기준으로만
+  // 동작해야 하므로(사업비와 동일한 원칙), 여기서 고른 값은 기본값을 덮어쓰지 않고 진행 연차의
+  // 오버라이드로 저장한다(연필 아이콘의 "연차별 등급/정산구분" 편집기와 동일한 방식).
+  const [gradeDrafts, setGradeDrafts] = useState<Record<string, NonNullable<ProjectMember["institutionGrade"]>>>({});
+  const [settlementDrafts, setSettlementDrafts] = useState<Record<string, "위탁정산" | "자체정산">>({});
   const [budgetMismatchError, setBudgetMismatchError] = useState("");
   const [showAddMember, setShowAddMember] = useState(false);
   const [editingBudgetMember, setEditingBudgetMember] = useState<ProjectMember | null>(null);
@@ -256,6 +281,10 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
     const termParam = Number(searchParams.get("term"));
     return Number.isInteger(termParam) && termParam >= 1 ? termParam : project?.currentTerm ?? 1;
   });
+  // 과거(진행 연차가 아닌) 연차의 "사업비 구분" 카드를 건당 수정하는 상태 — 연차 탭을 바꾸면 자동으로 닫는다.
+  const [editingPastFinancials, setEditingPastFinancials] = useState(false);
+  const [pastFinancialsDraft, setPastFinancialsDraft] = useState({ govGrant: 0, privateCash: 0, privateInKind: 0 });
+  useEffect(() => { setEditingPastFinancials(false); }, [viewTerm]);
 
   if (!project) return null;
 
@@ -303,14 +332,16 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       inKindBudget: m.inKindBudget ?? 0,
     };
   }
+  // 기관 수정(인라인 편집)은 지금 보고 있는 연차 탭(viewTerm)의 사업비를 그대로 대상으로 한다 —
+  // getViewTermBudget이 이미 "그 연차에 값이 없으면 0"(참여 안 함) 원칙을 지키므로 그대로 재사용한다.
   function getMemberBudgetVal(m: ProjectMember, field: "cashBudget" | "inKindBudget"): number {
-    return budgetDrafts[m.id]?.[field] ?? getCurrentTermBudget(m)[field];
+    return budgetDrafts[m.id]?.[field] ?? getViewTermBudget(m, viewTerm)[field];
   }
   function setMemberBudgetField(m: ProjectMember, field: "cashBudget" | "inKindBudget", value: number) {
     setBudgetMismatchError("");
     setBudgetDrafts((prev) => ({
       ...prev,
-      [m.id]: { ...(prev[m.id] ?? getCurrentTermBudget(m)), [field]: value },
+      [m.id]: { ...(prev[m.id] ?? getViewTermBudget(m, viewTerm)), [field]: value },
     }));
   }
   // 현재 진행 연차가 아닌 다른 연차를 탭으로 훑어볼 때 쓴다 — getCurrentTermBudget과 달리 사업비를
@@ -482,36 +513,73 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
 
   const annualBudget = (draft.govGrant ?? 0) + (draft.privateCash ?? 0) + (draft.privateInKind ?? 0);
 
-  const totalCashBudget = members.reduce((s, m) => s + getMemberBudgetVal(m, "cashBudget"), 0);
-  const totalInKindBudget = members.reduce((s, m) => s + getMemberBudgetVal(m, "inKindBudget"), 0);
-  const budgetMatchesAnnual = totalCashBudget + totalInKindBudget === annualBudget;
-  // 참여기관 표 하단 합계는 편집 중일 때만 위 currentTerm+초안 반영 합계를 그대로 쓰고(입력하는 대로
-  // 바로 반영되어야 하니까), 탭으로 다른 연차를 보고 있을 때는 그 연차 기준(calcMembers)으로 다시 더한다.
-  const viewTotalCashBudget = editingMembers ? totalCashBudget : calcMembers.reduce((s, m) => s + m.cashBudget, 0);
-  const viewTotalInKindBudget = editingMembers ? totalInKindBudget : calcMembers.reduce((s, m) => s + (m.inKindBudget ?? 0), 0);
-
   // "사업비 구분" 카드(정부출연금/민간현금/민간현물)는 연차 탭(viewTerm)에 맞춰 보여준다 — currentTerm이면
-  // 지금 수정 중인 draft 값(입력 가능)을, 다른 연차는 annualFinancials 이력에서 찾은 값을 읽기 전용으로
-  // 보여준다. annualFinancials는 엑셀 업로드로만 채워지므로 다른 연차 값은 여기서 직접 수정하지 않는다
-  // (참여기관 인라인 편집이 항상 currentTerm 기준으로만 동작하는 것과 동일한 원칙).
+  // 지금 수정 중인 draft 값(입력 가능)을, 다른 연차는 annualFinancials 이력에서 찾은 값을 보여준다.
+  // annualFinancials는 원래 엑셀 업로드로만 채워졌지만, 건당으로 특정 연차만 고치거나 처음 채워 넣고
+  // 싶을 때를 위해 연필 아이콘으로 그 연차만 직접 수정하는 기능도 아래 editingPastFinancials로 제공한다.
   const isCurrentTermFinancials = viewTerm === currentTerm;
   const viewFinancialsRecord = project.annualFinancials?.find((a) => a.termNumber === viewTerm);
   const viewFinancials = isCurrentTermFinancials
     ? { govGrant: draft.govGrant ?? 0, privateCash: draft.privateCash ?? 0, privateInKind: draft.privateInKind ?? 0 }
+    : editingPastFinancials
+    ? pastFinancialsDraft
     : { govGrant: viewFinancialsRecord?.govGrant ?? 0, privateCash: viewFinancialsRecord?.privateCash ?? 0, privateInKind: viewFinancialsRecord?.privateInKind ?? 0 };
   const viewAnnualBudget = viewFinancials.govGrant + viewFinancials.privateCash + viewFinancials.privateInKind;
   const hasFinancialsForViewTerm = isCurrentTermFinancials || viewFinancialsRecord !== undefined;
 
-  function startMemberEdit() { setMemberDrafts({}); setBudgetDrafts({}); setBudgetMismatchError(""); setViewTerm(currentTerm); setEditingMembers(true); }
-  function cancelMemberEdit() { setEditingMembers(false); setMemberDrafts({}); setBudgetDrafts({}); setBudgetMismatchError(""); }
+  const totalCashBudget = members.reduce((s, m) => s + getMemberBudgetVal(m, "cashBudget"), 0);
+  const totalInKindBudget = members.reduce((s, m) => s + getMemberBudgetVal(m, "inKindBudget"), 0);
+  // 기관 수정은 지금 보고 있는 연차(viewTerm)를 대상으로 하므로, 맞춰봐야 할 기준도 그 연차의
+  // 사업비 구분 합계(viewAnnualBudget)다 — 예전엔 항상 currentTerm 기준(annualBudget)과만 비교해서,
+  // 다른 연차를 편집할 땐 애먼 값과 비교돼 저장이 막히는 문제가 있었다. 그 연차의 사업비 구분(정부출연금
+  // /민간현금/민간현물)이 아직 하나도 입력 안 돼 0원이면(진행 연차라도 마찬가지) 비교할 기준 자체가
+  // 없는 것이므로 검증을 건너뛴다 — 안 그러면 사업비 구분을 안 채운 연차는 기관별 사업비를 얼마를
+  // 넣어도 무조건 "0원과 안 맞다"며 저장이 막힌다. 사업비 구분을 나중에 채우면 그때부터 맞춰보면 된다.
+  const budgetMatchesAnnual = viewAnnualBudget === 0 || totalCashBudget + totalInKindBudget === viewAnnualBudget;
+  // 참여기관 표 하단 합계는 편집 중일 때만 위 viewTerm+초안 반영 합계를 그대로 쓰고(입력하는 대로
+  // 바로 반영되어야 하니까), 탭으로 다른 연차를 보고 있을 때는 그 연차 기준(calcMembers)으로 다시 더한다.
+  const viewTotalCashBudget = editingMembers ? totalCashBudget : calcMembers.reduce((s, m) => s + m.cashBudget, 0);
+  const viewTotalInKindBudget = editingMembers ? totalInKindBudget : calcMembers.reduce((s, m) => s + (m.inKindBudget ?? 0), 0);
+
+  function startPastFinancialsEdit() {
+    setPastFinancialsDraft({ govGrant: viewFinancials.govGrant, privateCash: viewFinancials.privateCash, privateInKind: viewFinancials.privateInKind });
+    setEditingPastFinancials(true);
+  }
+  function savePastFinancialsEdit() {
+    const termYear = viewFinancialsRecord?.termYear ?? termNumberToYear(project!.startDate, viewTerm);
+    const updated: AnnualFinancials = { termYear, termNumber: viewTerm, ...pastFinancialsDraft };
+    const annualFinancials = [
+      ...(project!.annualFinancials ?? []).filter((a) => a.termNumber !== viewTerm),
+      updated,
+    ].sort((a, b) => a.termNumber - b.termNumber);
+    updateProject(projectId, { annualFinancials });
+    setEditingPastFinancials(false);
+  }
+
+  // 기관 수정은 지금 보고 있는 연차 탭(viewTerm)을 대상으로 한다 — "연차별 보기" 탭을 넘나들며
+  // 연차마다 따로 사업비·등급·정산구분을 고칠 수 있다. 진입 시 지금 보던 연차를 그대로 유지한다.
+  function startMemberEdit() { setMemberDrafts({}); setBudgetDrafts({}); setGradeDrafts({}); setSettlementDrafts({}); setBudgetMismatchError(""); setEditingMembers(true); }
+  function cancelMemberEdit() { setEditingMembers(false); setMemberDrafts({}); setBudgetDrafts({}); setGradeDrafts({}); setSettlementDrafts({}); setBudgetMismatchError(""); }
+  // 편집 중 다른 연차 탭으로 넘어갈 때 쓴다 — 저장하지 않은 그 연차분 사업비·등급·정산구분 초안은
+  // 넘어가면 사라지므로(다음 연차 초안과 섞이지 않게) 미리 확인을 받는다. 역할(role)은 연차 개념이
+  // 없는 기관 공통 값이라 memberDrafts는 그대로 유지한다.
+  function switchEditingTerm(term: number) {
+    const hasPendingDrafts = Object.keys(budgetDrafts).length > 0 || Object.keys(gradeDrafts).length > 0 || Object.keys(settlementDrafts).length > 0;
+    if (hasPendingDrafts && !confirm(`${viewTerm}연차에 저장하지 않은 변경사항이 있습니다. ${term}연차로 이동하면 사라집니다. 계속하시겠습니까?`)) return;
+    setBudgetDrafts({});
+    setGradeDrafts({});
+    setSettlementDrafts({});
+    setBudgetMismatchError("");
+    setViewTerm(term);
+  }
   function saveMemberEdits() {
     if (!budgetMatchesAnnual) {
       setBudgetMismatchError(
-        `현금합계(${fmtWonFull(totalCashBudget)}) + 현물합계(${fmtWonFull(totalInKindBudget)})가 당해 사업비 자동계산 금액(${fmtWonFull(annualBudget)})과 일치하지 않아 저장할 수 없습니다.`
+        `현금합계(${fmtWonFull(totalCashBudget)}) + 현물합계(${fmtWonFull(totalInKindBudget)})가 ${viewTerm}연차 사업비 구분 합계(${fmtWonFull(viewAnnualBudget)})와 일치하지 않아 저장할 수 없습니다.`
       );
       return;
     }
-    const ids = new Set([...Object.keys(memberDrafts), ...Object.keys(budgetDrafts)]);
+    const ids = new Set([...Object.keys(memberDrafts), ...Object.keys(budgetDrafts), ...Object.keys(gradeDrafts), ...Object.keys(settlementDrafts)]);
     ids.forEach((id) => {
       const m = members.find((mm) => mm.id === id);
       if (!m) return;
@@ -519,22 +587,54 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       const bd = budgetDrafts[id];
       if (bd) {
         const existing = m.annualBudgets ?? [];
-        const termYear = existing.find((a) => a.termNumber === currentTerm)?.termYear
-          ?? termNumberToYear(project!.startDate, currentTerm);
+        const termYear = existing.find((a) => a.termNumber === viewTerm)?.termYear
+          ?? termNumberToYear(project!.startDate, viewTerm);
         changes.annualBudgets = [
-          ...existing.filter((a) => a.termNumber !== currentTerm),
-          { termYear, termNumber: currentTerm, cashBudget: bd.cashBudget, inKindBudget: bd.inKindBudget },
+          ...existing.filter((a) => a.termNumber !== viewTerm),
+          { termYear, termNumber: viewTerm, cashBudget: bd.cashBudget, inKindBudget: bd.inKindBudget },
         ].sort((a, b) => a.termNumber - b.termNumber);
+      }
+      // 등급·정산구분도 사업비와 동일하게 지금 보고 있는 연차(viewTerm)만 오버라이드로 남긴다 — 기본값
+      // (institutionGrade/settlementType)과 같으면 굳이 오버라이드를 남기지 않는다(GradeOverrideEditor·
+      // SettlementTypeOverrideEditor의 저장 방식과 동일).
+      const gd = gradeDrafts[id];
+      if (gd !== undefined) {
+        const baseGrade = m.institutionGrade ?? "일반";
+        const existingOverrides = (m.gradeOverrides ?? []).filter((g) => g.termNumber !== viewTerm);
+        changes.gradeOverrides = gd === baseGrade
+          ? existingOverrides
+          : [...existingOverrides, { termNumber: viewTerm, grade: gd }].sort((a, b) => a.termNumber - b.termNumber);
+        if (changes.gradeOverrides.length === 0) changes.gradeOverrides = undefined;
+      }
+      const sd = settlementDrafts[id];
+      if (sd !== undefined) {
+        const baseSettlementType = m.settlementType ?? defaultSettlementType;
+        const existingOverrides = (m.settlementTypeOverrides ?? []).filter((s) => s.termNumber !== viewTerm);
+        changes.settlementTypeOverrides = sd === baseSettlementType
+          ? existingOverrides
+          : [...existingOverrides, { termNumber: viewTerm, settlementType: sd }].sort((a, b) => a.termNumber - b.termNumber);
+        if (changes.settlementTypeOverrides.length === 0) changes.settlementTypeOverrides = undefined;
       }
       if (Object.keys(changes).length > 0) updateProjectMember(id, changes);
     });
-    setEditingMembers(false);
     setMemberDrafts({});
     setBudgetDrafts({});
+    setGradeDrafts({});
+    setSettlementDrafts({});
     setBudgetMismatchError("");
+    // 편집 모드는 유지한다 — 저장 후에도 "연차별 보기" 탭으로 다른 연차로 넘어가 이어서 고칠 수 있어야
+    // 하므로, 여기서 setEditingMembers(false)로 바로 닫지 않는다. 완료되면 "취소"(=닫기)로 나간다.
+    setSavedMsg(true);
+    setTimeout(() => setSavedMsg(false), 2000);
   }
   function setMemberField(memberId: string, field: keyof ProjectMember, value: unknown) {
     setMemberDrafts((prev) => ({ ...prev, [memberId]: { ...prev[memberId], [field]: value } }));
+  }
+  function getMemberGradeVal(m: ProjectMember): NonNullable<ProjectMember["institutionGrade"]> {
+    return gradeDrafts[m.id] ?? (resolveMemberGradeForTerm(m, viewTerm) as NonNullable<ProjectMember["institutionGrade"]>);
+  }
+  function getMemberSettlementVal(m: ProjectMember): "위탁정산" | "자체정산" {
+    return settlementDrafts[m.id] ?? resolveMemberSettlementTypeForTerm(m, viewTerm, defaultSettlementType);
   }
   function getMemberVal<K extends keyof ProjectMember>(m: ProjectMember, field: K): ProjectMember[K] {
     return (memberDrafts[m.id]?.[field] ?? m[field]) as ProjectMember[K];
@@ -682,12 +782,24 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
           <div className="rounded-lg border border-slate-100 bg-slate-50/50 px-4 py-4 space-y-3">
             <p className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
               <FiDollarSign size={12} className="text-slate-400" /> 사업비 구분 (총사업비 / 현금사업비 / 현물사업비)
-              {!isCurrentTermFinancials && (
-                <span className="text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{viewTerm}연차 기준 · 읽기전용</span>
+              {!isCurrentTermFinancials && !editingPastFinancials && (
+                <>
+                  <span className="text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{viewTerm}연차 기준 · 읽기전용</span>
+                  {canEditProjects && (
+                    <button type="button" onClick={startPastFinancialsEdit}
+                      className="inline-flex items-center gap-1 text-slate-400 hover:text-blue-600 transition-colors"
+                      title={`${viewTerm}연차의 정부출연금/민간현금/민간현물을 직접 수정합니다`}>
+                      <FiEdit2 size={11} />
+                    </button>
+                  )}
+                </>
+              )}
+              {editingPastFinancials && (
+                <span className="text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">{viewTerm}연차 직접 수정 중</span>
               )}
             </p>
-            {!isCurrentTermFinancials && !hasFinancialsForViewTerm && (
-              <p className="text-[10px] text-amber-600">⚠ {viewTerm}연차의 정부출연금/민간현금/민간현물 기록이 없습니다(엑셀 업로드로만 채워집니다).</p>
+            {!isCurrentTermFinancials && !hasFinancialsForViewTerm && !editingPastFinancials && (
+              <p className="text-[10px] text-amber-600">⚠ {viewTerm}연차의 정부출연금/민간현금/민간현물 기록이 없습니다 — 엑셀 업로드로 채우거나, 위 연필 아이콘으로 직접 입력할 수 있습니다.</p>
             )}
             <div className="grid grid-cols-2 gap-x-6 gap-y-3">
               <div>
@@ -695,6 +807,9 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 {isCurrentTermFinancials ? (
                   <MoneyInput className={`${inp} w-full`} value={viewFinancials.govGrant}
                     onChange={(v) => setDraft((p) => ({ ...p, govGrant: v }))} />
+                ) : editingPastFinancials ? (
+                  <MoneyInput className={`${inp} w-full`} value={pastFinancialsDraft.govGrant}
+                    onChange={(v) => setPastFinancialsDraft((p) => ({ ...p, govGrant: v }))} />
                 ) : (
                   <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500">
                     {fmtWonFull(viewFinancials.govGrant)}
@@ -717,6 +832,9 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 {isCurrentTermFinancials ? (
                   <MoneyInput className={`${inp} w-full`} value={viewFinancials.privateCash}
                     onChange={(v) => setDraft((p) => ({ ...p, privateCash: v }))} />
+                ) : editingPastFinancials ? (
+                  <MoneyInput className={`${inp} w-full`} value={pastFinancialsDraft.privateCash}
+                    onChange={(v) => setPastFinancialsDraft((p) => ({ ...p, privateCash: v }))} />
                 ) : (
                   <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500">
                     {fmtWonFull(viewFinancials.privateCash)}
@@ -736,6 +854,9 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 {isCurrentTermFinancials ? (
                   <MoneyInput className={`${inp} w-full`} value={viewFinancials.privateInKind}
                     onChange={(v) => setDraft((p) => ({ ...p, privateInKind: v }))} />
+                ) : editingPastFinancials ? (
+                  <MoneyInput className={`${inp} w-full`} value={pastFinancialsDraft.privateInKind}
+                    onChange={(v) => setPastFinancialsDraft((p) => ({ ...p, privateInKind: v }))} />
                 ) : (
                   <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500">
                     {fmtWonFull(viewFinancials.privateInKind)}
@@ -770,6 +891,18 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                   onChange={(e) => setDraft((p) => ({ ...p, assignedManager: e.target.value }))} placeholder="담당자명" />
               </div>
             </div>
+            {editingPastFinancials && (
+              <div className="flex justify-end gap-2 pt-1">
+                <button type="button" onClick={() => setEditingPastFinancials(false)}
+                  className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
+                  취소
+                </button>
+                <button type="button" onClick={savePastFinancialsEdit}
+                  className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
+                  {viewTerm}연차 사업비 구분 저장
+                </button>
+              </div>
+            )}
           </div>
 
           {/* 과제 전체 기간 — 단계협약은 협약구조 표의 1단계 시작일·마지막 단계 종료일에서 자동
@@ -911,25 +1044,26 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             }`}>
               {viewTerm}연차 · {currentWorkType === "SETTLEMENT" ? "정산" : "연차상시"}
             </span>
-            {viewTerm === currentTerm && (
-              <span className={`text-xs ${budgetMatchesAnnual ? "text-slate-500" : "text-red-600 font-medium"}`}>
-                현금+현물 합계 <strong className={budgetMatchesAnnual ? "text-slate-800" : "text-red-600"}>{fmtWonFull(totalCashBudget + totalInKindBudget)}</strong>
-                <span className="text-slate-400 mx-1">/</span>
-                당해 사업비 {fmtWonFull(annualBudget)}
-              </span>
-            )}
+            <span className={`text-xs ${budgetMatchesAnnual ? "text-slate-500" : "text-red-600 font-medium"}`}>
+              현금+현물 합계 <strong className={budgetMatchesAnnual ? "text-slate-800" : "text-red-600"}>{fmtWonFull(totalCashBudget + totalInKindBudget)}</strong>
+              <span className="text-slate-400 mx-1">/</span>
+              {viewAnnualBudget > 0
+                ? `${viewTerm}연차 사업비 구분 합계 ${fmtWonFull(viewAnnualBudget)}`
+                : `${viewTerm}연차 사업비 구분 미입력(대조 안 함)`}
+            </span>
             <span className="text-xs text-slate-500">
               산정 수수료 합계 <strong className="text-slate-800 ml-1">{fmtWonFull(totalCalcFee)}</strong>
             </span>
             {editingMembers ? (
               <>
+                {savedMsg && <span className="text-xs text-green-600 font-medium">{viewTerm}연차 저장됨</span>}
                 <button onClick={saveMemberEdits}
                   className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
                   <FiCheck size={12} /> 저장
                 </button>
                 <button onClick={cancelMemberEdit}
                   className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
-                  <FiX size={12} /> 취소
+                  <FiX size={12} /> 닫기
                 </button>
               </>
             ) : canEditProjects ? (
@@ -946,14 +1080,16 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             ) : null}
           </div>
         </div>
-        {!editingMembers && maxViewableTerm > 1 && (
+        {maxViewableTerm > 1 && (
           <div className="px-5 py-2 border-b border-slate-100 flex items-center gap-1.5 overflow-x-auto">
-            <span className="text-[10px] text-slate-400 shrink-0 mr-1">연차별 보기</span>
+            <span className="text-[10px] text-slate-400 shrink-0 mr-1">
+              연차별 보기{editingMembers && " · 탭을 바꾸면 그 연차를 수정합니다"}
+            </span>
             {Array.from({ length: maxViewableTerm }, (_, i) => i + 1).map((t) => (
               <button
                 key={t}
                 type="button"
-                onClick={() => setViewTerm(t)}
+                onClick={() => (editingMembers ? switchEditingTerm(t) : setViewTerm(t))}
                 className={`shrink-0 px-2.5 py-1 text-xs font-medium rounded-lg border transition-colors ${
                   viewTerm === t
                     ? "bg-blue-600 border-blue-600 text-white"
@@ -1002,10 +1138,9 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             </thead>
             <tbody>
               {members.map((m) => {
-                const rawGrade = (getMemberVal(m, "institutionGrade") ?? "일반") as string;
                 // 배지 표시는 편집 중인 기본값이 아니라 "지금 보고 있는 연차에 실제로 적용되는" 값(연차별
-                // 오버라이드 반영)을 보여준다. 인라인 일괄수정 중에는 항상 진행 연차(currentTerm)만 다루므로
-                // 그때는 getMemberBudgetVal(currentTerm 고정) 값을 그대로 쓴다.
+                // 오버라이드 반영)을 보여준다. 인라인 일괄수정 중에는 "연차별 보기" 탭으로 고른 연차
+                // (viewTerm)를 그대로 수정 대상으로 삼으므로 getMemberBudgetVal도 viewTerm 기준이다.
                 const displayGrade = normalizeGrade(resolveMemberGradeForTerm(m, viewTerm));
                 const displaySettlementType = resolveMemberSettlementTypeForTerm(m, viewTerm, defaultSettlementType);
                 const cashBudget = editingMembers ? getMemberBudgetVal(m, "cashBudget") : getViewTermBudget(m, viewTerm).cashBudget;
@@ -1056,8 +1191,9 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                       <div className={dim}>
                       {editingMembers ? (
                         <select
-                          value={rawGrade}
-                          onChange={(e) => setMemberField(m.id, "institutionGrade", e.target.value as ProjectMember["institutionGrade"])}
+                          value={getMemberGradeVal(m)}
+                          onChange={(e) => setGradeDrafts((prev) => ({ ...prev, [m.id]: e.target.value as NonNullable<ProjectMember["institutionGrade"]> }))}
+                          title={`${viewTerm}연차에만 적용됩니다(연차별 오버라이드) — 앞으로 쭉 바뀐 경우 옆 연필 아이콘에서 이후 연차도 함께 지정하세요`}
                           className="text-xs border border-slate-200 rounded-lg px-2 py-1 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400">
                           <option value="최우수(S)">최우수 (S)</option>
                           <option value="우수(A)">우수 (A)</option>
@@ -1088,8 +1224,9 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                       <div className={dim}>
                       {editingMembers ? (
                         <select
-                          value={getMemberVal(m, "settlementType") ?? defaultSettlementType}
-                          onChange={(e) => setMemberField(m.id, "settlementType", e.target.value as ProjectMember["settlementType"])}
+                          value={getMemberSettlementVal(m)}
+                          onChange={(e) => setSettlementDrafts((prev) => ({ ...prev, [m.id]: e.target.value as "위탁정산" | "자체정산" }))}
+                          title={`${viewTerm}연차에만 적용됩니다(연차별 오버라이드) — 앞으로 쭉 바뀐 경우 옆 연필 아이콘에서 이후 연차도 함께 지정하세요`}
                           className="text-xs border border-slate-200 rounded-lg px-2 py-1 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400">
                           <option value="위탁정산">위탁정산</option>
                           <option value="자체정산">자체정산</option>
