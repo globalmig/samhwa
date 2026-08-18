@@ -621,16 +621,146 @@ export function addProjectMember(data: Omit<ProjectMember, "id">): ProjectMember
 // 수수료 산정에 영향을 주는 필드 — 변경 시 해당 과제의 연차별 수수료를 자동 재산정한다.
 const FEE_AFFECTING_FIELDS = ["budget", "cashBudget", "inKindBudget", "institutionGrade", "gradeOverrides", "settlementType", "settlementTypeOverrides", "annualBudgets", "role"] as const;
 
+const EXEMPT_GRADES_KO = new Set(["최우수(S)", "우수(A)", "우수(B)", "우수(C)"]);
+
+function getStageRangeForTerm(project: Project, termNumber: number): { startTermNumber: number; endTermNumber: number } {
+  const isBatch = !project.agreementType || project.agreementType === "BATCH";
+  if (isBatch) return { startTermNumber: 1, endTermNumber: project.totalTerms };
+  const stage = (project.stages ?? []).find((s) => termNumber >= s.startTermNumber && termNumber <= s.endTermNumber);
+  return stage ? { startTermNumber: stage.startTermNumber, endTermNumber: stage.endTermNumber } : { startTermNumber: 1, endTermNumber: project.totalTerms };
+}
+
+function isStageSettledForTerm(project: Project, termNumber: number): boolean {
+  const isBatch = !project.agreementType || project.agreementType === "BATCH";
+  const settlementTermNumber = isBatch ? project.totalTerms : getStageRangeForTerm(project, termNumber).endTermNumber;
+  return _state.termFees.some(
+    (tf) => tf.projectNumber === project.projectNumber && tf.termNumber === settlementTermNumber &&
+      (tf.status === "CONFIRMED" || tf.status === "BILLED")
+  );
+}
+
+function logMemberChangeMemo(before: ProjectMember, content: string) {
+  addProjectIssue({
+    projectId: before.projectId,
+    projectNumber: before.projectNumber,
+    content,
+    author: getCurrentUser()?.name ?? "시스템",
+    createdAt: new Date().toISOString().replace("T", " ").slice(0, 16),
+    priority: "MEDIUM",
+    status: "OPEN",
+    institutionName: before.institutionName,
+  });
+}
+
+// 정산구분이 위탁정산으로 바뀌면 그 단계(과거 연차 포함) 전체를 위탁정산·일반등급으로 소급
+// 반영한다 — 면제등급 기관이 위탁정산을 선택하면 그 연차상시 기간 동안은 등급 혜택 없이
+// 일반기관으로 계산되기 때문에(fee-calculator.ts의 ANNUAL+위탁정산 예외), 정산구분만 바꾸고
+// 등급 표시를 그대로 두면 화면과 실제 계산이 어긋나 보인다. 단계가 이미 정산 완료됐으면
+// (settlement 연차가 CONFIRMED/BILLED) 과거를 소급해서 건드리지 않고 null을 반환한다.
+function cascadeToEntrustedStage(
+  before: ProjectMember,
+  project: Project,
+  originTerm: number,
+  baseAfterSettlementOverrides: { termNumber: number; settlementType: "위탁정산" | "자체정산" }[]
+): { settlementTypeOverrides: { termNumber: number; settlementType: "위탁정산" | "자체정산" }[]; gradeOverrides: { termNumber: number; grade: "최우수(S)" | "우수(A)" | "우수(B)" | "우수(C)" | "일반" }[] } | null {
+  const gradeAtOrigin = (before.gradeOverrides ?? []).find((g) => g.termNumber === originTerm)?.grade ?? before.institutionGrade ?? "일반";
+  if (!EXEMPT_GRADES_KO.has(gradeAtOrigin)) return null; // 원래 일반등급이면 바꿀 게 없음
+  if (isStageSettledForTerm(project, originTerm)) return null;
+
+  const stageRange = getStageRangeForTerm(project, originTerm);
+  const stageTerms: number[] = [];
+  for (let t = stageRange.startTermNumber; t <= stageRange.endTermNumber; t++) stageTerms.push(t);
+
+  const settlementTypeOverrides = [
+    ...baseAfterSettlementOverrides.filter((o) => o.termNumber < stageRange.startTermNumber || o.termNumber > stageRange.endTermNumber),
+    ...stageTerms.map((t) => ({ termNumber: t, settlementType: "위탁정산" as const })),
+  ].sort((a, b) => a.termNumber - b.termNumber);
+  const gradeOverrides = [
+    ...(before.gradeOverrides ?? []).filter((g) => g.termNumber < stageRange.startTermNumber || g.termNumber > stageRange.endTermNumber),
+    ...stageTerms.map((t) => ({ termNumber: t, grade: "일반" as const })),
+  ].sort((a, b) => a.termNumber - b.termNumber);
+
+  logMemberChangeMemo(before,
+    `${before.institutionName}: ${originTerm}연차에서 자체정산에서 위탁정산으로 변경 (${gradeAtOrigin} → 일반등급). ` +
+    `정산구분은 단계 단위 특성이라 ${stageRange.startTermNumber}~${stageRange.endTermNumber}연차(해당 단계) 전체에 위탁정산·일반등급을 자동 반영했습니다.`
+  );
+  return { settlementTypeOverrides, gradeOverrides };
+}
+
+// 정산구분·등급 변경을 UI(연차별/단계별 오버라이드 편집)와 엑셀 업로드(과제×기관당 단일값 갱신)
+// 두 경로 모두에서 감지해 메모(ProjectIssue)로 남긴다 — 두 경로가 서로 다른 필드(오버라이드
+// 배열 vs 단일값)를 쓰므로 각각 따로 비교해야 한다.
+function applyMemberChangeTracking(before: ProjectMember, data: Partial<ProjectMember>): Partial<ProjectMember> {
+  const result: Partial<ProjectMember> = { ...data };
+  const project = _state.projects.find((p) => p.id === before.projectId);
+
+  if (project && data.settlementTypeOverrides !== undefined) {
+    const beforeOverrides = before.settlementTypeOverrides ?? [];
+    const afterOverrides = data.settlementTypeOverrides;
+    const changed = afterOverrides.filter((o) => {
+      const prevAtTerm = beforeOverrides.find((b) => b.termNumber === o.termNumber)?.settlementType ?? before.settlementType;
+      return prevAtTerm !== o.settlementType;
+    });
+    const newlyEntrusted = changed.filter((o) => o.settlementType === "위탁정산");
+    if (newlyEntrusted.length > 0) {
+      const originTerm = Math.min(...newlyEntrusted.map((o) => o.termNumber));
+      const cascade = cascadeToEntrustedStage(before, project, originTerm, afterOverrides);
+      if (cascade) {
+        result.settlementTypeOverrides = cascade.settlementTypeOverrides;
+        result.gradeOverrides = cascade.gradeOverrides;
+      }
+    } else if (changed.length > 0) {
+      const t = Math.min(...changed.map((o) => o.termNumber));
+      const prevType = beforeOverrides.find((b) => b.termNumber === t)?.settlementType ?? before.settlementType ?? "자체정산";
+      const newType = changed.find((o) => o.termNumber === t)!.settlementType;
+      logMemberChangeMemo(before, `${before.institutionName}: ${t}연차에서 정산구분이 ${prevType}에서 ${newType}로 변경되었습니다.`);
+    }
+  } else if (project && data.settlementType !== undefined && data.settlementType !== before.settlementType) {
+    // 엑셀 업로드 경로 — 연차별 오버라이드가 아니라 과제×기관당 단일값을 그대로 덮어쓰므로,
+    // 지금 진행연차(currentTerm)를 기준 연차로 보고 동일한 소급 반영 규칙을 적용한다.
+    const originTerm = project.currentTerm ?? 1;
+    const cascade = data.settlementType === "위탁정산"
+      ? cascadeToEntrustedStage(before, project, originTerm, before.settlementTypeOverrides ?? [])
+      : null;
+    if (cascade) {
+      result.settlementTypeOverrides = cascade.settlementTypeOverrides;
+      result.gradeOverrides = cascade.gradeOverrides;
+    } else {
+      logMemberChangeMemo(before, `${before.institutionName}: 정산구분이 ${before.settlementType ?? "자체정산"}에서 ${data.settlementType}로 변경되었습니다(${originTerm}연차 기준, 엑셀 업로드).`);
+    }
+  }
+
+  if (data.gradeOverrides !== undefined) {
+    const beforeGrade = before.gradeOverrides ?? [];
+    const afterGrade = data.gradeOverrides;
+    const changed = afterGrade.filter((g) => {
+      const prev = beforeGrade.find((b) => b.termNumber === g.termNumber)?.grade ?? before.institutionGrade ?? "일반";
+      return prev !== g.grade;
+    });
+    if (changed.length > 0) {
+      const t = Math.min(...changed.map((g) => g.termNumber));
+      const prev = beforeGrade.find((b) => b.termNumber === t)?.grade ?? before.institutionGrade ?? "일반";
+      const next = changed.find((g) => g.termNumber === t)!.grade;
+      logMemberChangeMemo(before, `${before.institutionName}: ${t}연차에서 등급이 ${prev}에서 ${next}로 변경되었습니다.`);
+    }
+  } else if (data.institutionGrade !== undefined && data.institutionGrade !== before.institutionGrade) {
+    logMemberChangeMemo(before, `${before.institutionName}: 등급이 ${before.institutionGrade ?? "일반"}에서 ${data.institutionGrade}로 변경되었습니다(엑셀 업로드 등).`);
+  }
+
+  return result;
+}
+
 export function updateProjectMember(id: string, data: Partial<ProjectMember>): void {
   const before = _state.projectMembers.find((m) => m.id === id);
   if (!before) return;
-  const after = { ...before, ...data };
+  const trackedData = applyMemberChangeTracking(before, data);
+  const after = { ...before, ...trackedData };
   _state = { ..._state, projectMembers: _state.projectMembers.map((m) => (m.id === id ? after : m)) };
   record("projectMember", id, `${after.projectNumber} · ${after.institutionName}`, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
-  if (FEE_AFFECTING_FIELDS.some((f) => f in data)) {
+  if (FEE_AFFECTING_FIELDS.some((f) => f in trackedData)) {
     autoGenerateTermFees(before.projectId);
   }
-  if ("cashBudget" in data || "inKindBudget" in data) {
+  if ("cashBudget" in trackedData || "inKindBudget" in trackedData) {
     recalcProjectTotalBudget(before.projectId);
   }
   notify();

@@ -327,6 +327,18 @@ export const institutions: Institution[] = [
     registeredAt: "2024-01-05",
     status: "ACTIVE",
   },
+  // 20012196 강상일테스트1 참여기관 (아래 p-017)
+  { id: "inst-024", name: "연세대학교산학협력단", type: "대학", bizNumber: "108-82-10500", representativeName: "이영국", contactName: "이영국", contactEmail: "", contactPhone: "", registeredAt: "2026-08-15", status: "ACTIVE" },
+  { id: "inst-025", name: "국민대학교산학협력단", type: "대학", bizNumber: "209-82-08395", representativeName: "조기섭", contactName: "조기섭", contactEmail: "", contactPhone: "", registeredAt: "2026-08-15", status: "ACTIVE" },
+  { id: "inst-026", name: "동의대학교산학협력단", type: "대학", bizNumber: "605-82-08254", representativeName: "박영도", contactName: "박영도", contactEmail: "", contactPhone: "", registeredAt: "2026-08-15", status: "ACTIVE" },
+  { id: "inst-027", name: "세종대학교산학협력단", type: "대학", bizNumber: "206-82-07591", representativeName: "손기선", contactName: "손기선", contactEmail: "", contactPhone: "", registeredAt: "2026-08-15", status: "ACTIVE" },
+  { id: "inst-028", name: "포항공과대학교산학협력단", type: "대학", bizNumber: "506-82-07303", representativeName: "이동화", contactName: "이동화", contactEmail: "", contactPhone: "", registeredAt: "2026-08-15", status: "ACTIVE" },
+  { id: "inst-029", name: "한국생산기술연구원", type: "정부출연연구소", bizNumber: "119-82-01008", representativeName: "최윤일", contactName: "최윤일", contactEmail: "", contactPhone: "", registeredAt: "2026-08-15", status: "ACTIVE" },
+  { id: "inst-030", name: "한국에너지공과대학교", type: "대학", bizNumber: "793-82-00340", representativeName: "표명호", contactName: "표명호", contactEmail: "", contactPhone: "", registeredAt: "2026-08-15", status: "ACTIVE" },
+  { id: "inst-031", name: "한국자동차연구원", type: "정부출연연구소", bizNumber: "312-82-04676", representativeName: "김동옥", contactName: "김동옥", contactEmail: "", contactPhone: "", registeredAt: "2026-08-15", status: "ACTIVE" },
+  { id: "inst-032", name: "고려대학교산학협력단", type: "대학", bizNumber: "209-82-08298", representativeName: "김한수", contactName: "김한수", contactEmail: "", contactPhone: "", registeredAt: "2026-08-15", status: "ACTIVE" },
+  { id: "inst-033", name: "경상국립대학교산학협력단", type: "대학", bizNumber: "613-82-11653", representativeName: "설재복", contactName: "설재복", contactEmail: "", contactPhone: "", registeredAt: "2026-08-15", status: "ACTIVE" },
+  { id: "inst-034", name: "국립순천대학교산학협력단", type: "대학", bizNumber: "416-82-14326", representativeName: "표명호", contactName: "표명호", contactEmail: "", contactPhone: "", registeredAt: "2026-08-15", status: "ACTIVE" },
 ];
 
 // ============================================================
@@ -907,6 +919,30 @@ export const projects: Project[] = [
     assignedManager: "이회계",
     registeredAt: "2024-01-05",
   },
+  {
+    id: "p-017",
+    projectNumber: "20012196",
+    projectName: "강상일테스트1",
+    agencyId: "fa-001",
+    agency: "한국산업기술기획평가원",
+    leadInstitutionId: "inst-024",
+    leadInstitutionName: "연세대학교산학협력단",
+    totalBudget: 4_020_000_000,
+    startDate: "2020-09-01",
+    endDate: "2026-12-31",
+    totalTerms: 5,
+    currentTerm: 5,
+    status: "ACTIVE",
+    govGrant: 4_020_000_000,
+    privateCash: 0,
+    privateInKind: 348_052_000,
+    projectCategory: "정산",
+    researchLead: "이영국",
+    projectCode: "KEIT-2020-196",
+    projectDivision: "공동",
+    assignedManager: "최미진",
+    registeredAt: "2026-08-15",
+  },
 ];
 
 // ============================================================
@@ -1073,6 +1109,74 @@ export const projectMembers: ProjectMember[] = [
   { id: "pm-061", projectId: "p-016", projectNumber: "RS-2024-00271038", institutionId: "inst-021", institutionName: "전남대학교", institutionType: "대학", role: "PARTICIPANT", budget: 550_000_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "최우수(S)", settlementType: "자체정산", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 100_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 2, cashBudget: 150_000_000, inKindBudget: 0 }, { termYear: 2026, termNumber: 3, cashBudget: 300_000_000, inKindBudget: 0 }] },
   { id: "pm-062", projectId: "p-016", projectNumber: "RS-2024-00271038", institutionId: "inst-022", institutionName: "한국전자통신연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 350_000_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "우수(A)", settlementType: "자체정산", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 50_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 2, cashBudget: 100_000_000, inKindBudget: 0 }, { termYear: 2026, termNumber: 3, cashBudget: 200_000_000, inKindBudget: 0 }] },
   { id: "pm-063", projectId: "p-016", projectNumber: "RS-2024-00271038", institutionId: "inst-023", institutionName: "(주)스마트팩토리", institutionType: "중소기업", role: "PARTICIPANT", budget: 300_000_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "일반", settlementType: "위탁정산", annualBudgets: [{ termYear: 2024, termNumber: 1, cashBudget: 50_000_000, inKindBudget: 0 }, { termYear: 2025, termNumber: 2, cashBudget: 100_000_000, inKindBudget: 0 }, { termYear: 2026, termNumber: 3, cashBudget: 150_000_000, inKindBudget: 0 }] },
+
+  // p-017: 20012196 강상일테스트1 (연세대학교산학협력단 · 한국산업기술기획평가원) — 실제 라이브 테스트 세션
+  // 데이터를 영구 시드로 옮김. termYear는 termNumberToYear(project.startDate="2020-09-01", termNumber) 기준.
+  { id: "pm-064", projectId: "p-017", projectNumber: "20012196", institutionId: "inst-024", institutionName: "연세대학교산학협력단", institutionType: "대학", role: "LEAD", budget: 7_400_250_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "우수(B)", settlementType: "자체정산", annualBudgets: [
+    { termYear: 2020, termNumber: 1, cashBudget: 1_232_000_000, inKindBudget: 44_820_000, termStartDate: "2022-04-01", termEndDate: "2022-12-31" },
+    { termYear: 2021, termNumber: 2, cashBudget: 1_420_000_000, inKindBudget: 96_000_000, termStartDate: "2023-01-01", termEndDate: "2023-12-31" },
+    { termYear: 2022, termNumber: 3, cashBudget: 1_138_250_000, inKindBudget: 96_000_000, termStartDate: "2024-01-01", termEndDate: "2024-12-31" },
+    { termYear: 2023, termNumber: 4, cashBudget: 1_590_000_000, inKindBudget: 96_000_000, termStartDate: "2025-01-01", termEndDate: "2025-12-31" },
+    { termYear: 2024, termNumber: 5, cashBudget: 2_020_000_000, inKindBudget: 108_000_000, termStartDate: "2026-01-01", termEndDate: "2026-12-31" },
+  ] },
+  { id: "pm-065", projectId: "p-017", projectNumber: "20012196", institutionId: "inst-025", institutionName: "국민대학교산학협력단", institutionType: "대학", role: "PARTICIPANT", budget: 1_429_000_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "우수(B)", settlementType: "자체정산", annualBudgets: [
+    { termYear: 2020, termNumber: 1, cashBudget: 200_000_000, inKindBudget: 21_600_000, termStartDate: "2022-04-01", termEndDate: "2022-12-31" },
+    { termYear: 2021, termNumber: 2, cashBudget: 200_000_000, inKindBudget: 28_800_000, termStartDate: "2023-01-01", termEndDate: "2023-12-31" },
+    { termYear: 2022, termNumber: 3, cashBudget: 314_000_000, inKindBudget: 45_600_000, termStartDate: "2024-01-01", termEndDate: "2024-12-31" },
+    { termYear: 2023, termNumber: 4, cashBudget: 357_500_000, inKindBudget: 48_000_000, termStartDate: "2025-01-01", termEndDate: "2025-12-31" },
+    { termYear: 2024, termNumber: 5, cashBudget: 357_500_000, inKindBudget: 20_347_000, termStartDate: "2026-01-01", termEndDate: "2026-12-31" },
+  ] },
+  { id: "pm-066", projectId: "p-017", projectNumber: "20012196", institutionId: "inst-026", institutionName: "동의대학교산학협력단", institutionType: "대학", role: "PARTICIPANT", budget: 1_133_750_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "우수(B)", settlementType: "자체정산", annualBudgets: [
+    { termYear: 2020, termNumber: 1, cashBudget: 250_000_000, inKindBudget: 8_550_000, termStartDate: "2022-04-01", termEndDate: "2022-12-31" },
+    { termYear: 2021, termNumber: 2, cashBudget: 250_000_000, inKindBudget: 11_400_000, termStartDate: "2023-01-01", termEndDate: "2023-12-31" },
+    { termYear: 2022, termNumber: 3, cashBudget: 196_250_000, inKindBudget: 11_400_000, termStartDate: "2024-01-01", termEndDate: "2024-12-31" },
+    { termYear: 2023, termNumber: 4, cashBudget: 228_750_000, inKindBudget: 6_000_000, termStartDate: "2025-01-01", termEndDate: "2025-12-31" },
+    { termYear: 2024, termNumber: 5, cashBudget: 208_750_000, inKindBudget: 6_000_000, termStartDate: "2026-01-01", termEndDate: "2026-12-31" },
+  ] },
+  { id: "pm-067", projectId: "p-017", projectNumber: "20012196", institutionId: "inst-027", institutionName: "세종대학교산학협력단", institutionType: "대학", role: "PARTICIPANT", budget: 3_027_750_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "우수(B)", settlementType: "자체정산", annualBudgets: [
+    { termYear: 2020, termNumber: 1, cashBudget: 700_000_000, inKindBudget: 36_180_000, termStartDate: "2022-04-01", termEndDate: "2022-12-31" },
+    { termYear: 2021, termNumber: 2, cashBudget: 700_000_000, inKindBudget: 49_540_000, termStartDate: "2023-01-01", termEndDate: "2023-12-31" },
+    { termYear: 2022, termNumber: 3, cashBudget: 510_250_000, inKindBudget: 38_240_000, termStartDate: "2024-01-01", termEndDate: "2024-12-31" },
+    { termYear: 2023, termNumber: 4, cashBudget: 678_750_000, inKindBudget: 38_240_000, termStartDate: "2025-01-01", termEndDate: "2025-12-31" },
+    { termYear: 2024, termNumber: 5, cashBudget: 438_750_000, inKindBudget: 28_160_000, termStartDate: "2026-01-01", termEndDate: "2026-12-31" },
+  ] },
+  { id: "pm-068", projectId: "p-017", projectNumber: "20012196", institutionId: "inst-028", institutionName: "포항공과대학교산학협력단", institutionType: "대학", role: "PARTICIPANT", budget: 1_363_000_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "우수(C)", settlementType: "자체정산", annualBudgets: [
+    { termYear: 2020, termNumber: 1, cashBudget: 300_000_000, inKindBudget: 73_090_000, termStartDate: "2022-04-01", termEndDate: "2022-12-31" },
+    { termYear: 2021, termNumber: 2, cashBudget: 300_000_000, inKindBudget: 114_758_000, termStartDate: "2023-01-01", termEndDate: "2023-12-31" },
+    { termYear: 2022, termNumber: 3, cashBudget: 235_500_000, inKindBudget: 135_398_000, termStartDate: "2024-01-01", termEndDate: "2024-12-31" },
+    { termYear: 2023, termNumber: 4, cashBudget: 278_750_000, inKindBudget: 128_942_000, termStartDate: "2025-01-01", termEndDate: "2025-12-31" },
+    { termYear: 2024, termNumber: 5, cashBudget: 248_750_000, inKindBudget: 124_990_000, termStartDate: "2026-01-01", termEndDate: "2026-12-31" },
+  ] },
+  { id: "pm-069", projectId: "p-017", projectNumber: "20012196", institutionId: "inst-029", institutionName: "한국생산기술연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 1_373_000_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "우수(A)", settlementType: "자체정산", annualBudgets: [
+    { termYear: 2020, termNumber: 1, cashBudget: 300_000_000, inKindBudget: 0, termStartDate: "2022-04-01", termEndDate: "2022-12-31" },
+    { termYear: 2021, termNumber: 2, cashBudget: 300_000_000, inKindBudget: 0, termStartDate: "2023-01-01", termEndDate: "2023-12-31" },
+    { termYear: 2022, termNumber: 3, cashBudget: 235_500_000, inKindBudget: 0, termStartDate: "2024-01-01", termEndDate: "2024-12-31" },
+    { termYear: 2023, termNumber: 4, cashBudget: 278_750_000, inKindBudget: 0, termStartDate: "2025-01-01", termEndDate: "2025-12-31" },
+    { termYear: 2024, termNumber: 5, cashBudget: 258_750_000, inKindBudget: 0, termStartDate: "2026-01-01", termEndDate: "2026-12-31" },
+  ] },
+  { id: "pm-070", projectId: "p-017", projectNumber: "20012196", institutionId: "inst-030", institutionName: "한국에너지공과대학교", institutionType: "대학", role: "PARTICIPANT", budget: 832_250_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "일반", settlementType: "위탁정산", annualBudgets: [
+    { termYear: 2022, termNumber: 3, cashBudget: 274_750_000, inKindBudget: 26_460_000, termStartDate: "2024-01-01", termEndDate: "2024-12-31" },
+    { termYear: 2023, termNumber: 4, cashBudget: 328_750_000, inKindBudget: 30_870_000, termStartDate: "2025-01-01", termEndDate: "2025-12-31" },
+    { termYear: 2024, termNumber: 5, cashBudget: 228_750_000, inKindBudget: 30_870_000, termStartDate: "2026-01-01", termEndDate: "2026-12-31" },
+  ] },
+  { id: "pm-071", projectId: "p-017", projectNumber: "20012196", institutionId: "inst-031", institutionName: "한국자동차연구원", institutionType: "정부출연연구소", role: "PARTICIPANT", budget: 1_373_000_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "일반", settlementType: "위탁정산", annualBudgets: [
+    { termYear: 2020, termNumber: 1, cashBudget: 300_000_000, inKindBudget: 0, termStartDate: "2022-04-01", termEndDate: "2022-12-31" },
+    { termYear: 2021, termNumber: 2, cashBudget: 300_000_000, inKindBudget: 0, termStartDate: "2023-01-01", termEndDate: "2023-12-31" },
+    { termYear: 2022, termNumber: 3, cashBudget: 235_500_000, inKindBudget: 0, termStartDate: "2024-01-01", termEndDate: "2024-12-31" },
+    { termYear: 2023, termNumber: 4, cashBudget: 278_750_000, inKindBudget: 0, termStartDate: "2025-01-01", termEndDate: "2025-12-31" },
+    { termYear: 2024, termNumber: 5, cashBudget: 258_750_000, inKindBudget: 0, termStartDate: "2026-01-01", termEndDate: "2026-12-31" },
+  ] },
+  { id: "pm-072", projectId: "p-017", projectNumber: "20012196", institutionId: "inst-032", institutionName: "고려대학교산학협력단", institutionType: "대학", role: "PARTICIPANT", budget: 250_000_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "우수(B)", settlementType: "자체정산", annualBudgets: [
+    { termYear: 2020, termNumber: 1, cashBudget: 250_000_000, inKindBudget: 0, termStartDate: "2022-04-01", termEndDate: "2022-12-31" },
+  ] },
+  { id: "pm-073", projectId: "p-017", projectNumber: "20012196", institutionId: "inst-033", institutionName: "경상국립대학교산학협력단", institutionType: "대학", role: "PARTICIPANT", budget: 400_000_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "일반", settlementType: "위탁정산", annualBudgets: [
+    { termYear: 2020, termNumber: 1, cashBudget: 200_000_000, inKindBudget: 11_160_000, termStartDate: "2022-04-01", termEndDate: "2022-12-31" },
+    { termYear: 2021, termNumber: 2, cashBudget: 200_000_000, inKindBudget: 14_880_000, termStartDate: "2023-01-01", termEndDate: "2023-12-31" },
+  ] },
+  { id: "pm-074", projectId: "p-017", projectNumber: "20012196", institutionId: "inst-034", institutionName: "국립순천대학교산학협력단", institutionType: "대학", role: "PARTICIPANT", budget: 700_000_000, feeRate: 2.8, calculatedFee: 0, institutionGrade: "우수(B)", settlementType: "자체정산", annualBudgets: [
+    { termYear: 2020, termNumber: 1, cashBudget: 350_000_000, inKindBudget: 46_800_000, termStartDate: "2022-04-01", termEndDate: "2022-12-31" },
+    { termYear: 2021, termNumber: 2, cashBudget: 350_000_000, inKindBudget: 49_800_000, termStartDate: "2023-01-01", termEndDate: "2023-12-31" },
+  ] },
 ];
 
 // ============================================================
@@ -1654,6 +1758,53 @@ export const termFees: TermFee[] = [
   { id: "tf-p016-y3-s", projectNumber: "RS-2024-00271038", projectName: "차세대 전력반도체 모듈 개발", termYear: 2026, termNumber: 3, institutionId: "inst-021", institutionName: "전남대학교", institutionType: "대학", budget: 300_000_000, feeRate: 2.8, calculatedFee: 241_380, appliedFee: 205_173, standardFee: 241_380, unclaimedFee: 36_207, status: "DRAFT" },
   { id: "tf-p016-y3-a", projectNumber: "RS-2024-00271038", projectName: "차세대 전력반도체 모듈 개발", termYear: 2026, termNumber: 3, institutionId: "inst-022", institutionName: "한국전자통신연구원", institutionType: "정부출연연구소", budget: 200_000_000, feeRate: 2.8, calculatedFee: 160_920, appliedFee: 136_782, standardFee: 160_920, unclaimedFee: 24_138, status: "DRAFT" },
   { id: "tf-p016-y3-d", projectNumber: "RS-2024-00271038", projectName: "차세대 전력반도체 모듈 개발", termYear: 2026, termNumber: 3, institutionId: "inst-023", institutionName: "(주)스마트팩토리", institutionType: "중소기업", budget: 150_000_000, feeRate: 2.8, calculatedFee: 494_100, appliedFee: 595_699, standardFee: 494_100, unclaimedFee: 0, status: "DRAFT" },
+
+  // p-017: 20012196 강상일테스트1 — calcTermFee 엔진으로 1~5연차 실제 재계산해 산출한 값
+  // (5연차 정산 합계 3,828,938원, 경상국립대는 위탁정산으로 탈퇴 후 이월분까지 정산 연차에 청구됨)
+  { id: "tf-p017-1", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2020, termNumber: 1, institutionId: "inst-031", institutionName: "한국자동차연구원", institutionType: "", budget: 300000000, feeRate: 2.8, calculatedFee: 1136430, appliedFee: 965965, standardFee: 1136430, unclaimedFee: 170465, status: "DRAFT", isAutoGenerated: true, termStartDate: "2022-04-01", termEndDate: "2022-12-31" },
+  { id: "tf-p017-2", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2020, termNumber: 1, institutionId: "inst-033", institutionName: "경상국립대학교산학협력단", institutionType: "", budget: 211160000, feeRate: 2.8, calculatedFee: 757620, appliedFee: 643977, standardFee: 757620, unclaimedFee: 113643, status: "DRAFT", isAutoGenerated: true, termStartDate: "2022-04-01", termEndDate: "2022-12-31" },
+  { id: "tf-p017-3", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2020, termNumber: 1, institutionId: "inst-025", institutionName: "국민대학교산학협력단", institutionType: "", budget: 221600000, feeRate: 2.8, calculatedFee: 65352, appliedFee: 55549, standardFee: 65352, unclaimedFee: 9803, status: "DRAFT", isAutoGenerated: true, termStartDate: "2022-04-01", termEndDate: "2022-12-31" },
+  { id: "tf-p017-4", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2020, termNumber: 1, institutionId: "inst-024", institutionName: "연세대학교산학협력단", institutionType: "", budget: 1276820000, feeRate: 2.8, calculatedFee: 402567, appliedFee: 342182, standardFee: 402567, unclaimedFee: 60385, status: "DRAFT", isAutoGenerated: true, termStartDate: "2022-04-01", termEndDate: "2022-12-31" },
+  { id: "tf-p017-5", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2020, termNumber: 1, institutionId: "inst-026", institutionName: "동의대학교산학협력단", institutionType: "", budget: 258550000, feeRate: 2.8, calculatedFee: 81690, appliedFee: 69437, standardFee: 81690, unclaimedFee: 12253, status: "DRAFT", isAutoGenerated: true, termStartDate: "2022-04-01", termEndDate: "2022-12-31" },
+  { id: "tf-p017-6", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2020, termNumber: 1, institutionId: "inst-032", institutionName: "고려대학교산학협력단", institutionType: "", budget: 250000000, feeRate: 2.8, calculatedFee: 81690, appliedFee: 69437, standardFee: 81690, unclaimedFee: 12253, status: "DRAFT", isAutoGenerated: true, termStartDate: "2022-04-01", termEndDate: "2022-12-31" },
+  { id: "tf-p017-7", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2020, termNumber: 1, institutionId: "inst-028", institutionName: "포항공과대학교산학협력단", institutionType: "", budget: 373090000, feeRate: 2.8, calculatedFee: 98028, appliedFee: 83324, standardFee: 98028, unclaimedFee: 14704, status: "DRAFT", isAutoGenerated: true, termStartDate: "2022-04-01", termEndDate: "2022-12-31" },
+  { id: "tf-p017-8", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2020, termNumber: 1, institutionId: "inst-027", institutionName: "세종대학교산학협력단", institutionType: "", budget: 736180000, feeRate: 2.8, calculatedFee: 228731, appliedFee: 194421, standardFee: 228731, unclaimedFee: 34310, status: "DRAFT", isAutoGenerated: true, termStartDate: "2022-04-01", termEndDate: "2022-12-31" },
+  { id: "tf-p017-9", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2020, termNumber: 1, institutionId: "inst-029", institutionName: "한국생산기술연구원", institutionType: "", budget: 300000000, feeRate: 2.8, calculatedFee: 98027, appliedFee: 83323, standardFee: 98027, unclaimedFee: 14704, status: "DRAFT", isAutoGenerated: true, termStartDate: "2022-04-01", termEndDate: "2022-12-31" },
+  { id: "tf-p017-10", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2020, termNumber: 1, institutionId: "inst-034", institutionName: "국립순천대학교산학협력단", institutionType: "", budget: 396800000, feeRate: 2.8, calculatedFee: 114365, appliedFee: 97210, standardFee: 114365, unclaimedFee: 17155, status: "DRAFT", isAutoGenerated: true, termStartDate: "2022-04-01", termEndDate: "2022-12-31" },
+  { id: "tf-p017-11", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2021, termNumber: 2, institutionId: "inst-033", institutionName: "경상국립대학교산학협력단", institutionType: "", budget: 214880000, feeRate: 2.8, calculatedFee: 757620, appliedFee: 643977, standardFee: 757620, unclaimedFee: 113643, status: "DRAFT", isAutoGenerated: true, termStartDate: "2023-01-01", termEndDate: "2023-12-31" },
+  { id: "tf-p017-12", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2021, termNumber: 2, institutionId: "inst-031", institutionName: "한국자동차연구원", institutionType: "", budget: 300000000, feeRate: 2.8, calculatedFee: 1136430, appliedFee: 965966, standardFee: 1136430, unclaimedFee: 170464, status: "DRAFT", isAutoGenerated: true, termStartDate: "2023-01-01", termEndDate: "2023-12-31" },
+  { id: "tf-p017-13", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2021, termNumber: 2, institutionId: "inst-027", institutionName: "세종대학교산학협력단", institutionType: "", budget: 749540000, feeRate: 2.8, calculatedFee: 212446, appliedFee: 180579, standardFee: 212446, unclaimedFee: 31867, status: "DRAFT", isAutoGenerated: true, termStartDate: "2023-01-01", termEndDate: "2023-12-31" },
+  { id: "tf-p017-14", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2021, termNumber: 2, institutionId: "inst-034", institutionName: "국립순천대학교산학협력단", institutionType: "", budget: 399800000, feeRate: 2.8, calculatedFee: 106223, appliedFee: 90289, standardFee: 106223, unclaimedFee: 15934, status: "DRAFT", isAutoGenerated: true, termStartDate: "2023-01-01", termEndDate: "2023-12-31" },
+  { id: "tf-p017-15", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2021, termNumber: 2, institutionId: "inst-029", institutionName: "한국생산기술연구원", institutionType: "", budget: 300000000, feeRate: 2.8, calculatedFee: 91048, appliedFee: 77391, standardFee: 91048, unclaimedFee: 13657, status: "DRAFT", isAutoGenerated: true, termStartDate: "2023-01-01", termEndDate: "2023-12-31" },
+  { id: "tf-p017-16", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2021, termNumber: 2, institutionId: "inst-024", institutionName: "연세대학교산학협력단", institutionType: "", budget: 1516000000, feeRate: 2.8, calculatedFee: 430962, appliedFee: 366318, standardFee: 430962, unclaimedFee: 64644, status: "DRAFT", isAutoGenerated: true, termStartDate: "2023-01-01", termEndDate: "2023-12-31" },
+  { id: "tf-p017-17", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2021, termNumber: 2, institutionId: "inst-026", institutionName: "동의대학교산학협력단", institutionType: "", budget: 261400000, feeRate: 2.8, calculatedFee: 75874, appliedFee: 64493, standardFee: 75874, unclaimedFee: 11381, status: "DRAFT", isAutoGenerated: true, termStartDate: "2023-01-01", termEndDate: "2023-12-31" },
+  { id: "tf-p017-18", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2021, termNumber: 2, institutionId: "inst-028", institutionName: "포항공과대학교산학협력단", institutionType: "", budget: 414758000, feeRate: 2.8, calculatedFee: 91048, appliedFee: 77391, standardFee: 91048, unclaimedFee: 13657, status: "DRAFT", isAutoGenerated: true, termStartDate: "2023-01-01", termEndDate: "2023-12-31" },
+  { id: "tf-p017-19", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2021, termNumber: 2, institutionId: "inst-025", institutionName: "국민대학교산학협력단", institutionType: "", budget: 228800000, feeRate: 2.8, calculatedFee: 60699, appliedFee: 51594, standardFee: 60699, unclaimedFee: 9105, status: "DRAFT", isAutoGenerated: true, termStartDate: "2023-01-01", termEndDate: "2023-12-31" },
+  { id: "tf-p017-20", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2022, termNumber: 3, institutionId: "inst-030", institutionName: "한국에너지공과대학교", institutionType: "", budget: 301210000, feeRate: 2.8, calculatedFee: 1019873, appliedFee: 866892, standardFee: 1019873, unclaimedFee: 152981, status: "DRAFT", isAutoGenerated: true, termStartDate: "2024-01-01", termEndDate: "2024-12-31" },
+  { id: "tf-p017-21", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2022, termNumber: 3, institutionId: "inst-031", institutionName: "한국자동차연구원", institutionType: "", budget: 235500000, feeRate: 2.8, calculatedFee: 874177, appliedFee: 743050, standardFee: 874177, unclaimedFee: 131127, status: "DRAFT", isAutoGenerated: true, termStartDate: "2024-01-01", termEndDate: "2024-12-31" },
+  { id: "tf-p017-22", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2022, termNumber: 3, institutionId: "inst-028", institutionName: "포항공과대학교산학협력단", institutionType: "", budget: 370898000, feeRate: 2.8, calculatedFee: 86521, appliedFee: 73543, standardFee: 86521, unclaimedFee: 12978, status: "DRAFT", isAutoGenerated: true, termStartDate: "2024-01-01", termEndDate: "2024-12-31" },
+  { id: "tf-p017-23", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2022, termNumber: 3, institutionId: "inst-027", institutionName: "세종대학교산학협력단", institutionType: "", budget: 548490000, feeRate: 2.8, calculatedFee: 187462, appliedFee: 159343, standardFee: 187462, unclaimedFee: 28119, status: "DRAFT", isAutoGenerated: true, termStartDate: "2024-01-01", termEndDate: "2024-12-31" },
+  { id: "tf-p017-24", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2022, termNumber: 3, institutionId: "inst-025", institutionName: "국민대학교산학협력단", institutionType: "", budget: 359600000, feeRate: 2.8, calculatedFee: 115361, appliedFee: 98057, standardFee: 115361, unclaimedFee: 17304, status: "DRAFT", isAutoGenerated: true, termStartDate: "2024-01-01", termEndDate: "2024-12-31" },
+  { id: "tf-p017-25", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2022, termNumber: 3, institutionId: "inst-024", institutionName: "연세대학교산학협력단", institutionType: "", budget: 1234250000, feeRate: 2.8, calculatedFee: 418184, appliedFee: 355456, standardFee: 418184, unclaimedFee: 62728, status: "DRAFT", isAutoGenerated: true, termStartDate: "2024-01-01", termEndDate: "2024-12-31" },
+  { id: "tf-p017-26", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2022, termNumber: 3, institutionId: "inst-026", institutionName: "동의대학교산학협력단", institutionType: "", budget: 207650000, feeRate: 2.8, calculatedFee: 72101, appliedFee: 61286, standardFee: 72101, unclaimedFee: 10815, status: "DRAFT", isAutoGenerated: true, termStartDate: "2024-01-01", termEndDate: "2024-12-31" },
+  { id: "tf-p017-27", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2022, termNumber: 3, institutionId: "inst-029", institutionName: "한국생산기술연구원", institutionType: "", budget: 235500000, feeRate: 2.8, calculatedFee: 86521, appliedFee: 73543, standardFee: 86521, unclaimedFee: 12978, status: "DRAFT", isAutoGenerated: true, termStartDate: "2024-01-01", termEndDate: "2024-12-31" },
+  { id: "tf-p017-28", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2023, termNumber: 4, institutionId: "inst-030", institutionName: "한국에너지공과대학교", institutionType: "", budget: 359620000, feeRate: 2.8, calculatedFee: 1024969, appliedFee: 871224, standardFee: 1024969, unclaimedFee: 153745, status: "DRAFT", isAutoGenerated: true, termStartDate: "2025-01-01", termEndDate: "2025-12-31" },
+  { id: "tf-p017-29", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2023, termNumber: 4, institutionId: "inst-031", institutionName: "한국자동차연구원", institutionType: "", budget: 278750000, feeRate: 2.8, calculatedFee: 869081, appliedFee: 738719, standardFee: 869081, unclaimedFee: 130362, status: "DRAFT", isAutoGenerated: true, termStartDate: "2025-01-01", termEndDate: "2025-12-31" },
+  { id: "tf-p017-30", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2023, termNumber: 4, institutionId: "inst-029", institutionName: "한국생산기술연구원", institutionType: "", budget: 278750000, feeRate: 2.8, calculatedFee: 78920, appliedFee: 67082, standardFee: 78920, unclaimedFee: 11838, status: "DRAFT", isAutoGenerated: true, termStartDate: "2025-01-01", termEndDate: "2025-12-31" },
+  { id: "tf-p017-31", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2023, termNumber: 4, institutionId: "inst-025", institutionName: "국민대학교산학협력단", institutionType: "", budget: 405500000, feeRate: 2.8, calculatedFee: 101216, appliedFee: 86033, standardFee: 101216, unclaimedFee: 15183, status: "DRAFT", isAutoGenerated: true, termStartDate: "2025-01-01", termEndDate: "2025-12-31" },
+  { id: "tf-p017-32", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2023, termNumber: 4, institutionId: "inst-028", institutionName: "포항공과대학교산학협력단", institutionType: "", budget: 407692000, feeRate: 2.8, calculatedFee: 78920, appliedFee: 67082, standardFee: 78920, unclaimedFee: 11838, status: "DRAFT", isAutoGenerated: true, termStartDate: "2025-01-01", termEndDate: "2025-12-31" },
+  { id: "tf-p017-33", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2023, termNumber: 4, institutionId: "inst-027", institutionName: "세종대학교산학협력단", institutionType: "", budget: 716990000, feeRate: 2.8, calculatedFee: 192168, appliedFee: 163343, standardFee: 192168, unclaimedFee: 28825, status: "DRAFT", isAutoGenerated: true, termStartDate: "2025-01-01", termEndDate: "2025-12-31" },
+  { id: "tf-p017-34", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2023, termNumber: 4, institutionId: "inst-024", institutionName: "연세대학교산학협력단", institutionType: "", budget: 1686000000, feeRate: 2.8, calculatedFee: 450162, appliedFee: 382638, standardFee: 450162, unclaimedFee: 67524, status: "DRAFT", isAutoGenerated: true, termStartDate: "2025-01-01", termEndDate: "2025-12-31" },
+  { id: "tf-p017-35", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2023, termNumber: 4, institutionId: "inst-026", institutionName: "동의대학교산학협력단", institutionType: "", budget: 234750000, feeRate: 2.8, calculatedFee: 64764, appliedFee: 55049, standardFee: 64764, unclaimedFee: 9715, status: "DRAFT", isAutoGenerated: true, termStartDate: "2025-01-01", termEndDate: "2025-12-31" },
+  { id: "tf-p017-36", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2024, termNumber: 5, institutionId: "inst-031", institutionName: "한국자동차연구원", institutionType: "", budget: 258750000, feeRate: 2.8, calculatedFee: 924733, appliedFee: 1527151, standardFee: 924733, unclaimedFee: 0, status: "DRAFT", isAutoGenerated: true, termStartDate: "2026-01-01", termEndDate: "2026-12-31" },
+  { id: "tf-p017-37", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2024, termNumber: 5, institutionId: "inst-030", institutionName: "한국에너지공과대학교", institutionType: "", budget: 259620000, feeRate: 2.8, calculatedFee: 817517, appliedFee: 1124243, standardFee: 817517, unclaimedFee: 0, status: "DRAFT", isAutoGenerated: true, termStartDate: "2026-01-01", termEndDate: "2026-12-31" },
+  { id: "tf-p017-38", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2024, termNumber: 5, institutionId: "inst-026", institutionName: "동의대학교산학협력단", institutionType: "", budget: 214750000, feeRate: 2.8, calculatedFee: 66064, appliedFee: 56154, standardFee: 66064, unclaimedFee: 9910, status: "DRAFT", isAutoGenerated: true, termStartDate: "2026-01-01", termEndDate: "2026-12-31" },
+  { id: "tf-p017-39", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2024, termNumber: 5, institutionId: "inst-028", institutionName: "포항공과대학교산학협력단", institutionType: "", budget: 373740000, feeRate: 2.8, calculatedFee: 78723, appliedFee: 66915, standardFee: 78723, unclaimedFee: 11808, status: "DRAFT", isAutoGenerated: true, termStartDate: "2026-01-01", termEndDate: "2026-12-31" },
+  { id: "tf-p017-40", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2024, termNumber: 5, institutionId: "inst-024", institutionName: "연세대학교산학협력단", institutionType: "", budget: 2128000000, feeRate: 2.8, calculatedFee: 639281, appliedFee: 543389, standardFee: 639281, unclaimedFee: 95892, status: "DRAFT", isAutoGenerated: true, termStartDate: "2026-01-01", termEndDate: "2026-12-31" },
+  { id: "tf-p017-41", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2024, termNumber: 5, institutionId: "inst-027", institutionName: "세종대학교산학협력단", institutionType: "", budget: 466910000, feeRate: 2.8, calculatedFee: 138854, appliedFee: 118026, standardFee: 138854, unclaimedFee: 20828, status: "DRAFT", isAutoGenerated: true, termStartDate: "2026-01-01", termEndDate: "2026-12-31" },
+  { id: "tf-p017-42", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2024, termNumber: 5, institutionId: "inst-025", institutionName: "국민대학교산학협력단", institutionType: "", budget: 377847000, feeRate: 2.8, calculatedFee: 113140, appliedFee: 96169, standardFee: 113140, unclaimedFee: 16971, status: "DRAFT", isAutoGenerated: true, termStartDate: "2026-01-01", termEndDate: "2026-12-31" },
+  { id: "tf-p017-43", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2024, termNumber: 5, institutionId: "inst-029", institutionName: "한국생산기술연구원", institutionType: "", budget: 258750000, feeRate: 2.8, calculatedFee: 81888, appliedFee: 69605, standardFee: 81888, unclaimedFee: 12283, status: "DRAFT", isAutoGenerated: true, termStartDate: "2026-01-01", termEndDate: "2026-12-31" },
+  { id: "tf-p017-44", projectNumber: "20012196", projectName: "강상일테스트1", termYear: 2024, termNumber: 5, institutionId: "inst-033", institutionName: "경상국립대학교산학협력단", institutionType: "", budget: 0, feeRate: 2.8, calculatedFee: 0, appliedFee: 227286, standardFee: 0, unclaimedFee: 0, status: "DRAFT", isAutoGenerated: true, termStartDate: "2026-01-01", termEndDate: "2026-12-31" },
 ];
 
 // ============================================================
@@ -3038,6 +3189,13 @@ export const termFeeCalcs: TermFeeCalc[] = [
     status: "BILLED",
     createdAt: "2024-12-31",
   },
+
+  // p-017: 20012196 강상일테스트1 — calcTermFee 엔진으로 산출
+  { id: "tfc-p017-1", projectId: "p-017", projectNumber: "20012196", projectName: "강상일테스트1", agencyId: "fa-001", termYear: 2020, termNumber: 1, stageNumber: 0, workType: "ANNUAL", totalCashBudget: 4082000000, coInstCount: 9, baseFee: 2043000, addonFee: 1021500, standardFee: 3064500, nonExemptCashBudget: 500000000, nonExemptCoInstCount: 2, nonExemptBaseFee: 1647000, nonExemptAddonFee: 247050, generalFee: 1894050, exemptFeeTotal: 1170450, exemptBreakdown: [], calculatedFee: 2888933, generalCalcFee: 1894050, generalBillingFee: 1609942, generalUnclaimedFee: 284108, carriedOverUnclaimed: 0, totalBillingFee: 2604825, overrides: [], status: "DRAFT", createdAt: "2026-08-15" },
+  { id: "tfc-p017-2", projectId: "p-017", projectNumber: "20012196", projectName: "강상일테스트1", agencyId: "fa-001", termYear: 2021, termNumber: 2, stageNumber: 0, workType: "ANNUAL", totalCashBudget: 4020000000, coInstCount: 8, baseFee: 2043000, addonFee: 919350, standardFee: 2962350, nonExemptCashBudget: 500000000, nonExemptCoInstCount: 2, nonExemptBaseFee: 1647000, nonExemptAddonFee: 247050, generalFee: 1894050, exemptFeeTotal: 1068300, exemptBreakdown: [], calculatedFee: 2802105, generalCalcFee: 1894050, generalBillingFee: 1609943, generalUnclaimedFee: 284107, carriedOverUnclaimed: 284108, totalBillingFee: 2517998, overrides: [], status: "DRAFT", createdAt: "2026-08-15" },
+  { id: "tfc-p017-3", projectId: "p-017", projectNumber: "20012196", projectName: "강상일테스트1", agencyId: "fa-001", termYear: 2022, termNumber: 3, stageNumber: 0, workType: "ANNUAL", totalCashBudget: 3140000000, coInstCount: 7, baseFee: 2043000, addonFee: 817200, standardFee: 2860200, nonExemptCashBudget: 510250000, nonExemptCoInstCount: 2, nonExemptBaseFee: 1647000, nonExemptAddonFee: 247050, generalFee: 1894050, exemptFeeTotal: 966150, exemptBreakdown: [], calculatedFee: 2715278, generalCalcFee: 1894050, generalBillingFee: 1609942, generalUnclaimedFee: 284108, carriedOverUnclaimed: 568215, totalBillingFee: 2431170, overrides: [], status: "DRAFT", createdAt: "2026-08-15" },
+  { id: "tfc-p017-4", projectId: "p-017", projectNumber: "20012196", projectName: "강상일테스트1", agencyId: "fa-001", termYear: 2023, termNumber: 4, stageNumber: 0, workType: "ANNUAL", totalCashBudget: 4020000000, coInstCount: 7, baseFee: 2043000, addonFee: 817200, standardFee: 2860200, nonExemptCashBudget: 607500000, nonExemptCoInstCount: 2, nonExemptBaseFee: 1647000, nonExemptAddonFee: 247050, generalFee: 1894050, exemptFeeTotal: 966150, exemptBreakdown: [], calculatedFee: 2715278, generalCalcFee: 1894050, generalBillingFee: 1609943, generalUnclaimedFee: 284107, carriedOverUnclaimed: 852323, totalBillingFee: 2431170, overrides: [], status: "DRAFT", createdAt: "2026-08-15" },
+  { id: "tfc-p017-5", projectId: "p-017", projectNumber: "20012196", projectName: "강상일테스트1", agencyId: "fa-001", termYear: 2024, termNumber: 5, stageNumber: 0, workType: "SETTLEMENT", totalCashBudget: 4020000000, coInstCount: 7, baseFee: 2043000, addonFee: 817200, standardFee: 2860200, nonExemptCashBudget: 487500000, nonExemptCoInstCount: 2, nonExemptBaseFee: 1515000, nonExemptAddonFee: 227250, generalFee: 1742250, exemptFeeTotal: 1117950, exemptBreakdown: [], calculatedFee: 2692508, generalCalcFee: 1742250, generalBillingFee: 1742250, generalUnclaimedFee: 0, carriedOverUnclaimed: 1136430, totalBillingFee: 3828938, overrides: [], status: "DRAFT", createdAt: "2026-08-15" },
 ];
 
 // ─── 전담기관 운용 안내 타입 ──────────────────────────────────
