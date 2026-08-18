@@ -629,8 +629,6 @@ export function addProjectMember(data: Omit<ProjectMember, "id">): ProjectMember
 // 수수료 산정에 영향을 주는 필드 — 변경 시 해당 과제의 연차별 수수료를 자동 재산정한다.
 const FEE_AFFECTING_FIELDS = ["budget", "cashBudget", "inKindBudget", "institutionGrade", "gradeOverrides", "settlementType", "settlementTypeOverrides", "annualBudgets", "role"] as const;
 
-const EXEMPT_GRADES_KO = new Set(["최우수(S)", "우수(A)", "우수(B)", "우수(C)"]);
-
 function getStageRangeForTerm(project: Project, termNumber: number): { startTermNumber: number; endTermNumber: number } {
   const isBatch = !project.agreementType || project.agreementType === "BATCH";
   if (isBatch) return { startTermNumber: 1, endTermNumber: project.totalTerms };
@@ -660,55 +658,44 @@ function logMemberChangeMemo(before: ProjectMember, content: string) {
   });
 }
 
-// 정산구분이 위탁정산으로 바뀌면 그 단계(과거 연차 포함) 전체를 위탁정산·일반등급으로 소급
-// 반영한다 — 면제등급 기관이 위탁정산을 선택하면 그 연차상시 기간 동안은 등급 혜택 없이
-// 일반기관으로 계산되기 때문에(fee-calculator.ts의 ANNUAL+위탁정산 예외), 정산구분만 바꾸고
-// 등급 표시를 그대로 두면 화면과 실제 계산이 어긋나 보인다. 단계가 이미 정산 완료됐으면
-// (settlement 연차가 CONFIRMED/BILLED) 과거를 소급해서 건드리지 않고 null을 반환한다.
-function cascadeToEntrustedStage(
-  before: ProjectMember,
+// 정산구분은 기관이 속한 "단계" 전체의 특성이다 — 한 단계 안에서 연차마다 다른 정산구분을
+// 갖는 건 의미가 없으므로, 특정 연차에서 정산구분이 바뀌면 그 연차가 속한 단계 전체(과거 연차
+// 포함)에 동일하게 소급 반영한다(양방향: 자체→위탁, 위탁→자체 모두). 단계가 이미 정산
+// 완료됐으면(정산 연차가 CONFIRMED/BILLED) 과거를 소급해서 건드리지 않고 null을 반환한다.
+// 등급(institutionGrade/gradeOverrides)은 화면 표시용 참고 라벨일 뿐이라 여기서는 절대 건드리지
+// 않는다 — 면제/일반 수수료 버킷 분류는 fee-calculator.ts가 오직 그 시점의 정산구분만으로
+// 판단하므로, 등급 표시가 바뀌지 않아도 계산은 정산구분을 따라 정확히 달라진다.
+function cascadeSettlementStage(
   project: Project,
   originTerm: number,
+  targetType: "위탁정산" | "자체정산",
   baseAfterSettlementOverrides: { termNumber: number; settlementType: "위탁정산" | "자체정산" }[]
-): { settlementTypeOverrides: { termNumber: number; settlementType: "위탁정산" | "자체정산" }[]; gradeOverrides: { termNumber: number; grade: "최우수(S)" | "우수(A)" | "우수(B)" | "우수(C)" | "일반" }[] } | null {
-  const gradeAtOrigin = (before.gradeOverrides ?? []).find((g) => g.termNumber === originTerm)?.grade ?? before.institutionGrade ?? "일반";
-  if (!EXEMPT_GRADES_KO.has(gradeAtOrigin)) return null; // 원래 일반등급이면 바꿀 게 없음
+): { termNumber: number; settlementType: "위탁정산" | "자체정산" }[] | null {
   if (isStageSettledForTerm(project, originTerm)) return null;
 
   const stageRange = getStageRangeForTerm(project, originTerm);
   const stageTerms: number[] = [];
   for (let t = stageRange.startTermNumber; t <= stageRange.endTermNumber; t++) stageTerms.push(t);
 
-  const settlementTypeOverrides = [
+  return [
     ...baseAfterSettlementOverrides.filter((o) => o.termNumber < stageRange.startTermNumber || o.termNumber > stageRange.endTermNumber),
-    ...stageTerms.map((t) => ({ termNumber: t, settlementType: "위탁정산" as const })),
+    ...stageTerms.map((t) => ({ termNumber: t, settlementType: targetType })),
   ].sort((a, b) => a.termNumber - b.termNumber);
-  const gradeOverrides = [
-    ...(before.gradeOverrides ?? []).filter((g) => g.termNumber < stageRange.startTermNumber || g.termNumber > stageRange.endTermNumber),
-    ...stageTerms.map((t) => ({ termNumber: t, grade: "일반" as const })),
-  ].sort((a, b) => a.termNumber - b.termNumber);
-
-  return { settlementTypeOverrides, gradeOverrides };
 }
 
-// 정산구분·등급 변경은 두 갈래로 나눠 다르게 남긴다:
+// 정산구분 변경은 두 갈래로 나눠 다르게 남긴다:
 //  - "무엇이 바뀌었다/자동 반영됐다"처럼 결과를 그대로 알리기만 하면 되는 경우는 메모(이슈)를
 //    만들지 않는다 — updateProjectMember가 매번 record()로 변경이력(AuditEntry)에 변경 전/후
 //    값을 그대로 남기므로 거기서 확인할 수 있다.
-//  - 자동 반영이 "안 됐거나 못 한" 경우(예: 이미 정산 완료된 단계라 등급을 자동으로 못 맞춘 경우)는
-//    담당자가 직접 확인/조치해야 하니 메모(이슈)로 남긴다.
+//  - 자동 반영이 "안 됐거나 못 한" 경우(이미 정산 완료된 단계라 소급을 못 한 경우)는 담당자가
+//    직접 확인/조치해야 하니 메모(이슈)로 남긴다.
 function applyMemberChangeTracking(before: ProjectMember, data: Partial<ProjectMember>): Partial<ProjectMember> {
   const result: Partial<ProjectMember> = { ...data };
   const project = _state.projects.find((p) => p.id === before.projectId);
 
-  function gradeAt(termNumber: number): string {
-    return (before.gradeOverrides ?? []).find((g) => g.termNumber === termNumber)?.grade ?? before.institutionGrade ?? "일반";
-  }
-  function warnCascadeBlocked(originTerm: number) {
-    if (!project) return;
-    if (!EXEMPT_GRADES_KO.has(gradeAt(originTerm))) return; // 원래 일반등급이면 등급 어긋날 일이 없음
+  function warnCascadeBlocked(originTerm: number, targetType: "위탁정산" | "자체정산") {
     logMemberChangeMemo(before,
-      `${before.institutionName}: ${originTerm}연차에서 위탁정산으로 변경됐지만 이미 정산 완료된 단계라 등급이 자동으로 일반으로 반영되지 않았습니다. 등급을 직접 확인해주세요.`
+      `${before.institutionName}: ${originTerm}연차에서 ${targetType}으로 변경됐지만 이미 정산 완료된 단계라 정산구분이 자동으로 소급 반영되지 않았습니다. 확인해주세요.`
     );
   }
 
@@ -719,29 +706,26 @@ function applyMemberChangeTracking(before: ProjectMember, data: Partial<ProjectM
       const prevAtTerm = beforeOverrides.find((b) => b.termNumber === o.termNumber)?.settlementType ?? before.settlementType;
       return prevAtTerm !== o.settlementType;
     });
-    const newlyEntrusted = changed.filter((o) => o.settlementType === "위탁정산");
-    if (newlyEntrusted.length > 0) {
-      const originTerm = Math.min(...newlyEntrusted.map((o) => o.termNumber));
-      const cascade = cascadeToEntrustedStage(before, project, originTerm, afterOverrides);
-      if (cascade) {
-        result.settlementTypeOverrides = cascade.settlementTypeOverrides;
-        result.gradeOverrides = cascade.gradeOverrides;
+    if (changed.length > 0) {
+      const originTerm = Math.min(...changed.map((o) => o.termNumber));
+      const targetType = changed.find((o) => o.termNumber === originTerm)!.settlementType;
+      const cascaded = cascadeSettlementStage(project, originTerm, targetType, afterOverrides);
+      if (cascaded) {
+        result.settlementTypeOverrides = cascaded;
       } else {
-        warnCascadeBlocked(originTerm);
+        warnCascadeBlocked(originTerm, targetType);
       }
     }
   } else if (project && data.settlementType !== undefined && data.settlementType !== before.settlementType) {
     // 엑셀 업로드 경로 — 연차별 오버라이드가 아니라 과제×기관당 단일값을 그대로 덮어쓰므로,
     // 지금 진행연차(currentTerm)를 기준 연차로 보고 동일한 소급 반영 규칙을 적용한다.
     const originTerm = project.currentTerm ?? 1;
-    if (data.settlementType === "위탁정산") {
-      const cascade = cascadeToEntrustedStage(before, project, originTerm, before.settlementTypeOverrides ?? []);
-      if (cascade) {
-        result.settlementTypeOverrides = cascade.settlementTypeOverrides;
-        result.gradeOverrides = cascade.gradeOverrides;
-      } else {
-        warnCascadeBlocked(originTerm);
-      }
+    const targetType = data.settlementType;
+    const cascaded = cascadeSettlementStage(project, originTerm, targetType, before.settlementTypeOverrides ?? []);
+    if (cascaded) {
+      result.settlementTypeOverrides = cascaded;
+    } else {
+      warnCascadeBlocked(originTerm, targetType);
     }
   }
 

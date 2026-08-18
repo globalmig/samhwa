@@ -88,10 +88,6 @@ const GRADE_COLOR: Record<string, string> = {
 };
 const GRADE_LABEL: Record<string, string> = { S: "최우수(S)", A: "우수(A)", B: "우수(B)", C: "우수(C)", 일반: "일반" };
 const ROLE_LABEL: Record<"LEAD" | "PARTICIPANT" | "ENTRUSTED", string> = { LEAD: "주관", PARTICIPANT: "공동", ENTRUSTED: "위탁" };
-// 정산구분 변경 시 등급 확인이 필요한 등급 목록 — 이 등급들은 위탁정산으로 바뀌면 자동으로
-// 일반등급 취급되고(fee-calculator.ts ANNUAL+위탁정산 예외), 반대로 자체정산으로 되돌아갈 땐
-// "일반"만으로는 어느 면제등급으로 복귀할지 알 수 없어 사용자에게 직접 물어봐야 한다.
-const EXEMPT_GRADE_OPTIONS = ["최우수(S)", "우수(A)", "우수(B)", "우수(C)"] as const;
 
 // ─── 참여기관 정렬: 주관기관을 맨 위로, 나머지는 기관명 가나다순 ─────────────
 // 참여기관 목록·수수료 관리 탭 모두 업로드된 순서 그대로 보여주던 걸 통일한다.
@@ -255,9 +251,6 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   // 오버라이드로 저장한다(연필 아이콘의 "연차별 등급/정산구분" 편집기와 동일한 방식).
   const [gradeDrafts, setGradeDrafts] = useState<Record<string, NonNullable<ProjectMember["institutionGrade"]>>>({});
   const [settlementDrafts, setSettlementDrafts] = useState<Record<string, "위탁정산" | "자체정산">>({});
-  // 정산구분을 자체정산으로 바꾸는데 현재 등급이 "일반"인 경우(원래 면제등급이었다가 위탁으로
-  // 전환되며 일반으로 바뀌었던 경우 등) 어느 면제등급으로 복귀할지 사용자에게 직접 물어본다.
-  const [gradeRestorePrompt, setGradeRestorePrompt] = useState<{ memberId: string; memberName: string } | null>(null);
   const [budgetMismatchError, setBudgetMismatchError] = useState("");
   const [showAddMember, setShowAddMember] = useState(false);
   const [editingBudgetMember, setEditingBudgetMember] = useState<ProjectMember | null>(null);
@@ -1269,18 +1262,9 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                           value={getMemberSettlementVal(m)}
                           onChange={(e) => {
                             const next = e.target.value as "위탁정산" | "자체정산";
-                            const currentGrade = getMemberGradeVal(m);
-                            if (next === "위탁정산" && (EXEMPT_GRADE_OPTIONS as readonly string[]).includes(currentGrade)) {
-                              const ok = window.confirm(
-                                `${m.institutionName}은(는) 면제등급(${currentGrade})입니다. 위탁정산으로 변경하면 이 단계 전체의 등급이 자동으로 "일반"으로 바뀝니다. 계속하시겠습니까?`
-                              );
-                              if (!ok) return;
-                            } else if (next === "자체정산" && currentGrade === "일반") {
-                              setGradeRestorePrompt({ memberId: m.id, memberName: m.institutionName });
-                            }
                             setSettlementDrafts((prev) => ({ ...prev, [m.id]: next }));
                           }}
-                          title={`면제등급 기관을 위탁정산으로 바꾸면 ${viewTerm}연차가 속한 단계 전체(과거 연차 포함)가 자동으로 위탁정산·일반등급으로 반영되고 변경 내역이 메모로 남습니다`}
+                          title={`정산구분을 바꾸면 ${viewTerm}연차가 속한 단계 전체(과거 연차 포함)에 동일하게 반영되고 변경 내역이 메모로 남습니다`}
                           className="text-xs border border-slate-200 rounded-lg px-2 py-1 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400">
                           <option value="위탁정산">위탁정산</option>
                           <option value="자체정산">자체정산</option>
@@ -1855,24 +1839,6 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
           />
         </Modal>
       )}
-
-      {gradeRestorePrompt && (
-        <GradeRestorePromptModal
-          memberName={gradeRestorePrompt.memberName}
-          onCancel={() => {
-            setSettlementDrafts((prev) => {
-              const next = { ...prev };
-              delete next[gradeRestorePrompt.memberId];
-              return next;
-            });
-            setGradeRestorePrompt(null);
-          }}
-          onConfirm={(picked) => {
-            setGradeDrafts((prev) => ({ ...prev, [gradeRestorePrompt.memberId]: picked }));
-            setGradeRestorePrompt(null);
-          }}
-        />
-      )}
     </div>
   );
 }
@@ -2125,43 +2091,8 @@ function SettlementTypeOverrideEditor({
       return { stageNumber: s.stageNumber, startTermNumber: s.startTermNumber, endTermNumber: s.endTermNumber, settlementType };
     })
   );
-  // 위탁→자체로 되돌리며 새로 지정한 등급 — 단계번호별로 모아뒀다가 저장할 때 gradeOverrides에 반영한다.
-  const [pendingGradeByStage, setPendingGradeByStage] = useState<Record<number, NonNullable<ProjectMember["institutionGrade"]>>>({});
-  const [gradeRestoreStage, setGradeRestoreStage] = useState<number | null>(null);
-
-  function gradeForStage(stageNumber: number): NonNullable<ProjectMember["institutionGrade"]> {
-    if (pendingGradeByStage[stageNumber]) return pendingGradeByStage[stageNumber];
-    const s = stageRanges.find((x) => x.stageNumber === stageNumber);
-    if (!s) return member.institutionGrade ?? "일반";
-    const overridesInRange = (member.gradeOverrides ?? []).filter(
-      (g) => g.termNumber >= s.startTermNumber && g.termNumber <= s.endTermNumber
-    );
-    return overridesInRange.length > 0
-      ? overridesInRange.reduce((a, b) => (b.termNumber > a.termNumber ? b : a)).grade
-      : (member.institutionGrade ?? "일반");
-  }
-
   function setRowSettlementType(stageNumber: number, settlementType: "위탁정산" | "자체정산") {
     setRows((prev) => prev.map((r) => (r.stageNumber === stageNumber ? { ...r, settlementType } : r)));
-  }
-
-  // 정산구분을 바꾸기 전에, 면제등급→위탁이면 등급이 일반으로 바뀐다는 걸 확인받고,
-  // 일반(위탁)→자체면 어느 면제등급으로 되돌릴지 먼저 물어본다.
-  function requestRowSettlementType(stageNumber: number, next: "위탁정산" | "자체정산") {
-    const currentGrade = gradeForStage(stageNumber);
-    if (next === "위탁정산" && (EXEMPT_GRADE_OPTIONS as readonly string[]).includes(currentGrade)) {
-      const ok = window.confirm(
-        `이 단계의 등급이 면제등급(${currentGrade})입니다. 위탁정산으로 변경하면 등급이 자동으로 "일반"으로 바뀝니다. 계속하시겠습니까?`
-      );
-      if (!ok) return;
-      setRowSettlementType(stageNumber, next);
-      return;
-    }
-    if (next === "자체정산" && currentGrade === "일반") {
-      setGradeRestoreStage(stageNumber);
-      return;
-    }
-    setRowSettlementType(stageNumber, next);
   }
 
   function handleSave() {
@@ -2175,21 +2106,7 @@ function SettlementTypeOverrideEditor({
         return termNumbers.map((termNumber) => ({ termNumber, settlementType: r.settlementType }));
       });
 
-    // 위탁→자체로 되돌리며 새로 지정한 등급도 함께 저장한다.
-    const gradeOverrideUpdates = Object.entries(pendingGradeByStage).flatMap(([stageNumStr, grade]) => {
-      const s = stageRanges.find((x) => x.stageNumber === Number(stageNumStr));
-      if (!s) return [];
-      const termNumbers: number[] = [];
-      for (let t = s.startTermNumber; t <= s.endTermNumber; t++) termNumbers.push(t);
-      return termNumbers.map((termNumber) => ({ termNumber, grade }));
-    });
-
-    const updates: Partial<ProjectMember> = { settlementTypeOverrides: overrides.length > 0 ? overrides : undefined };
-    if (gradeOverrideUpdates.length > 0) {
-      const keep = (member.gradeOverrides ?? []).filter((g) => !gradeOverrideUpdates.some((u) => u.termNumber === g.termNumber));
-      updates.gradeOverrides = [...keep, ...gradeOverrideUpdates].sort((a, b) => a.termNumber - b.termNumber);
-    }
-    updateProjectMember(member.id, updates);
+    updateProjectMember(member.id, { settlementTypeOverrides: overrides.length > 0 ? overrides : undefined });
     onClose();
   }
 
@@ -2197,7 +2114,7 @@ function SettlementTypeOverrideEditor({
     <div className="p-6 space-y-4">
       <p className="text-xs text-slate-400 -mt-1">
         기본 정산구분은 <span className="font-medium text-slate-600">{baseSettlementType}</span>입니다. 정산구분은 단계 단위로 공유되므로 단계별로 하나만 지정하세요 —
-        저장하면 그 단계에 속한 모든 연차(과거 연차 포함)에 동일하게 반영되고, 면제등급 기관이 위탁정산으로 바뀌면 등급도 함께 일반으로 바뀌며 변경 내역이 메모로 남습니다.
+        저장하면 그 단계에 속한 모든 연차(과거 연차 포함)에 동일하게 반영되고 변경 내역이 메모로 남습니다. 등급 표시는 정산구분과 별개로 그대로 유지됩니다.
         이미 확정(청구완료)되었거나 수동조정된 연차가 있는 단계는 잠겨서 여기서 바꿔도 계산에 반영되지 않습니다.
       </p>
       <div className="border border-slate-300 rounded-lg overflow-hidden bg-white shadow-sm">
@@ -2221,7 +2138,7 @@ function SettlementTypeOverrideEditor({
                     <select
                       disabled={!canEdit || locked}
                       value={r.settlementType}
-                      onChange={(e) => requestRowSettlementType(r.stageNumber, e.target.value as "위탁정산" | "자체정산")}
+                      onChange={(e) => setRowSettlementType(r.stageNumber, e.target.value as "위탁정산" | "자체정산")}
                       className="text-xs border border-slate-300 rounded px-2 py-1.5 bg-white text-slate-700 disabled:bg-slate-50 disabled:text-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
                     >
                       <option value="위탁정산">위탁정산</option>
@@ -2247,59 +2164,7 @@ function SettlementTypeOverrideEditor({
           </button>
         )}
       </div>
-      {gradeRestoreStage != null && (
-        <GradeRestorePromptModal
-          memberName={member.institutionName}
-          onCancel={() => setGradeRestoreStage(null)}
-          onConfirm={(picked) => {
-            setPendingGradeByStage((prev) => ({ ...prev, [gradeRestoreStage]: picked }));
-            setRowSettlementType(gradeRestoreStage, "자체정산");
-            setGradeRestoreStage(null);
-          }}
-        />
-      )}
     </div>
-  );
-}
-
-// ─── 정산구분을 위탁→자체로 되돌릴 때 등급 복귀 확인 ──────────────
-// "일반"으로만 남아있어서는 어느 면제등급으로 되돌아갈지 알 수 없어 직접 물어본다.
-function GradeRestorePromptModal({
-  memberName,
-  onCancel,
-  onConfirm,
-}: {
-  memberName: string;
-  onCancel: () => void;
-  onConfirm: (grade: NonNullable<ProjectMember["institutionGrade"]>) => void;
-}) {
-  const [picked, setPicked] = useState<NonNullable<ProjectMember["institutionGrade"]>>("우수(B)");
-  return (
-    <Modal title={`${memberName} · 등급 복귀`} onClose={onCancel}>
-      <div className="p-6 space-y-4">
-        <p className="text-xs text-slate-500">
-          정산구분을 자체정산으로 바꾸려면 면제등급이 필요합니다. 현재 등급이 "일반"으로 되어 있는데,
-          어느 면제등급으로 복귀할지 선택해주세요.
-        </p>
-        <select
-          value={picked}
-          onChange={(e) => setPicked(e.target.value as NonNullable<ProjectMember["institutionGrade"]>)}
-          className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
-        >
-          {EXEMPT_GRADE_OPTIONS.map((g) => (
-            <option key={g} value={g}>{g}</option>
-          ))}
-        </select>
-        <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-          <button onClick={onCancel} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
-            취소
-          </button>
-          <button onClick={() => onConfirm(picked)} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
-            확인
-          </button>
-        </div>
-      </div>
-    </Modal>
   );
 }
 
