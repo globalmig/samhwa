@@ -428,12 +428,21 @@ export function calcTermFee(input: CalcInput): CalcResult {
   // CUSTOM 모드는 DISCOUNT와 동일하게 면제등급도 산정기준액에 포함시키되, 청구비율만 아래에서
   // exemptBillingRatio로 따로 적용한다(일반 기관의 billingRatio와 분리).
   //
-  // 면제/일반 분류는 연차상시·정산 구분 없이 항상 등급 기준만으로 정해진다(정산구분은 분류에
-  // 영향을 주지 않는다 — professional_agency_fee_calculation_flow.md의 "면제기관 정의"도 등급만으로
-  // 규정). 위탁정산/자체정산 차이는 아래 exemptRatios·generalRatioGroups에서 "정산 연차의 청구비율
-  // (100% vs exemptBillingRatio)"에만 반영되며, 표준수수료 구간·배분 계산 자체는 건드리지 않는다.
+  // 연차상시(ANNUAL)에 한해서는 예외가 있다 — 면제등급 기관이라도 그 연차에 위탁정산을 선택하면
+  // (등급 표시 자체는 그대로 두고) 표준수수료 구간·배분 계산에서는 일반기관 취급한다. 위탁 전환된
+  // 기관의 사업비가 일반기관 풀(정산대상현금)로 옮겨가 구간이 바뀔 수 있고, 그만큼 면제기관 풀도
+  // 줄어 배분액이 기관별로 다시 계산된다(총액은 연차상시에선 청구비율이 전원 동일해 변하지 않는다).
+  // 회계법인 실무 확인(2026-08-14) — 우수기관이 위탁정산으로 전환되면 그 시점부터 일반기관으로
+  // 재산정하고 그 15%를 미청구액으로 반영해야 한다는 확인을 받았다.
+  // 정산 연차(SETTLEMENT)는 이 예외를 적용하지 않는다 — 위탁정산은 그 연차만 청구비율을 100%로
+  // 올릴 뿐 면제/일반 분류 자체는 등급 기준을 그대로 유지한다. 과거에 이 필터에 "자체정산"만
+  // 통과시켰다가 위탁정산 면제기관이 계산에서 통째로 빠지는 버그가 있었던 적이 있어, 정산 연차의
+  // 분류 기준은 건드리지 않고 연차상시에만 한정한다.
   const exemptMembers = policy.exemptionMode === "DISCOUNT" || policy.exemptionMode === "CUSTOM"
-    ? cashMembers.filter((m) => exemptGrades.includes(normalizeGrade(m.grade)))
+    ? cashMembers.filter((m) =>
+        exemptGrades.includes(normalizeGrade(m.grade)) &&
+        !(workType === "ANNUAL" && m.settlementType === "위탁정산")
+      )
     : [];
   const nonExemptMembers = cashMembers.filter((m) => !exemptMembers.includes(m));
 
