@@ -3176,12 +3176,13 @@ export default function FeesPage() {
 
       {/* 메인 테이블 */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-        {/* max-h + overflow-y-auto: 이 div 자체가 세로 스크롤 컨테이너가 되어야 안의 sticky
-            top-0 헤더가 실제로 고정된다 — 바깥 래퍼의 overflow-hidden(모서리 둥글게 처리용)에
-            기대면, 그쪽엔 실제로 스크롤이 없어서(내용에 맞춰 늘어나기만 함) sticky가 무효화된다. */}
+        {/* 세로 스크롤은 이 div가 아니라 레이아웃의 <main>(overflow-y-auto)에 맡긴다 — 여기서 자체
+            높이 제한(overflow-y-auto)까지 걸면 페이지 스크롤과 테이블 내부 스크롤이 이중으로 생긴다.
+            sticky top-0 헤더는 <main>이 이미 유효한 스크롤 컨테이너라 그쪽 기준으로 그대로 고정된다.
+            가로 스크롤(overflow-x-auto)만 이 div가 맡는다 — 표가 넓어서 좌우로만 별도로 밀린다. */}
         <div
           ref={tableScrollRef}
-          className="overflow-x-auto overflow-y-auto max-h-[70vh] cursor-grab"
+          className="overflow-x-auto cursor-grab"
           onMouseDown={handleTableDragStart}
           onMouseMove={handleTableDragMove}
           onMouseUp={handleTableDragEnd}
