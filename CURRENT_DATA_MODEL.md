@@ -75,6 +75,7 @@ KEIT/KETEP/IITP/KOFPI/RDA1/RDA2 등 6개 전담기관.
 |---|---|
 | noticeRecipientScope | `LEAD_ONLY`(주관기관만 발송) \| `LEAD_AND_PARTICIPANTS`(주관+공동 모두 발송) |
 | autoDetectByLeadInstitution / affiliatedInstitutionNames | 전담기관 어디든 켤 수 있는 소속기관 자동판별(`resolveAutoDetectedAgencyId`) — 주관기관명이 목록에 있으면 다른 전담기관을 선택해도 이 전담기관으로 자동 교정된다. fa-006(RDA2)이 대표 사용 사례로, "농촌진흥청"이라는 같은 표시명을 가진 fa-005(RDA1)와 구분하는 근거로 쓰인다(수수료 기준 관리 화면에서 전담기관별로 켜고 목록 편집 가능) |
+| specialNotes | 전담기관별 "특이사항" 문구 목록(`string[]`). 원래는 화면에 하드코딩된 상수였다가 전담기관마다 직접 편집 가능한 데이터로 전환됨 — 수수료 기준 관리 화면(`AgencyFeeModelSummary`)이 정책 파라미터가 아니라 이 필드를 그대로 읽어서 보여줌 |
 
 ---
 
@@ -85,7 +86,7 @@ KEIT/KETEP/IITP/KOFPI/RDA1/RDA2 등 6개 전담기관.
 
 - **식별/기간**: projectNumber, projectName, agencyId, leadInstitutionId/Name, startDate/endDate, firstStartDate/finalEndDate(과제 전체 기간), totalTerms, currentTerm, status
 - **협약 구조**: `agreementType: "BATCH"(일괄) | "STAGED"(단계)`, `stages: { stageNumber, startTermNumber, endTermNumber, stageStartDate?, stageEndDate? }[]`
-- **과제 유형**: `projectType: "GENERAL" | "AUTONOMY_TRACK"`(자율성트랙), `autonomySettlementType`(자율성트랙 전용, 참여기관 개별 정산구분과 별개로 과제 전체 적용), `programType: "GENERAL" | "ICT_FUND"`(IITP 전용 — 동일 전담기관이 사업유형별 별도 정책을 가질 수 있음)
+- **과제 유형**: `projectType: "GENERAL" | "AUTONOMY_TRACK"`(자율성트랙), `autonomySettlementType`(자율성트랙 전용, 참여기관 개별 정산구분과 별개로 과제 전체 적용), `programType: "GENERAL" | "ICT_FUND"`(IITP 전용 — 동일 전담기관이 사업유형별 별도 정책을 가질 수 있음), `projectDivision?: "위탁" | "공동"`(과제 구분 — 계산 로직과는 무관, 표시/분류용)
 - **당해 사업비**: `govGrant/privateCash/privateInKind`(지금 진행 연차의 단일 값) + `annualFinancials?: AnnualFinancials[]`(연차별 이력 — 최근 추가, 3.3 참고)
 - **행정 정보**: usageReportDeadline, agencyAssignedAt, internalAssignedAt, projectCategory("연차상시"/"정산"), researchLead, projectCode(전담기관 약칭-순번 자동생성), assignedManager, billingType(발행구분 — 과제 단위 기본값, TermFee.billingType이 있으면 그게 우선)
 
@@ -142,6 +143,8 @@ KEIT/KETEP/IITP/KOFPI/RDA1/RDA2 등 6개 전담기관.
 
 `AUTONOMY_TRACK`(자율성트랙)+자체정산은 이 전체 흐름을 타지 않고 **표준수수료×청구비율**만으로 조기 반환합니다(정산 개념 자체가 없음, 면제기관 구분도 안 함). 자율성트랙+위탁정산은 일반과제와 동일한 흐름을 그대로 탑니다.
 
+> **면제/일반 분류에 대한 예외 (회계법인 실무 확인, 2026-08-14)**: 2번 "일반수수료"를 가를 때 등급만으로 정해지는 게 아니라, **연차상시(ANNUAL) 연차에 한해** 면제등급 기관이라도 그 연차의 정산구분이 "위탁정산"이면 (등급 표시는 그대로 두고) 일반기관 취급합니다 — 그 기관의 사업비가 일반기관 풀로 옮겨가 구간·가산금이 다시 계산됩니다. `autoGenerateTermFees`가 전체 연차를 매번 재계산하는 구조라, 정산구분을 특정 연차부터 위탁으로 바꾸면(`settlementTypeOverrides`) 잠기지 않은 과거 연차까지 이 기준으로 소급 재계산됩니다. **정산(SETTLEMENT) 연차는 이 예외를 적용하지 않습니다** — 정산 연차엔 등급 기준 분류를 그대로 유지한 채 정산구분에 따라 청구비율(85%→100%)만 갈립니다.
+
 ### 4.3 `TermFeeCalc` (연차 단위 산정 스냅샷) — `lib/mock.ts:2883`
 과제 하나·연차 하나당 1건. `calcTermFee`의 출력 전체(표준/일반/면제/산정/청구액, `exemptBreakdown: ExemptInstDetail[]`)를 그대로 저장. `overrides: FeeOverride[]`로 수기 조정 이력을 남길 수 있음(필드명·원래값·조정값·사유·조정자).
 
@@ -162,6 +165,8 @@ KEIT/KETEP/IITP/KOFPI/RDA1/RDA2 등 6개 전담기관.
 | billingType | 이 연차만의 발행구분(정발행/역발행요청/역발행/대상아님/면제) — 없으면 `Project.billingType` 대체 사용 |
 
 **재계산 잠금 규칙** (`autoGenerateTermFees`, `lib/store.ts:1470`): `CONFIRMED`/`BILLED`/`manualOverride`인 기관×연차는 정책·참여기관 정보가 바뀌어도 절대 건드리지 않고 그대로 보존. 그 외(DRAFT)는 매번 정책 파라미터·참여기관 데이터를 기준으로 새로 계산해서 덮어씀. `COMPLETED` 상태 과제는 통째로 재산정 대상에서 제외.
+
+**TermFee가 "이 연차 실제 참여"를 의미하지 않는 경우가 있음**: 정산(SETTLEMENT) 연차에, 이번 연차엔 사업비가 없어(탈퇴/미참여) 정상 계산 대상에서 빠졌지만 과거 연차에 위탁정산으로 쌓아둔 누적 미청구액이 남아있는 기관은, `budget: 0`·`calculatedFee: 0`·`standardFee: 0`·`appliedFee: 그동안 쌓인 누적 미청구액 전액`인 TermFee 행이 별도로 생성됩니다(자체정산으로 탈퇴한 기관은 매몰비용 처리되어 이 행 자체가 생기지 않음). 즉 **`budget === 0`인 TermFee는 "정산 시점에 과거 이월분만 청구하는 행"일 수 있어**, 스키마 설계 시 TermFee를 항상 "그 연차의 실제 참여 기록"으로만 가정하면 안 됩니다.
 
 ---
 

@@ -3118,9 +3118,14 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
         .filter((af) => af.projectNumber === projectNumber && af.institutionId === institutionId && af.termNumber < group.termNumber)
         .sort((a, b) => b.termNumber - a.termNumber)[0];
       if (!lastFee) return null;
+      // 등급·정산구분은 지금 보고 있는 연차(group.termNumber)가 아니라, 이 기관이 실제로 마지막으로
+      // 참여했던 연차(lastFee.termNumber) 기준으로 조회한다 — resolveMember*ForTerm은 해당 연차에
+      // 정확히 일치하는 오버라이드가 없으면 기본값으로 떨어지는데, 탈퇴 이후 연차엔 애초에 그 연차의
+      // 오버라이드가 있을 수 없어(참여 자체가 없었으므로) 그대로 쓰면 탈퇴 시점 값이 아니라 기본값이
+      // 표시되는 오류가 생긴다.
       const gm = members.find((m) => m.institutionId === institutionId);
-      const grade = gm ? normalizeGrade(resolveMemberGradeForTerm(gm, group.termNumber)) : "일반";
-      const settlementType = gm ? resolveMemberSettlementTypeForTerm(gm, group.termNumber, defaultSettlementType) : defaultSettlementType;
+      const grade = gm ? normalizeGrade(resolveMemberGradeForTerm(gm, lastFee.termNumber)) : "일반";
+      const settlementType = gm ? resolveMemberSettlementTypeForTerm(gm, lastFee.termNumber, defaultSettlementType) : defaultSettlementType;
       return { institutionId, institutionName: lastFee.institutionName, cumulative, billedThisTerm, role: gm?.role, grade, settlementType };
     })
     .filter((r): r is { institutionId: string; institutionName: string; cumulative: number; billedThisTerm: number; role: ProjectMember["role"] | undefined; grade: string; settlementType: "위탁정산" | "자체정산" } => r !== null);
