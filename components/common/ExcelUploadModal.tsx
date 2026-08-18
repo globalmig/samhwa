@@ -61,7 +61,8 @@ interface ExtractedRow {
 
 interface DuplicateInfo {
   type: "agency" | "project" | "institution";
-  key: string;
+  key: string;      // 이 값으로 기존 데이터와 대조했다 — 전담기관/사업자번호는 이름, 과제는 과제번호
+  label?: string;    // 엑셀에 적힌 이름(과제명/기관명) — key만으론 뭘 가리키는지 알기 어려운 유형에만 채운다
   existing: string;
   status: "exact" | "similar";
   score?: number;
@@ -1151,11 +1152,13 @@ function PreviewStep({
     { key: "inst", label: "신규 기관", count: newInst, Icon: FiHome },
     { key: "member", label: "신규 참여기관", count: newMemberCount, Icon: FiUsers },
   ];
-  // 처음 열렸을 때는 "확인필요"가 탭 맨 앞이어도 곧바로 경고창부터 보여주기보다,
-  // 무엇이 새로 등록되는지(신규 항목)부터 먼저 보여주고 확인필요는 사용자가 직접 눌러보게 한다.
+  // 기존 과제 갱신 건이 있으면(재제출 등 확인이 특히 중요한 경우) "확인필요" 탭을 맨 먼저 보여준다.
+  // 그 외에는 무엇이 새로 등록되는지(신규 항목)부터 먼저 보여주고 확인필요는 사용자가 직접 눌러보게 한다.
   const [activeTab, setActiveTab] = useState<PreviewTabKey>(
-    (["project", "inst", "member", "agency", "review"] as PreviewTabKey[])
-      .find((key) => (TABS.find((t) => t.key === key)?.count ?? 0) > 0) ?? "project"
+    projectUpdates.length > 0
+      ? "review"
+      : (["project", "inst", "member", "agency", "review"] as PreviewTabKey[])
+          .find((key) => (TABS.find((t) => t.key === key)?.count ?? 0) > 0) ?? "project"
   );
 
   return (
@@ -1249,51 +1252,7 @@ function PreviewStep({
             {activeTab === "review" && (
               reviewCount === 0 ? <EmptyTabNote>확인이 필요한 항목이 없습니다.</EmptyTabNote> : (
                 <div className="divide-y divide-slate-200">
-                  {/* 중복/유사 경고 — 같은 기관·과제·전담기관이 여러 행에 걸쳐 나와도 유형+key당 한 번만 표시 */}
-                  {dedupedDuplicates.length > 0 && (
-                    <div>
-                      <div className="px-4 py-2 bg-amber-50 flex items-center gap-1.5">
-                        <FiAlertTriangle size={13} className="text-amber-500 shrink-0" />
-                        <p className="text-xs font-semibold text-amber-700">중복/유사 항목 ({dedupedDuplicates.length}건) — 등록에서 자동 제외됩니다</p>
-                      </div>
-                      <div className="divide-y divide-slate-100">
-                        {dedupedDuplicates.map((d, j) => (
-                          <div key={j} className="px-4 py-2">
-                            <p className="text-[11px] text-slate-600">
-                              <span className="font-medium text-slate-700">{d.type === "agency" ? "전담기관" : d.type === "project" ? "과제" : "기관"}</span>
-                              {" · "}{d.key}
-                              {d.status === "similar" ? ` — 유사 ${d.score}% ("${d.existing}"와 비교)` : " — 이미 등록됨"}
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* 단계기관별 시트 행 중 값 문제로 단계 구조 계산에서 제외된 것들 */}
-                  {stageSkipWarnings.length > 0 && (
-                    <div>
-                      <div className="px-4 py-2 bg-red-50 flex items-center gap-1.5">
-                        <FiAlertOctagon size={13} className="text-red-500 shrink-0" />
-                        <p className="text-xs font-semibold text-red-700">단계 구조 일부 제외됨 ({stageSkipWarnings.length}개 과제) — &quot;단계기관별&quot; 시트 값 확인 필요</p>
-                      </div>
-                      <div className="divide-y divide-slate-100">
-                        {stageSkipWarnings.map((w) => (
-                          <div key={w.normNum} className="px-4 py-2.5">
-                            <p className="text-xs font-medium text-red-700">{w.projectName} <span className="font-mono text-[10px] text-red-500">({w.projectNumber})</span></p>
-                            {w.reasons.map((r, i) => (
-                              <p key={i} className="text-[10px] text-red-600 pl-2 mt-0.5">· {r}</p>
-                            ))}
-                          </div>
-                        ))}
-                      </div>
-                      <p className="text-[10px] text-red-600 px-4 py-2 bg-red-50/60">
-                        위 행은 단계 정보 없이 등록되니, 필요하면 엑셀에서 값을 고쳐 다시 업로드해주세요. 그대로 등록해도 담당자·회계담당자에게 확인 이슈가 남습니다.
-                      </p>
-                    </div>
-                  )}
-
-                  {/* 기존 과제 갱신 */}
+                  {/* 기존 과제 갱신 — 재제출 등 확인이 특히 중요해 이 탭 안에서도 맨 위에 보여준다 */}
                   {projectUpdates.length > 0 && (
                     <div>
                       <div className="px-4 py-2 bg-slate-50 flex items-center gap-1.5">
@@ -1325,6 +1284,54 @@ function PreviewStep({
                           );
                         })}
                       </div>
+                    </div>
+                  )}
+
+                  {/* 중복/유사 경고 — 같은 기관·과제·전담기관이 여러 행에 걸쳐 나와도 유형+key당 한 번만 표시 */}
+                  {dedupedDuplicates.length > 0 && (
+                    <div>
+                      <div className="px-4 py-2 bg-amber-50 flex items-center gap-1.5">
+                        <FiAlertTriangle size={13} className="text-amber-500 shrink-0" />
+                        <p className="text-xs font-semibold text-amber-700">중복/유사 항목 ({dedupedDuplicates.length}건) — 등록에서 자동 제외됩니다</p>
+                      </div>
+                      <div className="divide-y divide-slate-100">
+                        {dedupedDuplicates.map((d, j) => (
+                          <div key={j} className="px-4 py-2">
+                            <p className="text-[11px] text-slate-600">
+                              <span className="font-medium text-slate-700">{d.type === "agency" ? "전담기관" : d.type === "project" ? "과제" : "기관"}</span>
+                              {" · "}{d.label ? `${d.label} (${d.key})` : d.key}
+                              {d.status === "similar"
+                                ? ` — 유사 ${d.score}% (기존 "${d.existing}"와 비교)`
+                                : d.type === "agency"
+                                  ? " — 이미 등록됨"
+                                  : ` — 이미 등록됨 (기존 "${d.existing}"과 동일)`}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 단계기관별 시트 행 중 값 문제로 단계 구조 계산에서 제외된 것들 */}
+                  {stageSkipWarnings.length > 0 && (
+                    <div>
+                      <div className="px-4 py-2 bg-red-50 flex items-center gap-1.5">
+                        <FiAlertOctagon size={13} className="text-red-500 shrink-0" />
+                        <p className="text-xs font-semibold text-red-700">단계 구조 일부 제외됨 ({stageSkipWarnings.length}개 과제) — &quot;단계기관별&quot; 시트 값 확인 필요</p>
+                      </div>
+                      <div className="divide-y divide-slate-100">
+                        {stageSkipWarnings.map((w) => (
+                          <div key={w.normNum} className="px-4 py-2.5">
+                            <p className="text-xs font-medium text-red-700">{w.projectName} <span className="font-mono text-[10px] text-red-500">({w.projectNumber})</span></p>
+                            {w.reasons.map((r, i) => (
+                              <p key={i} className="text-[10px] text-red-600 pl-2 mt-0.5">· {r}</p>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-red-600 px-4 py-2 bg-red-50/60">
+                        위 행은 단계 정보 없이 등록되니, 필요하면 엑셀에서 값을 고쳐 다시 업로드해주세요. 그대로 등록해도 담당자·회계담당자에게 확인 이슈가 남습니다.
+                      </p>
                     </div>
                   )}
 
@@ -1839,12 +1846,12 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       const normNum = normProjectNum(row.projectNumber);
       const existingProj = projects.find((p) => normProjectNum(p.projectNumber) === normNum);
       if (existingProj) {
-        duplicates.push({ type: "project", key: row.projectNumber, existing: existingProj.projectNumber, status: "exact" });
+        duplicates.push({ type: "project", key: row.projectNumber, label: row.projectName, existing: existingProj.projectName, status: "exact" });
       } else {
         for (const p of projects) {
           const sc = strSimilarity(normNum, normProjectNum(p.projectNumber));
           if (sc >= 85) {
-            duplicates.push({ type: "project", key: row.projectNumber, existing: p.projectNumber, status: "similar", score: sc });
+            duplicates.push({ type: "project", key: row.projectNumber, label: row.projectName, existing: p.projectNumber, status: "similar", score: sc });
             break;
           }
         }
@@ -1855,7 +1862,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       if (normBizNum) {
         const existingInst = institutions.find((i) => normBiz(i.bizNumber) === normBizNum);
         if (existingInst) {
-          duplicates.push({ type: "institution", key: row.bizNumber, existing: existingInst.name, status: "exact" });
+          duplicates.push({ type: "institution", key: row.bizNumber, label: row.institutionName, existing: existingInst.name, status: "exact" });
         }
       }
 
