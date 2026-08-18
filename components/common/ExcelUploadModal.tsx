@@ -113,6 +113,12 @@ interface AggregatedBudget {
   termEndDate?: string;
   // 이 연차를 담당한 회계법인(엑셀 "회계법인") — 삼화가 아니면 그 연차를 타회계법인 진행으로 자동 표시.
   auditFirm?: string;
+  // 이 연차 행에 실제로 적힌 정산형태·등급 — "연차별기관별" 시트가 연차마다 서로 다른 값을
+  // 담고 있을 수 있어(예: 3연차부터 위탁정산으로 전환), 과제×기관당 단일값(MemberAggregate.
+  // settlementType/institutionGrade)만으로는 "몇 연차부터 바뀌었는지"를 잃어버린다. 연차별
+  // 오버라이드(settlementTypeOverrides/gradeOverrides)를 정확히 만들기 위해 연차별로도 남겨둔다.
+  settlementType?: "위탁정산" | "자체정산";
+  institutionGrade?: InstitutionGrade;
 }
 
 interface MemberAggregate {
@@ -149,6 +155,43 @@ function parseGrade(raw: string): InstitutionGrade | undefined {
   }
   if (s.includes("일반") || s === "D" || s === "E" || s === "F" || s === "제외") return "일반";
   return undefined;
+}
+
+// "연차별기관별" 시트가 연차마다 서로 다른 정산형태/등급을 담고 있을 수 있다(예: 3연차부터
+// 위탁정산 전환). 과제×기관당 단일값(agg.settlementType/institutionGrade — 마지막에 읽은 행의
+// 값)만 쓰면 "몇 연차부터 바뀌었는지"를 잃어버려서, 실제로는 3연차부터 바뀐 걸 마지막 연차부터
+// 바뀐 것처럼 처리하게 된다. 그래서 값이 있는 연차마다 그대로 오버라이드로 남기고, 이번
+// 업로드에 없는 연차의 기존 오버라이드는 보존한다.
+function buildSettlementTypeOverridesFromExcel(
+  agg: MemberAggregate,
+  existingOverrides: NonNullable<ProjectMember["settlementTypeOverrides"]> | undefined
+): ProjectMember["settlementTypeOverrides"] {
+  const perTerm = Array.from(agg.budgetsByTerm.values())
+    .filter((b) => b.settlementType !== undefined)
+    .map((b) => ({ termNumber: b.termNumber, settlementType: b.settlementType! }));
+  if (perTerm.length === 0) return existingOverrides;
+  const newTermNumbers = new Set(perTerm.map((p) => p.termNumber));
+  const merged = [
+    ...(existingOverrides ?? []).filter((o) => !newTermNumbers.has(o.termNumber)),
+    ...perTerm,
+  ].sort((a, b) => a.termNumber - b.termNumber);
+  return merged.length > 0 ? merged : undefined;
+}
+
+function buildGradeOverridesFromExcel(
+  agg: MemberAggregate,
+  existingOverrides: NonNullable<ProjectMember["gradeOverrides"]> | undefined
+): ProjectMember["gradeOverrides"] {
+  const perTerm = Array.from(agg.budgetsByTerm.values())
+    .filter((b) => b.institutionGrade !== undefined)
+    .map((b) => ({ termNumber: b.termNumber, grade: b.institutionGrade! }));
+  if (perTerm.length === 0) return existingOverrides;
+  const newTermNumbers = new Set(perTerm.map((p) => p.termNumber));
+  const merged = [
+    ...(existingOverrides ?? []).filter((o) => !newTermNumbers.has(o.termNumber)),
+    ...perTerm,
+  ].sort((a, b) => a.termNumber - b.termNumber);
+  return merged.length > 0 ? merged : undefined;
 }
 
 // ============================================================
@@ -319,7 +362,11 @@ function buildMemberAggregates(
         const termStartDate = toDateStr(get("termStartDate", row)) || undefined;
         const termEndDate = toDateStr(get("termEndDate", row)) || undefined;
         const auditFirm = get("auditFirm", row).trim() || undefined;
-        agg.budgetsByTerm.set(termNumber, { termYear: supportYear, termNumber, cashBudget, inKindBudget, govGrant, privateCash, privateInKind, termStartDate, termEndDate, auditFirm });
+        agg.budgetsByTerm.set(termNumber, {
+          termYear: supportYear, termNumber, cashBudget, inKindBudget, govGrant, privateCash, privateInKind, termStartDate, termEndDate, auditFirm,
+          settlementType: settlementStr ? (settlementStr.includes("자체") ? "자체정산" : "위탁정산") : undefined,
+          institutionGrade: parsedGrade,
+        });
         projectMaxTerm.set(normNum, Math.max(projectMaxTerm.get(normNum) ?? 0, termNumber));
       } else {
         const totalCash = parseAmount(get("totalCashBudget", row));
@@ -339,6 +386,10 @@ function buildMemberAggregates(
 export interface ProjectScalarInfo {
   projectNames: Set<string>;
   assignedManagers: Set<string>;
+  // 담당자는 인사이동 등으로 연차마다 바뀔 수 있어(예: 3연차 강상일 → 4연차 이진아), 과제 전체가
+  // 하나로 통일돼야 하는 다른 스칼라 값들과 달리 연차별로 따로 모은다. "연차별기관별" 시트에만
+  // 연차 값이 있어(termNumber 있는 행만) 채워진다.
+  assignedManagersByTerm: Map<number, string>;
   researchLeads: Set<string>;     // 주관기관 기관책임자
   isAutonomyTrack: boolean;
   projectCategories: Set<string>;    // 과제구분(연차상시/정산)
@@ -356,7 +407,7 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
     let info = map.get(normNum);
     if (!info) {
       info = {
-        projectNames: new Set(), assignedManagers: new Set(), researchLeads: new Set(),
+        projectNames: new Set(), assignedManagers: new Set(), assignedManagersByTerm: new Map(), researchLeads: new Set(),
         isAutonomyTrack: false, projectCategories: new Set(), agencyAssignedAts: new Set(), internalAssignedAts: new Set(),
         startDates: new Set(),
       };
@@ -383,7 +434,13 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
       if (startDate) info.startDates.add(startDate);
 
       const manager = get("assignedManager", row);
-      if (manager) info.assignedManagers.add(manager);
+      if (manager) {
+        info.assignedManagers.add(manager);
+        if (sheet.def.key === "annual") {
+          const termNumber = parseInt(get("termYear", row), 10) || 0;
+          if (termNumber > 0) info.assignedManagersByTerm.set(termNumber, manager);
+        }
+      }
 
       if (get("autonomyTrack", row) === "자율성트랙") info.isAutonomyTrack = true;
 
@@ -459,6 +516,27 @@ function mergeAnnualFinancials(
   const updatedTermNumbers = new Set(updates.map((u) => u.termNumber));
   const kept = (existing ?? []).filter((e) => !updatedTermNumbers.has(e.termNumber));
   return [...kept, ...updates].sort((a, b) => a.termNumber - b.termNumber);
+}
+
+// scalarInfo.assignedManagersByTerm(연차→담당자)을 Project.assignedManagerHistory 배열로 바꾼다.
+function buildAssignedManagerHistory(scalarInfo: ProjectScalarInfo | undefined): { termNumber: number; assignedManager: string }[] {
+  if (!scalarInfo) return [];
+  return Array.from(scalarInfo.assignedManagersByTerm.entries())
+    .map(([termNumber, assignedManager]) => ({ termNumber, assignedManager }))
+    .sort((a, b) => a.termNumber - b.termNumber);
+}
+
+// 이번에 업로드된 연차만 덮어쓰고, 파일에 없는 과거/미래 연차의 기존 담당자 이력은 보존한다 —
+// annualFinancials/annualBudgets와 동일한 병합 규칙.
+function mergeAssignedManagerHistory(
+  existing: { termNumber: number; assignedManager: string }[] | undefined,
+  updates: { termNumber: number; assignedManager: string }[],
+): { termNumber: number; assignedManager: string }[] | undefined {
+  if (updates.length === 0) return existing;
+  const updatedTermNumbers = new Set(updates.map((u) => u.termNumber));
+  const kept = (existing ?? []).filter((e) => !updatedTermNumbers.has(e.termNumber));
+  const merged = [...kept, ...updates].sort((a, b) => a.termNumber - b.termNumber);
+  return merged.length > 0 ? merged : undefined;
 }
 
 // "단계기관별" 시트의 정산대상시작/종료단계·연차 값으로 과제별 단계 구조(Project.stages)를 추정한다.
@@ -2003,6 +2081,10 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         const { govGrant, privateCash, privateInKind } = sumTermFinancials(memberAggregates, normNum, currentTerm);
         // 파일에 담긴 연차 전체의 정부출연금/민간현금/민간현물 — Project.annualFinancials에 연차별로 쌓는다.
         const allTermFinancials = sumAllTermFinancials(memberAggregates, normNum);
+        // 담당자도 연차별 이력이 있으면(연차마다 다른 사람이 찍혀 있으면) 진행연차 값을 우선 채택하고,
+        // 파일에 담긴 연차 전체 이력은 Project.assignedManagerHistory에 그대로 쌓는다.
+        const assignedManagerHistory = buildAssignedManagerHistory(scalarInfo);
+        const resolvedAssignedManager = scalarInfo?.assignedManagersByTerm.get(currentTerm) ?? assignedManager;
 
         // 현재 연차가 속한 단계의 실제 날짜 범위(있으면) → 단계시작일/단계종료일
         const currentStage = stages?.find((s) => currentTerm >= s.startTermNumber && currentTerm <= s.endTermNumber);
@@ -2053,7 +2135,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             stageEndDate: stageDateRange?.end ?? renamedFrom.stageEndDate,
             firstStartDate: overallStartDate ?? renamedFrom.firstStartDate,
             finalEndDate: overallEndDate ?? renamedFrom.finalEndDate,
-            assignedManager: assignedManager ?? renamedFrom.assignedManager,
+            assignedManager: resolvedAssignedManager ?? renamedFrom.assignedManager,
+            assignedManagerHistory: mergeAssignedManagerHistory(renamedFrom.assignedManagerHistory, assignedManagerHistory),
             researchLead: researchLead ?? renamedFrom.researchLead,
             agencyAssignedAt: agencyAssignedAt ?? renamedFrom.agencyAssignedAt,
             internalAssignedAt: internalAssignedAt ?? renamedFrom.internalAssignedAt,
@@ -2089,7 +2172,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             stageEndDate: stageDateRange?.end,
             firstStartDate: overallStartDate,
             finalEndDate: overallEndDate,
-            assignedManager,
+            assignedManager: resolvedAssignedManager,
+            assignedManagerHistory: assignedManagerHistory.length > 0 ? assignedManagerHistory : undefined,
             researchLead,
             agencyAssignedAt,
             internalAssignedAt,
@@ -2158,6 +2242,11 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           calculatedFee: 0,
           institutionGrade: agg.institutionGrade ?? "일반",
           settlementType: agg.settlementType,
+          // 신규 참여기관이라도 "연차별기관별" 시트가 연차마다 다른 값을 담고 있으면(예: 3연차부터
+          // 위탁정산 전환) 오버라이드로 정확히 반영한다 — 단일값(agg.settlementType/institutionGrade)은
+          // 마지막으로 읽은 연차의 값이라 몇 연차부터 바뀌었는지 알 수 없다.
+          settlementTypeOverrides: buildSettlementTypeOverridesFromExcel(agg, undefined),
+          gradeOverrides: buildGradeOverridesFromExcel(agg, undefined),
           cashBudget: totalCash,
           inKindBudget: totalInKind,
           annualBudgets: annualBudgets.length > 0 ? annualBudgets : undefined,
@@ -2178,22 +2267,42 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         const totalCash = mergedBudgets.reduce((s, b) => s + b.cashBudget, 0);
         const totalInKind = mergedBudgets.reduce((s, b) => s + b.inKindBudget, 0);
 
+        // "연차별기관별" 시트에 연차마다 값이 있으면(예: 1~2연차 자체정산, 3연차부터 위탁정산)
+        // 연차별 오버라이드로 정확히 반영한다 — 과제×기관당 단일값만 쓰면 마지막으로 읽은 연차의
+        // 값이 통째로 덮어써서 "몇 연차부터 바뀌었는지"가 사라진다. 연차별 값이 아예 없으면(예:
+        // "단계기관별" 시트만 업로드된 경우) 기존처럼 단일값으로 반영한다.
+        const perTermBudgets = Array.from(agg.budgetsByTerm.values());
+        const hasPerTermSettlement = perTermBudgets.some((b) => b.settlementType !== undefined);
+        const hasPerTermGrade = perTermBudgets.some((b) => b.institutionGrade !== undefined);
+
         const updates: Partial<ProjectMember> = {
           annualBudgets: mergedBudgets,
           budget: totalCash + totalInKind,
           cashBudget: totalCash,
           inKindBudget: totalInKind,
           role: agg.role,
-          settlementType: agg.settlementType,
         };
-        if (agg.institutionGrade) updates.institutionGrade = agg.institutionGrade;
+        if (hasPerTermSettlement) {
+          updates.settlementTypeOverrides = buildSettlementTypeOverridesFromExcel(agg, existingMember.settlementTypeOverrides);
+        } else {
+          updates.settlementType = agg.settlementType;
+        }
+        if (hasPerTermGrade) {
+          updates.gradeOverrides = buildGradeOverridesFromExcel(agg, existingMember.gradeOverrides);
+        } else if (agg.institutionGrade) {
+          updates.institutionGrade = agg.institutionGrade;
+        }
 
         // 실제로 달라진 게 있을 때만 갱신 — 동일한 파일을 다시 올려도 변경이력에 빈 UPDATE가 쌓이지 않게 한다.
         const changed =
           JSON.stringify(mergedBudgets) !== JSON.stringify(existingMember.annualBudgets ?? []) ||
           updates.role !== existingMember.role ||
-          updates.settlementType !== existingMember.settlementType ||
-          (updates.institutionGrade !== undefined && updates.institutionGrade !== existingMember.institutionGrade);
+          (hasPerTermSettlement
+            ? JSON.stringify(updates.settlementTypeOverrides ?? []) !== JSON.stringify(existingMember.settlementTypeOverrides ?? [])
+            : updates.settlementType !== existingMember.settlementType) ||
+          (hasPerTermGrade
+            ? JSON.stringify(updates.gradeOverrides ?? []) !== JSON.stringify(existingMember.gradeOverrides ?? [])
+            : (updates.institutionGrade !== undefined && updates.institutionGrade !== existingMember.institutionGrade));
 
         if (changed) {
           updateProjectMember(existingMember.id, updates);
@@ -2267,6 +2376,9 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         const researchLead = scalarInfo?.researchLeads.size === 1 ? [...scalarInfo.researchLeads][0] : undefined;
         const agencyAssignedAt = scalarInfo?.agencyAssignedAts.size === 1 ? [...scalarInfo.agencyAssignedAts][0] : undefined;
         const internalAssignedAt = scalarInfo?.internalAssignedAts.size === 1 ? [...scalarInfo.internalAssignedAts][0] : undefined;
+        // 담당자는 연차별 이력이 있으면(연차마다 다른 사람) 이번에 반영되는 연차 값을 우선 채택한다.
+        const assignedManagerHistory = buildAssignedManagerHistory(scalarInfo);
+        const resolvedAssignedManager = scalarInfo?.assignedManagersByTerm.get(nextCurrentTerm) ?? assignedManager;
 
         Object.assign(updates, {
           currentTerm: nextCurrentTerm,
@@ -2275,7 +2387,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           privateCash: privateCash > 0 ? privateCash : existingProject.privateCash,
           privateInKind: privateInKind > 0 ? privateInKind : existingProject.privateInKind,
           annualFinancials: mergeAnnualFinancials(existingProject.annualFinancials, allTermFinancials),
-          assignedManager: assignedManager ?? existingProject.assignedManager,
+          assignedManager: resolvedAssignedManager ?? existingProject.assignedManager,
+          assignedManagerHistory: mergeAssignedManagerHistory(existingProject.assignedManagerHistory, assignedManagerHistory),
           researchLead: researchLead ?? existingProject.researchLead,
           agencyAssignedAt: agencyAssignedAt ?? existingProject.agencyAssignedAt,
           internalAssignedAt: internalAssignedAt ?? existingProject.internalAssignedAt,
@@ -2371,9 +2484,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         if (scalarInfo.projectNames.size > 1) {
           reasons.push(`같은 과제번호인데 과제명이 서로 다릅니다: ${[...scalarInfo.projectNames].join(" / ")}`);
         }
-        if (scalarInfo.assignedManagers.size > 1) {
-          reasons.push(`같은 과제인데 과제담당자가 서로 달라 등록하지 않았습니다: ${[...scalarInfo.assignedManagers].join(" / ")}`);
-        }
+        // 과제담당자는 연차마다 바뀔 수 있어(인사이동 등) assignedManagersByTerm으로 연차별 이력을
+        // 그대로 반영하므로, 값이 여러 개라고 해서 확인 이슈로 남기지 않는다.
         if (scalarInfo.researchLeads.size > 1) {
           reasons.push(`주관기관 기관책임자(연구책임자)가 서로 달라 등록하지 않았습니다: ${[...scalarInfo.researchLeads].join(" / ")}`);
         }

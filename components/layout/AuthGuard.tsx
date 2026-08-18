@@ -47,7 +47,12 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+        {/* border-t-transparent 트릭 원형 스피너는 회전 중 모서리가 각지게 보여 끊긴 선처럼
+            보이는 렌더링 문제가 있었다 — SVG 기반(둥근 선끝 stroke)으로 바꿔 항상 매끄럽게 돈다. */}
+        <svg className="w-6 h-6 animate-spin text-blue-600" viewBox="0 0 24 24" fill="none">
+          <circle className="opacity-20" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+          <path d="M22 12a10 10 0 0 0-10-10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+        </svg>
       </div>
     );
   }

@@ -290,8 +290,16 @@ function diff(
   const changes: Record<string, { before: unknown; after: unknown }> = {};
   for (const k of new Set([...Object.keys(before), ...Object.keys(after)])) {
     if (k === "id") continue;
-    if (String(before[k]) !== String(after[k])) {
-      changes[k] = { before: before[k], after: after[k] };
+    // 배열·객체 필드(stages/annualFinancials/gradeOverrides 등)는 String()으로 비교하면 서로
+    // 다른 값도 전부 "[object Object]"로 뭉개져 실제로는 바뀌었는데 변경 없음으로 놓칠 수 있다
+    // — JSON.stringify로 값 자체를 비교한다(이 앱의 엔티티는 함수/순환참조가 없는 순수 데이터라 안전).
+    const b = before[k];
+    const a = after[k];
+    const same = (b !== null && typeof b === "object") || (a !== null && typeof a === "object")
+      ? JSON.stringify(b) === JSON.stringify(a)
+      : String(b) === String(a);
+    if (!same) {
+      changes[k] = { before: b, after: a };
     }
   }
   return Object.keys(changes).length > 0 ? changes : undefined;
@@ -680,19 +688,29 @@ function cascadeToEntrustedStage(
     ...stageTerms.map((t) => ({ termNumber: t, grade: "일반" as const })),
   ].sort((a, b) => a.termNumber - b.termNumber);
 
-  logMemberChangeMemo(before,
-    `${before.institutionName}: ${originTerm}연차에서 자체정산에서 위탁정산으로 변경 (${gradeAtOrigin} → 일반등급). ` +
-    `정산구분은 단계 단위 특성이라 ${stageRange.startTermNumber}~${stageRange.endTermNumber}연차(해당 단계) 전체에 위탁정산·일반등급을 자동 반영했습니다.`
-  );
   return { settlementTypeOverrides, gradeOverrides };
 }
 
-// 정산구분·등급 변경을 UI(연차별/단계별 오버라이드 편집)와 엑셀 업로드(과제×기관당 단일값 갱신)
-// 두 경로 모두에서 감지해 메모(ProjectIssue)로 남긴다 — 두 경로가 서로 다른 필드(오버라이드
-// 배열 vs 단일값)를 쓰므로 각각 따로 비교해야 한다.
+// 정산구분·등급 변경은 두 갈래로 나눠 다르게 남긴다:
+//  - "무엇이 바뀌었다/자동 반영됐다"처럼 결과를 그대로 알리기만 하면 되는 경우는 메모(이슈)를
+//    만들지 않는다 — updateProjectMember가 매번 record()로 변경이력(AuditEntry)에 변경 전/후
+//    값을 그대로 남기므로 거기서 확인할 수 있다.
+//  - 자동 반영이 "안 됐거나 못 한" 경우(예: 이미 정산 완료된 단계라 등급을 자동으로 못 맞춘 경우)는
+//    담당자가 직접 확인/조치해야 하니 메모(이슈)로 남긴다.
 function applyMemberChangeTracking(before: ProjectMember, data: Partial<ProjectMember>): Partial<ProjectMember> {
   const result: Partial<ProjectMember> = { ...data };
   const project = _state.projects.find((p) => p.id === before.projectId);
+
+  function gradeAt(termNumber: number): string {
+    return (before.gradeOverrides ?? []).find((g) => g.termNumber === termNumber)?.grade ?? before.institutionGrade ?? "일반";
+  }
+  function warnCascadeBlocked(originTerm: number) {
+    if (!project) return;
+    if (!EXEMPT_GRADES_KO.has(gradeAt(originTerm))) return; // 원래 일반등급이면 등급 어긋날 일이 없음
+    logMemberChangeMemo(before,
+      `${before.institutionName}: ${originTerm}연차에서 위탁정산으로 변경됐지만 이미 정산 완료된 단계라 등급이 자동으로 일반으로 반영되지 않았습니다. 등급을 직접 확인해주세요.`
+    );
+  }
 
   if (project && data.settlementTypeOverrides !== undefined) {
     const beforeOverrides = before.settlementTypeOverrides ?? [];
@@ -708,43 +726,23 @@ function applyMemberChangeTracking(before: ProjectMember, data: Partial<ProjectM
       if (cascade) {
         result.settlementTypeOverrides = cascade.settlementTypeOverrides;
         result.gradeOverrides = cascade.gradeOverrides;
+      } else {
+        warnCascadeBlocked(originTerm);
       }
-    } else if (changed.length > 0) {
-      const t = Math.min(...changed.map((o) => o.termNumber));
-      const prevType = beforeOverrides.find((b) => b.termNumber === t)?.settlementType ?? before.settlementType ?? "자체정산";
-      const newType = changed.find((o) => o.termNumber === t)!.settlementType;
-      logMemberChangeMemo(before, `${before.institutionName}: ${t}연차에서 정산구분이 ${prevType}에서 ${newType}로 변경되었습니다.`);
     }
   } else if (project && data.settlementType !== undefined && data.settlementType !== before.settlementType) {
     // 엑셀 업로드 경로 — 연차별 오버라이드가 아니라 과제×기관당 단일값을 그대로 덮어쓰므로,
     // 지금 진행연차(currentTerm)를 기준 연차로 보고 동일한 소급 반영 규칙을 적용한다.
     const originTerm = project.currentTerm ?? 1;
-    const cascade = data.settlementType === "위탁정산"
-      ? cascadeToEntrustedStage(before, project, originTerm, before.settlementTypeOverrides ?? [])
-      : null;
-    if (cascade) {
-      result.settlementTypeOverrides = cascade.settlementTypeOverrides;
-      result.gradeOverrides = cascade.gradeOverrides;
-    } else {
-      logMemberChangeMemo(before, `${before.institutionName}: 정산구분이 ${before.settlementType ?? "자체정산"}에서 ${data.settlementType}로 변경되었습니다(${originTerm}연차 기준, 엑셀 업로드).`);
+    if (data.settlementType === "위탁정산") {
+      const cascade = cascadeToEntrustedStage(before, project, originTerm, before.settlementTypeOverrides ?? []);
+      if (cascade) {
+        result.settlementTypeOverrides = cascade.settlementTypeOverrides;
+        result.gradeOverrides = cascade.gradeOverrides;
+      } else {
+        warnCascadeBlocked(originTerm);
+      }
     }
-  }
-
-  if (data.gradeOverrides !== undefined) {
-    const beforeGrade = before.gradeOverrides ?? [];
-    const afterGrade = data.gradeOverrides;
-    const changed = afterGrade.filter((g) => {
-      const prev = beforeGrade.find((b) => b.termNumber === g.termNumber)?.grade ?? before.institutionGrade ?? "일반";
-      return prev !== g.grade;
-    });
-    if (changed.length > 0) {
-      const t = Math.min(...changed.map((g) => g.termNumber));
-      const prev = beforeGrade.find((b) => b.termNumber === t)?.grade ?? before.institutionGrade ?? "일반";
-      const next = changed.find((g) => g.termNumber === t)!.grade;
-      logMemberChangeMemo(before, `${before.institutionName}: ${t}연차에서 등급이 ${prev}에서 ${next}로 변경되었습니다.`);
-    }
-  } else if (data.institutionGrade !== undefined && data.institutionGrade !== before.institutionGrade) {
-    logMemberChangeMemo(before, `${before.institutionName}: 등급이 ${before.institutionGrade ?? "일반"}에서 ${data.institutionGrade}로 변경되었습니다(엑셀 업로드 등).`);
   }
 
   return result;

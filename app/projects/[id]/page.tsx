@@ -17,7 +17,7 @@ import {
 import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type SystemUser, type EmailDispatch, type FeePolicy, type AnnualFinancials, EMPTY_NOTICE_TEMPLATE } from "@/lib/mock";
 import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, type CalcMember } from "@/lib/fee-calculator";
 import { fmtWonFull, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange } from "@/lib/utils";
-import { fmtValue, fieldLabel } from "@/lib/audit-log-format";
+import { fmtValue, fieldLabel, describeOverrideChange } from "@/lib/audit-log-format";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
 import MoneyInput from "@/components/common/MoneyInput";
@@ -302,8 +302,15 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   );
   const issues = [...projectIssues.filter((i) => i.projectId === projectId)]
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  // 과제 레벨 필드(협약유형/단계/사업비이력 등)뿐 아니라 참여기관(등급·정산구분 등) 변경도 이
+  // 과제의 변경이력이므로 함께 보여준다 — projectMember는 별도 entityType으로 기록되기 때문에
+  // entityType === "project" 조건만으로는 참여기관 변경이 여기 전혀 안 잡히는 문제가 있었다.
+  const memberIds = new Set(members.map((m) => m.id));
   const history = auditLog
-    .filter((e) => e.entityType === "project" && e.entityId === projectId)
+    .filter((e) =>
+      (e.entityType === "project" && e.entityId === projectId) ||
+      (e.entityType === "projectMember" && memberIds.has(e.entityId))
+    )
     .slice(0, 10);
 
   // KEIT 수수료 산정 (현재 연차 기준)
@@ -454,6 +461,14 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       ...(draft.annualFinancials ?? []).filter((a) => a.termNumber !== draft.currentTerm),
       { termYear: savedTermYear, termNumber: draft.currentTerm, govGrant: draft.govGrant ?? 0, privateCash: draft.privateCash ?? 0, privateInKind: draft.privateInKind ?? 0 },
     ].sort((a, b) => a.termNumber - b.termNumber);
+    // 당해(draft.currentTerm) 담당자를 직접 수정했을 수 있으니, 연차별 이력(assignedManagerHistory)도
+    // 함께 갱신한다 — 안 그러면 다른 연차를 봤다가 돌아왔을 때 방금 수정한 값과 이력이 어긋난다.
+    const assignedManagerHistory = draft.assignedManager
+      ? [
+          ...(draft.assignedManagerHistory ?? []).filter((h) => h.termNumber !== draft.currentTerm),
+          { termNumber: draft.currentTerm, assignedManager: draft.assignedManager },
+        ].sort((a, b) => a.termNumber - b.termNumber)
+      : draft.assignedManagerHistory;
     updateProject(projectId, {
       ...draft,
       agencyId: resolvedAgencyId,
@@ -463,6 +478,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       firstStartDate: resolvedFirstStartDate,
       finalEndDate: resolvedFinalEndDate,
       annualFinancials,
+      assignedManagerHistory,
     });
     setSavedMsg(true);
     setTimeout(() => setSavedMsg(false), 2000);
@@ -533,6 +549,14 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
     : { govGrant: viewFinancialsRecord?.govGrant ?? 0, privateCash: viewFinancialsRecord?.privateCash ?? 0, privateInKind: viewFinancialsRecord?.privateInKind ?? 0 };
   const viewAnnualBudget = viewFinancials.govGrant + viewFinancials.privateCash + viewFinancials.privateInKind;
   const hasFinancialsForViewTerm = isCurrentTermFinancials || viewFinancialsRecord !== undefined;
+
+  // 담당자도 인사이동 등으로 연차마다 바뀔 수 있어(assignedManagerHistory) 사업비 구분과 동일하게
+  // 연차 탭(viewTerm)에 맞춰 보여준다 — currentTerm이면 지금 수정 중인 draft 값(입력 가능)을,
+  // 다른 연차는 이력에서 찾은 값을 읽기 전용으로 보여준다.
+  const viewAssignedManagerRecord = project.assignedManagerHistory?.find((h) => h.termNumber === viewTerm);
+  const viewAssignedManager = isCurrentTermFinancials
+    ? (draft.assignedManager ?? "")
+    : (viewAssignedManagerRecord?.assignedManager ?? "");
 
   const totalCashBudget = members.reduce((s, m) => s + getMemberBudgetVal(m, "cashBudget"), 0);
   const totalInKindBudget = members.reduce((s, m) => s + getMemberBudgetVal(m, "inKindBudget"), 0);
@@ -893,9 +917,20 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">삼화담당자</label>
-                <input className={`${inp} w-full bg-white`} value={draft.assignedManager ?? ""}
-                  onChange={(e) => setDraft((p) => ({ ...p, assignedManager: e.target.value }))} placeholder="담당자명" />
+                <label className="block text-xs font-medium text-slate-500 mb-1">
+                  삼화담당자
+                  {!isCurrentTermFinancials && (
+                    <span className="ml-1 text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{viewTerm}연차 기준 · 읽기전용</span>
+                  )}
+                </label>
+                {isCurrentTermFinancials ? (
+                  <input className={`${inp} w-full bg-white`} value={draft.assignedManager ?? ""}
+                    onChange={(e) => setDraft((p) => ({ ...p, assignedManager: e.target.value }))} placeholder="담당자명" />
+                ) : (
+                  <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500">
+                    {viewAssignedManager || "기록 없음"}
+                  </div>
+                )}
               </div>
             </div>
             {editingPastFinancials && (
@@ -1652,6 +1687,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               <tr className="bg-slate-50 border-b border-slate-100">
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500">일시</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500">액션</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500">대상</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500">수행자</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500">변경 항목</th>
               </tr>
@@ -1666,19 +1702,31 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                       color={e.action === "CREATE" ? "blue" : e.action === "UPDATE" ? "amber" : "red"}
                     />
                   </td>
+                  <td className="px-4 py-2.5 text-center text-xs text-slate-500">
+                    {e.entityType === "projectMember" ? (members.find((m) => m.id === e.entityId)?.institutionName ?? "-") : "과제"}
+                  </td>
                   <td className="px-4 py-2.5 text-center text-sm text-slate-700">{e.performedBy}</td>
                   <td className="px-4 py-2.5 text-xs text-slate-500">
                     {e.changedFields ? (
                       <div className="space-y-0.5">
-                        {Object.entries(e.changedFields).map(([field, change]) => (
-                          <div key={field}>
-                            <span className="font-medium text-slate-600">{fieldLabel(field)}</span>
-                            {": "}
-                            <span className="line-through text-red-500">{fmtValue(change.before, e.entityType, field)}</span>
-                            {" → "}
-                            <span className="text-blue-600 font-medium">{fmtValue(change.after, e.entityType, field)}</span>
-                          </div>
-                        ))}
+                        {Object.entries(e.changedFields).map(([field, change]) => {
+                          const overrideSummary = describeOverrideChange(field, change.after);
+                          return (
+                            <div key={field}>
+                              <span className="font-medium text-slate-600">{fieldLabel(field)}</span>
+                              {": "}
+                              {overrideSummary ? (
+                                <span className="text-blue-600 font-medium">{overrideSummary}</span>
+                              ) : (
+                                <>
+                                  <span className="line-through text-red-500">{fmtValue(change.before, e.entityType, field)}</span>
+                                  {" → "}
+                                  <span className="text-blue-600 font-medium">{fmtValue(change.after, e.entityType, field)}</span>
+                                </>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     ) : (
                       "-"

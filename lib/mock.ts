@@ -551,7 +551,8 @@ export interface Project {
   programType?: "GENERAL" | "ICT_FUND";        // 일반 R&D과제 | ICT 기금사업 (IITP 전용 별도 수수료체계)
   // 서류요청일/회신일(공문발송일)은 기관별로 다를 수 있어(RDA2 등 기관별 개별청구 과제) TermFee.docRequestDate/
   // docReplyDate로 관리한다 — 과제 레벨엔 두지 않는다.
-  assignedManager?: string; // 삼화 담당자
+  assignedManager?: string; // 삼화 담당자(현재 진행연차 기준) — 담당자 배정은 인사이동 등으로 연차마다 바뀔 수 있어, 연차별 이력은 assignedManagerHistory에 따로 쌓는다
+  assignedManagerHistory?: { termNumber: number; assignedManager: string }[];
   registeredAt?: string;    // 과제 등록일 — 연도별 대시보드 집계 기준(배정일). 과거 데이터는 미입력일 수 있음
 }
 
@@ -941,6 +942,11 @@ export const projects: Project[] = [
     projectCode: "KEIT-2020-196",
     projectDivision: "공동",
     assignedManager: "최미진",
+    assignedManagerHistory: [
+      { termNumber: 3, assignedManager: "강상일" },
+      { termNumber: 4, assignedManager: "이진아" },
+      { termNumber: 5, assignedManager: "최미진" },
+    ],
     registeredAt: "2026-08-15",
   },
 ];

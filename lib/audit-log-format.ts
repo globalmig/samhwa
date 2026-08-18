@@ -37,6 +37,25 @@ export const FIELD_LABELS: Record<string, string> = {
   usageReportDeadline: "사용실적제출기한",
   internalAssignedAt:  "내부배정일",
   agencyAssignedAt:    "전담기관배정일",
+  agreementType:       "협약유형",
+  stages:              "단계 구성",
+  stageStartDate:      "단계 시작일",
+  stageEndDate:        "단계 종료일",
+  annualFinancials:    "연차별 사업비 이력",
+  annualBudgets:       "연차별 사업비",
+  gradeOverrides:      "연차별 등급",
+  settlementTypeOverrides: "연차별 정산구분",
+  recipientOverrides:  "연차별 공문 수신자",
+  projectDivision:     "과제구분(위탁/공동)",
+  assignedManager:     "담당자",
+  registeredAt:        "등록일",
+  researchLead:        "연구책임자",
+  projectCode:         "과제코드",
+  institutionType:     "기관유형",
+  settlementType:       "정산구분",
+  cashBudget:          "현금사업비",
+  inKindBudget:        "현물사업비",
+  assignedManagerHistory: "연차별 담당자",
 };
 
 // 엔티티별 상태값 라벨 — 같은 영문 토큰(예: ACTIVE, PENDING)이 엔티티마다 다른 의미를 가지므로
@@ -127,8 +146,74 @@ const DEFAULT_VALUE_LABELS: Record<string, string> = {
   false: "아니오",
 };
 
+// 배열·객체 항목 하나를 사람이 읽을 수 있는 문장으로 요약한다. gradeOverrides/settlementTypeOverrides/
+// annualBudgets/annualFinancials처럼 {termNumber, ...} 형태인 연차별 항목은 "N연차: 값" 식으로,
+// stages처럼 {startTermNumber, endTermNumber}인 구간 항목은 "N단계(시작~끝연차)" 식으로 요약한다.
+// 그 외 일반 객체는 "key:value" 나열로 최소한 값 자체는 보이게 한다(String()이면 전부
+// "[object Object]"로 뭉개져 무엇이 바뀌었는지 전혀 알 수 없었다).
+function summarizeItem(item: unknown): string {
+  if (item === null || item === undefined) return "-";
+  if (typeof item !== "object") return String(item);
+  if (Array.isArray(item)) return item.map(summarizeItem).join(", ");
+  const obj = item as Record<string, unknown>;
+  if (typeof obj.termNumber === "number") {
+    const rest = Object.entries(obj)
+      .filter(([k, v]) => k !== "termNumber" && k !== "termYear" && v !== undefined && v !== null && v !== "")
+      .map(([, v]) => (typeof v === "number" ? v.toLocaleString("ko-KR") : String(v)));
+    return `${obj.termNumber}연차:${rest.join("/")}`;
+  }
+  if (typeof obj.startTermNumber === "number" && typeof obj.endTermNumber === "number") {
+    const label = typeof obj.stageNumber === "number" ? `${obj.stageNumber}단계` : "구간";
+    return `${label}(${obj.startTermNumber}~${obj.endTermNumber}연차)`;
+  }
+  const entries = Object.entries(obj)
+    .filter(([, v]) => v !== undefined && v !== null && v !== "")
+    .map(([k, v]) => `${k}:${typeof v === "number" ? v.toLocaleString("ko-KR") : v}`);
+  return entries.length > 0 ? entries.join(", ") : "-";
+}
+
+function summarizeValue(raw: unknown): string {
+  if (Array.isArray(raw)) {
+    if (raw.length === 0) return "없음";
+    const items = raw.map(summarizeItem);
+    return items.length > 4 ? `${items.slice(0, 4).join(", ")} 외 ${items.length - 4}건` : items.join(", ");
+  }
+  return summarizeItem(raw);
+}
+
+// gradeOverrides/settlementTypeOverrides는 "{termNumber, 값}[]" 형태라, 있는 그대로 나열하면
+// (예: "1연차:위탁정산, 2연차:위탁정산, 3연차:위탁정산") 장황해서 읽기 어렵다. 실무자 입장에선
+// "몇 연차부터 값이 바뀌었는지"가 궁금한 것이므로, 최신 값이 이어지는 연속 구간의 시작점을 찾아
+// "3연차부터 위탁정산으로 변경"처럼 한 문장으로 요약한다. 이 요약이 가능한 필드가 아니면 null을
+// 반환해 호출부가 기존의 전/후 값 비교 표시로 대신하게 한다.
+const TERM_OVERRIDE_VALUE_KEY: Record<string, string> = {
+  gradeOverrides: "grade",
+  settlementTypeOverrides: "settlementType",
+  assignedManagerHistory: "assignedManager",
+};
+
+export function describeOverrideChange(field: string, after: unknown): string | null {
+  const valueKey = TERM_OVERRIDE_VALUE_KEY[field];
+  if (!valueKey) return null;
+  if (!Array.isArray(after) || after.length === 0) return "설정 해제(기본값으로 복귀)";
+  const arr = (after as Record<string, unknown>[]).filter((x) => typeof x.termNumber === "number");
+  if (arr.length === 0) return null;
+  const sorted = [...arr].sort((a, b) => (a.termNumber as number) - (b.termNumber as number));
+  const last = sorted[sorted.length - 1];
+  const lastValue = last[valueKey];
+  let startIdx = sorted.length - 1;
+  while (startIdx > 0 && sorted[startIdx - 1][valueKey] === lastValue) startIdx--;
+  const startTerm = sorted[startIdx].termNumber as number;
+  const endTerm = last.termNumber as number;
+  const valueLabel = String(lastValue);
+  return startTerm === endTerm
+    ? `${startTerm}연차 ${valueLabel}으로 변경`
+    : `${startTerm}연차부터 ${valueLabel}으로 변경`;
+}
+
 export function fmtValue(raw: unknown, entityType?: string, field?: string): string {
   if (raw === null || raw === undefined) return "-";
+  if (Array.isArray(raw) || typeof raw === "object") return summarizeValue(raw);
   const str = String(raw);
   const byEntity = entityType ? VALUE_LABELS_BY_ENTITY[entityType]?.[str] : undefined;
   if (byEntity) return byEntity;
