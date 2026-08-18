@@ -1015,6 +1015,11 @@ export interface ProjectMember {
   // 연차별 정산구분 — 참여기관의 위탁/자체 정산 여부가 연차 중간에 바뀔 수 있어(계약 변경 등)
   // 특정 연차부터 달라진 경우 이걸로 그 연차 이후만 다르게 기록한다. 없는 연차는 settlementType을 그대로 쓴다.
   settlementTypeOverrides?: SettlementTypeOverride[];
+  // 참고용 면제등급 — 지금은 면제/일반 계산 분류가 등급이 아니라 정산구분(settlementType)만으로
+  // 갈리므로(fee-calculator.ts calcTermFee 참고), 등급이 "일반"인 기관을 자체정산으로 바꿔도 계산엔
+  // 아무 영향이 없다. 다만 원래 어느 면제등급으로 볼지 참고 기록을 남겨두고 싶을 때 이 필드에 저장한다 —
+  // 화면에 표시되는 구분(등급) 배지(institutionGrade/gradeOverrides)는 이 값과 무관하게 그대로 유지된다.
+  exemptRefGrade?: "최우수(S)" | "우수(A)" | "우수(B)" | "우수(C)";
   annualBudgets?: AnnualBudget[]; // 연차별 현금/현물 분리 예산
 }
 

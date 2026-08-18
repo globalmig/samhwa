@@ -192,10 +192,13 @@ const TERM_OVERRIDE_VALUE_KEY: Record<string, string> = {
   assignedManagerHistory: "assignedManager",
 };
 
-export function describeOverrideChange(field: string, after: unknown): string | null {
+// subjectLabel(예: 기관명)을 넘기면 "삼화전자(주): 1연차부터 자체정산으로 변경"처럼 문장 앞에 붙여준다 —
+// 이 요약이 변경이력 표에서 "변경 항목" 칸에만 단독으로 노출될 때도 어느 기관 얘기인지 바로 알 수 있게.
+export function describeOverrideChange(field: string, after: unknown, subjectLabel?: string): string | null {
   const valueKey = TERM_OVERRIDE_VALUE_KEY[field];
   if (!valueKey) return null;
-  if (!Array.isArray(after) || after.length === 0) return "설정 해제(기본값으로 복귀)";
+  const prefix = subjectLabel ? `${subjectLabel}: ` : "";
+  if (!Array.isArray(after) || after.length === 0) return `${prefix}설정 해제(기본값으로 복귀)`;
   const arr = (after as Record<string, unknown>[]).filter((x) => typeof x.termNumber === "number");
   if (arr.length === 0) return null;
   const sorted = [...arr].sort((a, b) => (a.termNumber as number) - (b.termNumber as number));
@@ -207,8 +210,8 @@ export function describeOverrideChange(field: string, after: unknown): string | 
   const endTerm = last.termNumber as number;
   const valueLabel = String(lastValue);
   return startTerm === endTerm
-    ? `${startTerm}연차 ${valueLabel}으로 변경`
-    : `${startTerm}연차부터 ${valueLabel}으로 변경`;
+    ? `${prefix}${startTerm}연차 ${valueLabel}으로 변경`
+    : `${prefix}${startTerm}연차부터 ${valueLabel}으로 변경`;
 }
 
 export function fmtValue(raw: unknown, entityType?: string, field?: string): string {

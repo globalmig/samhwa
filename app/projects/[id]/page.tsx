@@ -256,6 +256,13 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   const [editingBudgetMember, setEditingBudgetMember] = useState<ProjectMember | null>(null);
   const [editingGradeMember, setEditingGradeMember] = useState<ProjectMember | null>(null);
   const [editingSettlementMember, setEditingSettlementMember] = useState<ProjectMember | null>(null);
+  // 등급이 "일반"인 기관을 자체정산으로 바꿀 때, 계산엔 영향이 없지만 참고용으로 원래 면제등급을
+  // 기록해두고 싶을 수 있어 물어보는 모달 — exemptRefGrade(mock.ts)에 저장된다.
+  const [exemptGradeNotePrompt, setExemptGradeNotePrompt] = useState<{ memberId: string; memberName: string } | null>(null);
+  // 등급 배지 옆 안내(i) 아이콘 — 구분(등급) 표시와 실제 계산 분류(정산구분 기준)가 어긋나는 기관에서
+  // 클릭하면 계산 기준을 설명해준다. fixed+포탈로 body에 그린다 — 표가 overflow-hidden 컨테이너 안에
+  // 있어서 그 안에 그리면 말풍선이 표 경계에서 잘려 보인다(AppliedFeeCell의 미적용 사유 말풍선과 동일 패턴).
+  const [explainPopover, setExplainPopover] = useState<{ memberId: string; top: number; left: number } | null>(null);
   const [showIssueForm, setShowIssueForm] = useState(false);
   const [issueContent, setIssueContent] = useState("");
   const [issuePriority, setIssuePriority] = useState<"HIGH" | "MEDIUM" | "LOW">("MEDIUM");
@@ -1224,6 +1231,29 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                     </td>
                     <td className="px-4 py-3 text-center">
                       <div className={dim}>
+                      {/* 구분(등급) 표시와 실제 계산 분류(정산구분 기준)가 어긋나는 경우에만 안내 아이콘을 보여준다 —
+                          지금은 정산구분만으로 면제/일반이 갈려서(fee-calculator.ts), 등급 배지가 실제 계산과
+                          다르게 보일 수 있는 두 경우(일반+자체정산, 면제등급+위탁정산)를 설명해준다. 배지보다
+                          앞에 두어 "i · 구분 · 연필" 순서로 배치한다. */}
+                      {((displayGrade === "일반" && displaySettlementType === "자체정산") ||
+                        (displayGrade !== "일반" && displaySettlementType === "위탁정산")) && (
+                        <button type="button"
+                          onClick={(e) => {
+                            if (explainPopover?.memberId === m.id) { setExplainPopover(null); return; }
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            const width = 224; // w-56
+                            setExplainPopover({
+                              memberId: m.id,
+                              top: rect.bottom + 6,
+                              left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)),
+                            });
+                          }}
+                          className="mr-1 text-slate-300 hover:text-slate-500 transition-colors align-middle"
+                          title="계산 기준 설명 보기"
+                        >
+                          <FiInfo size={12} />
+                        </button>
+                      )}
                       {editingMembers ? (
                         <select
                           value={getMemberGradeVal(m)}
@@ -1262,6 +1292,9 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                           value={getMemberSettlementVal(m)}
                           onChange={(e) => {
                             const next = e.target.value as "위탁정산" | "자체정산";
+                            if (next === "자체정산" && displayGrade === "일반") {
+                              setExemptGradeNotePrompt({ memberId: m.id, memberName: m.institutionName });
+                            }
                             setSettlementDrafts((prev) => ({ ...prev, [m.id]: next }));
                           }}
                           title={`정산구분을 바꾸면 ${viewTerm}연차가 속한 단계 전체(과거 연차 포함)에 동일하게 반영되고 변경 내역이 메모로 남습니다`}
@@ -1694,7 +1727,12 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                     {e.changedFields ? (
                       <div className="space-y-0.5">
                         {Object.entries(e.changedFields).map(([field, change]) => {
-                          const overrideSummary = describeOverrideChange(field, change.after);
+                          // 연차별 등급/정산구분 요약은 "N연차부터 X로 변경"처럼 어느 기관 얘기인지 문장
+                          // 자체엔 안 담기므로, 이 칸만 봐도 알 수 있게 기관명을 앞에 붙여준다.
+                          const subjectName = e.entityType === "projectMember"
+                            ? members.find((m) => m.id === e.entityId)?.institutionName
+                            : undefined;
+                          const overrideSummary = describeOverrideChange(field, change.after, subjectName);
                           return (
                             <div key={field}>
                               <span className="font-medium text-slate-600">{fieldLabel(field)}</span>
@@ -1838,6 +1876,42 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             onClose={() => setEditingSettlementMember(null)}
           />
         </Modal>
+      )}
+
+      {exemptGradeNotePrompt && (
+        <ExemptGradeNoteModal
+          memberName={exemptGradeNotePrompt.memberName}
+          initialGrade={members.find((mm) => mm.id === exemptGradeNotePrompt.memberId)?.exemptRefGrade}
+          onSkip={() => setExemptGradeNotePrompt(null)}
+          onConfirm={(picked) => {
+            updateProjectMember(exemptGradeNotePrompt.memberId, { exemptRefGrade: picked });
+            setExemptGradeNotePrompt(null);
+          }}
+        />
+      )}
+
+      {explainPopover && createPortal(
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setExplainPopover(null)} />
+          <div
+            className="fixed z-50 w-56 rounded-lg border border-slate-200 bg-white shadow-lg px-3 py-2.5 text-left text-[11px] text-slate-600 leading-relaxed"
+            style={{ top: explainPopover.top, left: explainPopover.left }}
+          >
+            {(() => {
+              const m = members.find((mm) => mm.id === explainPopover.memberId);
+              if (!m) return null;
+              const g = normalizeGrade(resolveMemberGradeForTerm(m, viewTerm));
+              return g === "일반" ? (
+                <>등급은 <span className="font-semibold">일반</span>이지만 <span className="font-semibold">자체정산</span>이라 면제기관 방식(비례배분+할인)으로 계산됩니다.
+                  {m.exemptRefGrade && <><br />(참고 등급: {m.exemptRefGrade})</>}
+                </>
+              ) : (
+                <>등급은 <span className="font-semibold">{GRADE_LABEL[g] ?? g}</span>이지만 <span className="font-semibold">위탁정산</span>이라 일반기관 방식(구간 배분)으로 계산됩니다.</>
+              );
+            })()}
+          </div>
+        </>,
+        document.body
       )}
     </div>
   );
@@ -2052,6 +2126,54 @@ function GradeOverrideEditor({
   );
 }
 
+// ─── 정산구분을 자체정산으로 바꿀 때 참고용 면제등급 기록 ──────────────
+// 지금은 면제/일반 계산 분류가 등급이 아니라 정산구분만으로 갈리므로(fee-calculator.ts calcTermFee),
+// 등급이 "일반"인 기관을 자체정산으로 바꿔도 계산 결과엔 영향이 없다. 다만 원래 어느 면제등급으로
+// 볼지 참고 기록을 남겨두고 싶을 수 있어 물어본다 — 화면 등급 배지는 이 선택과 무관하게 그대로 "일반"이다.
+function ExemptGradeNoteModal({
+  memberName,
+  initialGrade,
+  onSkip,
+  onConfirm,
+}: {
+  memberName: string;
+  initialGrade?: "최우수(S)" | "우수(A)" | "우수(B)" | "우수(C)";
+  onSkip: () => void;
+  onConfirm: (grade: "최우수(S)" | "우수(A)" | "우수(B)" | "우수(C)") => void;
+}) {
+  const [picked, setPicked] = useState<"최우수(S)" | "우수(A)" | "우수(B)" | "우수(C)">(initialGrade ?? "우수(B)");
+  return (
+    <Modal title={`${memberName} · 참고용 면제등급 기록`} onClose={onSkip}>
+      <div className="p-6 space-y-4">
+        <p className="text-xs text-slate-500 leading-relaxed">
+          지금은 정산구분(위탁/자체)만으로 면제·일반 계산이 갈리기 때문에, 여기서 등급을 골라도 계산
+          결과엔 영향을 주지 않습니다. 다만 이 기관을 원래 어느 면제등급으로 볼지 참고용으로 기록해두면,
+          구분(등급) 배지 옆의 <span className="font-semibold">i</span> 아이콘을 눌렀을 때 함께 보여줍니다.
+          화면에 표시되는 구분(등급)은 이후에도 계속 <span className="font-semibold">&quot;일반&quot;</span>으로 유지됩니다.
+        </p>
+        <select
+          value={picked}
+          onChange={(e) => setPicked(e.target.value as typeof picked)}
+          className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-400"
+        >
+          <option value="최우수(S)">최우수 (S)</option>
+          <option value="우수(A)">우수 (A)</option>
+          <option value="우수(B)">우수 (B)</option>
+          <option value="우수(C)">우수 (C)</option>
+        </select>
+        <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+          <button onClick={onSkip} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
+            건너뛰기
+          </button>
+          <button onClick={() => onConfirm(picked)} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
+            기록
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ─── 참여기관별 연차별 정산구분 입력 ──────────────────────────
 // 참여기관의 위탁/자체 정산 여부는 계약 변경 등으로 연차 중간에 바뀔 수 있어, 여기서 그 연차
 // 이후만 다르게 지정한다. 이미 확정(청구완료)된 연차는 잠겨서 여기서 바꿔도 반영되지 않는다.
@@ -2093,6 +2215,16 @@ function SettlementTypeOverrideEditor({
   );
   function setRowSettlementType(stageNumber: number, settlementType: "위탁정산" | "자체정산") {
     setRows((prev) => prev.map((r) => (r.stageNumber === stageNumber ? { ...r, settlementType } : r)));
+  }
+  // 등급이 "일반"인 단계를 자체정산으로 바꿀 때 참고용 면제등급을 물어본다(계산엔 영향 없음, 화면 등급도 그대로).
+  const [exemptNoteStage, setExemptNoteStage] = useState<number | null>(null);
+  function requestRowSettlementType(stageNumber: number, settlementType: "위탁정산" | "자체정산") {
+    if (settlementType === "자체정산") {
+      const s = stageRanges.find((x) => x.stageNumber === stageNumber);
+      const grade = s ? normalizeGrade(resolveMemberGradeForTerm(member, s.startTermNumber)) : "일반";
+      if (grade === "일반") setExemptNoteStage(stageNumber);
+    }
+    setRowSettlementType(stageNumber, settlementType);
   }
 
   function handleSave() {
@@ -2138,7 +2270,7 @@ function SettlementTypeOverrideEditor({
                     <select
                       disabled={!canEdit || locked}
                       value={r.settlementType}
-                      onChange={(e) => setRowSettlementType(r.stageNumber, e.target.value as "위탁정산" | "자체정산")}
+                      onChange={(e) => requestRowSettlementType(r.stageNumber, e.target.value as "위탁정산" | "자체정산")}
                       className="text-xs border border-slate-300 rounded px-2 py-1.5 bg-white text-slate-700 disabled:bg-slate-50 disabled:text-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-400"
                     >
                       <option value="위탁정산">위탁정산</option>
@@ -2164,6 +2296,17 @@ function SettlementTypeOverrideEditor({
           </button>
         )}
       </div>
+      {exemptNoteStage != null && (
+        <ExemptGradeNoteModal
+          memberName={member.institutionName}
+          initialGrade={member.exemptRefGrade}
+          onSkip={() => setExemptNoteStage(null)}
+          onConfirm={(picked) => {
+            updateProjectMember(member.id, { exemptRefGrade: picked });
+            setExemptNoteStage(null);
+          }}
+        />
+      )}
     </div>
   );
 }

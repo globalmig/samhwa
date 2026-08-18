@@ -267,7 +267,12 @@ export default function AuditLogPage() {
               <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-2">변경 상세</p>
               <div className="space-y-2">
                 {Object.entries(entry.changedFields).map(([field, change]) => {
-                  const overrideSummary = describeOverrideChange(field, change.after);
+                  // 연차별 등급/정산구분 요약("N연차부터 X로 변경")엔 기관명이 안 담기므로, 참여기관
+                  // 변경 건이면 entityLabel("과제번호 · 기관명")에서 기관명만 뽑아 문장 앞에 붙여준다.
+                  const subjectName = entry.entityType === "projectMember"
+                    ? entry.entityLabel.split(" · ")[1]
+                    : undefined;
+                  const overrideSummary = describeOverrideChange(field, change.after, subjectName);
                   if (overrideSummary) {
                     return (
                       <div key={field} className="flex items-center gap-3 text-xs">
