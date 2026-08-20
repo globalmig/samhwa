@@ -739,7 +739,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                   value={draft.projectCode ?? ""}
                   disabled
                   readOnly
-                  title="과제코드는 직접 수정할 수 없습니다 — 과제 등록 시 전담기관 약칭과 순번으로 시스템이 자동 생성합니다."
+                  title="과제코드는 직접 수정할 수 없습니다 — 과제 등록 시 SH + 6자리 일련번호로 시스템이 자동 생성합니다."
                 />
               </div>
               <div>
@@ -851,7 +851,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 <label className="block text-xs font-medium text-slate-500 mb-1">공동기관 수</label>
                 <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-white text-slate-500">
                   {members.filter((m) => {
-                    if (m.role !== "PARTICIPANT") return false;
+                    if (m.role === "LEAD") return false;
                     const b = getViewTermBudget(m, viewTerm);
                     return b.cashBudget > 0 || b.inKindBudget > 0;
                   }).length}개
@@ -1501,7 +1501,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                   {([
                     { value: "MANAGER", label: "담당자" },
                     { value: "ACCOUNTANT", label: "회계담당자 전체" },
-                    { value: "SETTLEMENT", label: "전문기관담당자 전체" },
+                    { value: "SETTLEMENT", label: "전담기관 담당자 전체" },
                   ] as const).map(({ value, label }) => (
                     <label key={value} className="flex items-center gap-1.5 cursor-pointer">
                       <input type="checkbox" checked={issueRecipients.includes(value)}
@@ -1586,7 +1586,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                       {([
                         { value: "MANAGER", label: "담당자" },
                         { value: "ACCOUNTANT", label: "회계담당자 전체" },
-                        { value: "SETTLEMENT", label: "전문기관담당자 전체" },
+                        { value: "SETTLEMENT", label: "전담기관 담당자 전체" },
                       ] as const).map(({ value, label }) => (
                         <label key={value} className="flex items-center gap-1.5 cursor-pointer">
                           <input type="checkbox" checked={editIssueDraft.recipientGroups.includes(value)}
@@ -2577,6 +2577,71 @@ function AppliedFeeCell({ fee, canEdit, projectId, zeroReasons }: { fee: TermFee
       )}
       {canEditThis && (
         <button type="button" onClick={startEdit} title="금액 직접 수정"
+          className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-blue-600 transition-opacity">
+          <FiEdit2 size={11} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ─── 미청구수수료 직접 수정 셀 ───────────────────────────
+// 중간 연차(예: 3연차)부터 시스템에 등록되는 과제는 그 이전 연차(1~2연차)를 전부 새로 입력하는
+// 대신, 등록을 시작하는 연차의 미청구수수료에 이전 몫을 합쳐 직접 입력할 수 있어야 한다.
+// 직접 수정한 값은 manualOverride로 보호되어 재계산에도 유지되고(AppliedFeeCell과 동일한 보호
+// 플래그를 공유), 이후 정산 연차의 이월 합산(store.ts autoGenerateTermFees)에도 이 값이
+// 그대로 반영된다.
+function UnclaimedFeeCell({ fee, canEdit, projectId }: { fee: TermFee; canEdit: boolean; projectId: string }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(fee.unclaimedFee ?? 0);
+
+  function startEdit() {
+    setDraft(fee.unclaimedFee ?? 0);
+    setEditing(true);
+  }
+  function save() {
+    updateTermFee(fee.id, { unclaimedFee: draft, manualOverride: true });
+    setEditing(false);
+  }
+  function revert() {
+    updateTermFee(fee.id, { manualOverride: false });
+    autoGenerateTermFees(projectId);
+  }
+
+  const canEditThis = canEdit && fee.status !== "BILLED";
+
+  if (editing) {
+    return (
+      <div className="flex items-center justify-end gap-1">
+        <MoneyInput
+          value={draft}
+          onChange={setDraft}
+          autoFocus
+          className="w-28 text-right text-xs border border-blue-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+        />
+        <button type="button" onClick={save} className="text-green-600 hover:text-green-700" title="저장">
+          <FiCheck size={13} />
+        </button>
+        <button type="button" onClick={() => setEditing(false)} className="text-slate-400 hover:text-slate-600" title="취소">
+          <FiX size={13} />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center justify-end gap-1.5 group">
+      {fee.manualOverride && (
+        <button type="button" onClick={revert} title="자동 재계산 값으로 되돌리기"
+          className="text-[9px] text-purple-500 hover:text-purple-700 hover:underline whitespace-nowrap">
+          직접수정됨 · 되돌리기
+        </button>
+      )}
+      {(fee.unclaimedFee ?? 0) === 0
+        ? <span className="text-slate-300">-</span>
+        : <span className="text-amber-600 font-medium">{fmtWonFull(fee.unclaimedFee ?? 0)}</span>}
+      {canEditThis && (
+        <button type="button" onClick={startEdit} title="미청구수수료 직접 수정"
           className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-blue-600 transition-opacity">
           <FiEdit2 size={11} />
         </button>
@@ -3582,9 +3647,7 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                           </td>
                           <td className="px-4 py-2.5 text-right text-slate-600 whitespace-nowrap">{fmtWonFull(f.budget)}</td>
                           <td className="px-4 py-2.5 text-right whitespace-nowrap">
-                            {(f.unclaimedFee ?? 0) === 0
-                              ? <span className="text-slate-300">-</span>
-                              : <span className="text-amber-600 font-medium">{fmtWonFull(f.unclaimedFee ?? 0)}</span>}
+                            <UnclaimedFeeCell fee={f} canEdit={canEditFees} projectId={project.id} />
                           </td>
                           <td className="px-4 py-2.5 text-right whitespace-nowrap">
                             {cumulativeUnclaimed === 0
@@ -3699,9 +3762,7 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
                         />
                       </td>
                       <td className="px-4 py-2.5 text-right whitespace-nowrap">
-                        {(f.unclaimedFee ?? 0) === 0
-                          ? <span className="text-slate-300">-</span>
-                          : <span className="text-amber-600 font-medium">{fmtWonFull(f.unclaimedFee ?? 0)}</span>}
+                        <UnclaimedFeeCell fee={f} canEdit={canEditFees} projectId={project.id} />
                       </td>
                       {showFeeDetail && (
                         <td className="px-4 py-2.5 text-right whitespace-nowrap">
@@ -3897,7 +3958,7 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
           ))}
 
           {/* ── 미청구액 ── */}
-          {group.unclaimed && (
+          {group.unclaimed && group.unclaimed.amount > 0 && (
             <div className="border-t border-amber-100 bg-amber-50/30 px-5 py-3 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <span className="text-xs font-semibold text-amber-800">미청구액</span>

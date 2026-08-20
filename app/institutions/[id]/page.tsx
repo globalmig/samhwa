@@ -9,7 +9,7 @@ import { useCanWrite } from "@/lib/permissions";
 
 const ROLE_MAP = {
   LEAD: { label: "주관기관", color: "blue" as const },
-  PARTICIPANT: { label: "참여기관", color: "slate" as const },
+  PARTICIPANT: { label: "공동기관", color: "slate" as const },
   ENTRUSTED: { label: "위탁기관", color: "amber" as const },
 };
 
@@ -290,7 +290,7 @@ export default function InstitutionDetailPage({ params }: { params: Promise<{ id
         {[
           { label: "총 참여 과제", value: `${myMemberships.length}건` },
           { label: "주관기관 역할", value: `${leadProjects.length}건`, note: "세금계산서 수신 대상" },
-          { label: "참여기관 역할", value: `${participantProjects.length}건`, note: "수수료 산정 대상" },
+          { label: "공동기관 역할", value: `${participantProjects.length}건`, note: "수수료 산정 대상" },
         ].map((s) => (
           <div key={s.label} className="bg-white rounded-xl border border-slate-200 px-4 py-3">
             <p className="text-xs text-slate-500">{s.label}</p>

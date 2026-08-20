@@ -131,6 +131,10 @@ interface MemberAggregate {
   // 엑셀에 등급 컬럼이 없거나 값이 비어 있으면 undefined — 기존에 입력돼 있던 등급을 실수로
   // "일반"으로 덮어쓰지 않기 위해, "값이 아예 없었다"와 "일반으로 명시됨"을 구분해서 담아둔다.
   institutionGrade?: InstitutionGrade;
+  // institutionGrade를 만든 원본 셀 텍스트 — "우수"라고만 적혀서(A/B/C 미지정) parseGrade가
+  // 어쩔 수 없이 우수(A)로 기본 처리한 건지, 애초에 "우수(B)"처럼 구체적으로 적힌 건지 구분해
+  // 기존에 더 구체적인 등급(B/C)이 있는 기관을 실수로 A로 깎아내리지 않는 데 쓴다.
+  institutionGradeRaw?: string;
   // "연차별기관별"(현재 진행중인 연차 실적) 시트에서 이미 값을 받았는지 — "단계기관별" 시트는
   // 단계 전체의 정산 시점 스냅샷이라 지난 단계의 오래된 역할·정산형태·등급을 담고 있을 수 있어서,
   // 연차별 시트에 값이 있으면 그걸 우선하고 단계기관별 값으론 덮어쓰지 않는다.
@@ -155,6 +159,14 @@ function parseGrade(raw: string): InstitutionGrade | undefined {
   }
   if (s.includes("일반") || s === "D" || s === "E" || s === "F" || s === "제외") return "일반";
   return undefined;
+}
+
+// 셀 값이 "우수"라고만 적혀 있어(A/B/C 미지정) parseGrade가 우수(A)로 임의 확정한 경우인지 판단한다 —
+// 이 경우 기존에 더 구체적인 등급(우수(B)/우수(C))이 등록돼 있으면 그걸 A로 깎지 않고 보존해야 한다.
+// "최우수"·"S"·"우수(A/B/C)"처럼 애초에 구체적으로 적힌 값은 모호하지 않다.
+function isAmbiguousGoodGrade(raw: string): boolean {
+  const s = raw.trim();
+  return s.includes("우수") && !s.includes("최우수") && !s.includes("A") && !s.includes("B") && !s.includes("C");
 }
 
 // "연차별기관별" 시트가 연차마다 서로 다른 정산형태/등급을 담고 있을 수 있다(예: 3연차부터
@@ -319,6 +331,7 @@ function buildMemberAggregates(
 
         if (parsedGrade) {
           agg.institutionGrade = parsedGrade;
+          agg.institutionGradeRaw = gradeStr;
           agg.gradeFromAnnual = true;
         }
       } else {
@@ -333,6 +346,7 @@ function buildMemberAggregates(
         }
         if (!agg.gradeFromAnnual && parsedGrade) {
           agg.institutionGrade = parsedGrade;
+          agg.institutionGradeRaw = gradeStr;
         }
       }
 
@@ -1565,7 +1579,7 @@ export async function downloadExcelTemplate() {
     "※필수 (YYYY-MM-DD)", "※필수 (YYYY-MM-DD)",
     "선택", "※필수 (이 행의 사업비가 몇 연차 것인지 — 비면 1연차로 잘못 등록됨)", "선택",
     "※필수", "※필수 (000-00-00000)",
-    "선택 (주관/공동/위탁)", "선택 (최우수/우수/일반, 미입력시 등급 없음)", "선택 (위탁정산/자체정산)",
+    "선택 (주관/공동/위탁)", "선택 (최우수/우수(A)/우수(B)/우수(C)/일반, 미입력시 등급 없음)", "선택 (위탁정산/자체정산)",
     "선택 (삼화가 아니면 이 연차를 타회계법인 진행으로 자동 표시)",
     "선택 (연차상시/정산, 미입력시 협약구조로 자동판정 — \"정산형태\"와는 다른 값)",
     "선택 (주관기관 행에만, 없으면 단계기관별 시트의 값을 사용)",
@@ -1601,7 +1615,7 @@ export async function downloadExcelTemplate() {
       "홍길동", "",
       "2024-03-01", "2027-02-28", "1", "1", "2024",
       "삼화기술경영(주)", "123-45-67890",
-      "주관", "우수", "위탁정산", "",
+      "주관", "우수(A)", "위탁정산", "",
       "연차상시", "박연구",
       "2024-01-15", "2024-02-01",
       "2024-03-01", "2025-02-28",
@@ -1651,7 +1665,7 @@ export async function downloadExcelTemplate() {
   styleTemplateDataRows(ws, 3, 2 + TEMPLATE_BLANK_ROWS, headers.length);
   applyDropdown(ws, headers.indexOf("자율성트랙") + 1, ["", "자율성트랙"], 3, 2 + TEMPLATE_BLANK_ROWS);
   applyDropdown(ws, headers.indexOf("기관역할구분") + 1, ["주관", "공동", "위탁"], 3, 2 + TEMPLATE_BLANK_ROWS);
-  applyDropdown(ws, headers.indexOf("등급") + 1, ["최우수", "우수", "일반", ""], 3, 2 + TEMPLATE_BLANK_ROWS);
+  applyDropdown(ws, headers.indexOf("등급") + 1, ["최우수", "우수(A)", "우수(B)", "우수(C)", "일반", ""], 3, 2 + TEMPLATE_BLANK_ROWS);
   applyDropdown(ws, headers.indexOf("정산형태") + 1, ["위탁정산", "자체정산"], 3, 2 + TEMPLATE_BLANK_ROWS);
   applyDropdown(ws, headers.indexOf("과제구분") + 1, ["", "연차상시", "정산"], 3, 2 + TEMPLATE_BLANK_ROWS);
 
@@ -1661,7 +1675,7 @@ export async function downloadExcelTemplate() {
     "선택 (0=일괄협약, 1 이상=단계협약)", "선택 (연차 숫자)", "선택 (시작단계와 동일해야 함)", "선택 (연차 숫자)",
     "선택 (YYYY-MM-DD, 이 단계의 실제 시작일)", "선택 (YYYY-MM-DD, 이 단계의 실제 종료일)",
     "선택",
-    "※필수", "※필수 (000-00-00000)", "선택 (주관/공동/위탁)", "선택 (최우수/우수/일반)", "선택 (주관기관 행에만)",
+    "※필수", "※필수 (000-00-00000)", "선택 (주관/공동/위탁)", "선택 (최우수/우수(A)/우수(B)/우수(C)/일반)", "선택 (주관기관 행에만)",
     "※필수 (원 단위)", "선택 (원 단위)",
   ];
   const stageHeaders = [
@@ -1682,7 +1696,7 @@ export async function downloadExcelTemplate() {
     [
       "한국산업기술기획평가원", "스마트제조혁신사업", "RS-2024-00000001", "스마트 제조 AI 시스템 개발",
       "2024-03-01", "2027-02-28", "1", "1", "1", "3", "2024-03-01", "2027-02-28", "위탁정산",
-      "참여기업(주)", "234-56-78901", "공동", "우수", "", "200000000", "0",
+      "참여기업(주)", "234-56-78901", "공동", "우수(B)", "", "200000000", "0",
     ],
     [
       "한국에너지기술평가원", "신재생에너지핵심기술개발", "RS-2024-00000002", "신재생에너지 효율화 연구",
@@ -1700,7 +1714,7 @@ export async function downloadExcelTemplate() {
   styleTemplateDataRows(stageWs, 3, 2 + TEMPLATE_BLANK_ROWS, stageHeaders.length);
   applyDropdown(stageWs, stageHeaders.indexOf("정산형태구분") + 1, ["위탁정산", "자체정산"], 3, 2 + TEMPLATE_BLANK_ROWS);
   applyDropdown(stageWs, stageHeaders.indexOf("기관역할구분") + 1, ["주관", "공동", "위탁"], 3, 2 + TEMPLATE_BLANK_ROWS);
-  applyDropdown(stageWs, stageHeaders.indexOf("기관등급") + 1, ["최우수", "우수", "일반"], 3, 2 + TEMPLATE_BLANK_ROWS);
+  applyDropdown(stageWs, stageHeaders.indexOf("기관등급") + 1, ["최우수", "우수(A)", "우수(B)", "우수(C)", "일반"], 3, 2 + TEMPLATE_BLANK_ROWS);
 
   await downloadWorkbook(wb, "RCMS_업로드_양식.xlsx");
 }
@@ -1906,8 +1920,12 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
     const preview: PreviewRow[] = extracted.map((row) => {
       const duplicates: DuplicateInfo[] = [];
 
-      // 전담기관 중복
-      const existingAgency = fundingAgencies.find((a) => a.name === row.agencyName);
+      // 전담기관 중복 — 엑셀엔 정식명("농촌진흥청") 대신 약칭/코드("RDA1")가 적혀 있는 경우도 있어,
+      // 이름뿐 아니라 shortName·code까지 정확히 일치하면 같은 기관으로 본다(RDA1/RDA2처럼 이름이
+      // 겹치는 전담기관을 약칭으로 정확히 지목한 경우, "RDA1"이라는 이름의 가짜 기관이 새로 생기는 걸 막는다).
+      const existingAgency = fundingAgencies.find(
+        (a) => a.name === row.agencyName || a.shortName === row.agencyName || a.code === row.agencyName
+      );
       if (existingAgency) {
         duplicates.push({ type: "agency", key: row.agencyName, existing: existingAgency.name, status: "exact" });
       } else {
@@ -2010,21 +2028,30 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
     for (const i of institutions) registeredInst.set(normBiz(i.bizNumber), i.id);
 
     for (const row of previewRows) {
-      // 전담기관
+      // 전담기관 — registeredAgencies는 name으로만 미리 채워져 있어, 엑셀에 약칭/코드("RDA1")가
+      // 적힌 행은 여기서 안 걸린다. 새로 만들기 전에 shortName·code까지 한 번 더 대조해서, RDA1/RDA2처럼
+      // name이 겹치는 전담기관을 약칭으로 정확히 지목한 경우 가짜 "RDA1" 기관이 새로 생기지 않게 한다.
       if (row.willRegister.agency && row.agencyName && !registeredAgencies.has(row.agencyName)) {
-        const created = addFundingAgency({
-          name: row.agencyName,
-          shortName: row.agencyName.slice(0, 4),
-          code: row.agencyName.slice(0, 4),
-          contactName: "",
-          contactEmail: "",
-          contactPhone: "",
-          status: "ACTIVE",
-          registeredAt: today,
-          noticeRecipientScope: "LEAD_ONLY",
-        });
-        registeredAgencies.set(row.agencyName, created.id);
-        agencyCount++;
+        const matchedExisting = fundingAgencies.find(
+          (a) => a.shortName === row.agencyName || a.code === row.agencyName
+        );
+        if (matchedExisting) {
+          registeredAgencies.set(row.agencyName, matchedExisting.id);
+        } else {
+          const created = addFundingAgency({
+            name: row.agencyName,
+            shortName: row.agencyName.slice(0, 4),
+            code: row.agencyName.slice(0, 4),
+            contactName: "",
+            contactEmail: "",
+            contactPhone: "",
+            status: "ACTIVE",
+            registeredAt: today,
+            noticeRecipientScope: "LEAD_ONLY",
+          });
+          registeredAgencies.set(row.agencyName, created.id);
+          agencyCount++;
+        }
       }
 
       // 기관
@@ -2290,7 +2317,13 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         if (hasPerTermGrade) {
           updates.gradeOverrides = buildGradeOverridesFromExcel(agg, existingMember.gradeOverrides);
         } else if (agg.institutionGrade) {
-          updates.institutionGrade = agg.institutionGrade;
+          // 셀에 "우수"라고만 적혀 있었다면(A/B/C 미지정) parseGrade가 우수(A)로 임의 확정한 값이다 —
+          // 기존에 이미 더 구체적인 등급(우수(B)/우수(C))이 등록돼 있으면 이 모호한 값으로 깎지 않고 보존한다.
+          const ambiguous = agg.institutionGradeRaw !== undefined && isAmbiguousGoodGrade(agg.institutionGradeRaw);
+          const existingIsMoreSpecific = existingMember.institutionGrade === "우수(B)" || existingMember.institutionGrade === "우수(C)";
+          if (!(ambiguous && existingIsMoreSpecific)) {
+            updates.institutionGrade = agg.institutionGrade;
+          }
         }
 
         // 실제로 달라진 게 있을 때만 갱신 — 동일한 파일을 다시 올려도 변경이력에 빈 UPDATE가 쌓이지 않게 한다.

@@ -56,6 +56,7 @@ export const FIELD_LABELS: Record<string, string> = {
   cashBudget:          "현금사업비",
   inKindBudget:        "현물사업비",
   assignedManagerHistory: "연차별 담당자",
+  exemptRefGrade:      "참고 면제등급",
 };
 
 // 엔티티별 상태값 라벨 — 같은 영문 토큰(예: ACTIVE, PENDING)이 엔티티마다 다른 의미를 가지므로
@@ -80,7 +81,7 @@ const VALUE_LABELS_BY_ENTITY: Record<string, Record<string, string>> = {
     INACTIVE:    "비활성",
     ADMIN:       "시스템 관리자",
     ACCOUNTANT:  "회계 담당자",
-    SETTLEMENT:  "전문기관담당자",
+    SETTLEMENT:  "전담기관 담당자",
     VIEWER:      "조회 전용",
   },
   feePolicy: {

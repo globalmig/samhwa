@@ -499,22 +499,20 @@ function ensureLeadMember(project: Project): void {
   });
 }
 
-// 과제코드(전담기관 약칭-순번, 예: KEIT-00001) — 사람이 엑셀에 입력한 값을 그대로 쓰던 방식을
-// 버리고, 같은 전담기관 코드를 쓰는 기존 과제 중 가장 큰 순번 다음 번호를 시스템이 매긴다.
-function nextProjectCode(agencyShortName: string): string {
-  const prefix = `${agencyShortName}-`;
+// 과제코드(SH + 6자리 순번, 예: SH000001) — 전담기관마다 제각각으로 붙던 방식을 버리고, 등록 순서
+// 그대로 회사 전체 기준 일련번호 하나로 통일해서 시스템이 매긴다(전담기관과 무관).
+function nextProjectCode(): string {
   let max = 0;
   for (const p of _state.projects) {
-    if (!p.projectCode?.startsWith(prefix)) continue;
-    const n = parseInt(p.projectCode.slice(prefix.length), 10);
+    if (!p.projectCode?.startsWith("SH")) continue;
+    const n = parseInt(p.projectCode.slice(2), 10);
     if (Number.isFinite(n) && n > max) max = n;
   }
-  return `${prefix}${String(max + 1).padStart(5, "0")}`;
+  return `SH${String(max + 1).padStart(6, "0")}`;
 }
 
 export function addProject(data: Omit<Project, "id">): Project {
-  const agency = _state.fundingAgencies.find((a) => a.id === data.agencyId);
-  const projectCode = data.projectCode ?? (agency ? nextProjectCode(agency.shortName) : undefined);
+  const projectCode = data.projectCode ?? nextProjectCode();
   const item: Project = { registeredAt: new Date().toISOString().slice(0, 10), ...data, projectCode, id: genId("p") };
   _state = { ..._state, projects: [..._state.projects, item] };
   record("project", item.id, item.projectName, "CREATE");
@@ -1785,8 +1783,12 @@ export function autoGenerateTermFees(projectId: string): void {
         // 면제기관이 연차상시 동안 미루는 몫만 추적한다 — 정산 연차까지 자체정산을 유지해 계속
         // 면제기관으로 남으면(이 분기 자체), 그 미청구분은 매출비용으로 소멸시키는 게 기본 처리라
         // 더 이상 추적하지 않는다(정산 연차에 도달한 시점엔 stageExemptUnclaimedByInst가 리셋된다).
+        // 이미 CONFIRMED/BILLED/manualOverride로 보호된 연차는 담당자가 직접 수정했을 수 있는
+        // 실제 저장값(prevFee.unclaimedFee)을 그대로 이월 합산에 써야 한다 — 안 그러면 화면엔
+        // 수정된 값이 보여도 다음 연차 누적 계산엔 재계산 엔진의 값이 조용히 쓰이는 불일치가 생긴다.
         if (workType === "ANNUAL") {
-          instAnnualExemptUnclaimed[cm.institutionId] = ed?.unclaimedFee ?? 0;
+          instAnnualExemptUnclaimed[cm.institutionId] =
+            isLocked && prevFee ? (prevFee.unclaimedFee ?? 0) : (ed?.unclaimedFee ?? 0);
         }
       } else {
         // 이 기관의 일반수수료(generalFee) 몫 — calcTermFee가 기관별로 미리 배분해둔 값이라
@@ -1825,7 +1827,10 @@ export function autoGenerateTermFees(projectId: string): void {
           const instBillShare = gd?.billingFee ?? 0;
           instAppliedFee = instBillShare;
           instUnclaimedFee = instCalcShare - instBillShare;
-          instAnnualUnclaimed[cm.institutionId] = instUnclaimedFee;
+          // 위 면제기관 분기와 동일하게, 보호된(CONFIRMED/BILLED/manualOverride) 연차는 담당자가
+          // 직접 수정했을 수 있는 실제 저장값을 이월 합산에 그대로 반영한다.
+          instAnnualUnclaimed[cm.institutionId] =
+            isLocked && prevFee ? (prevFee.unclaimedFee ?? 0) : instUnclaimedFee;
         }
       }
 

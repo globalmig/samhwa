@@ -161,15 +161,27 @@ export function buildPolicyDisplayRules(policy: Pick<FeePolicy, "exemptGrades" |
 // 경우, 담당자가 뭘 고르든 주관기관명이 어느 전담기관의 소속기관 목록에 있으면 그 전담기관으로
 // 자동 교정한다 — 사람이 고르면 실수하기 쉬운 경우를 방지한다. 두 곳 이상의 목록에 동시에
 // 매칭되면 배열에 먼저 나오는 전담기관을 우선한다.
+//
+// 반대 방향도 성립해야 한다: 지금 선택된 전담기관 자체가 소속기관 자동판별 대상(예: RDA2)인데
+// 주관기관명이 그 목록에 없다면, 같은 이름(예: "농촌진흥청")을 쓰면서 자동판별이 꺼진 일반 전담기관
+// (예: RDA1)으로 되돌린다 — "소속기관 목록에 없으면 RDA1이 자동 적용된다"는 규칙은 이 되돌림이
+// 없으면 절대 발동하지 않는다(처음부터 RDA1이 선택돼 있지 않는 한).
 export function resolveAutoDetectedAgencyId(
   selectedAgencyId: string,
   leadInstitutionName: string,
-  agencies: readonly Pick<FundingAgency, "id" | "autoDetectByLeadInstitution" | "affiliatedInstitutionNames">[],
+  agencies: readonly Pick<FundingAgency, "id" | "name" | "autoDetectByLeadInstitution" | "affiliatedInstitutionNames">[],
 ): string {
   const matched = agencies.find(
     (a) => a.autoDetectByLeadInstitution && a.affiliatedInstitutionNames?.includes(leadInstitutionName)
   );
-  return matched ? matched.id : selectedAgencyId;
+  if (matched) return matched.id;
+
+  const selected = agencies.find((a) => a.id === selectedAgencyId);
+  if (selected?.autoDetectByLeadInstitution) {
+    const fallback = agencies.find((a) => a.name === selected.name && !a.autoDetectByLeadInstitution);
+    if (fallback) return fallback.id;
+  }
+  return selectedAgencyId;
 }
 
 // ─── 완전 제외 대상 판정 (EXCLUDE 모드 정책의 면제등급) ──────────
@@ -205,7 +217,11 @@ export function allocateExact(total: number, weights: number[]): number[] {
 }
 
 // ─── 기본수수료 구간 조회 ────────────────────────────────────────
+// cashBudget이 0 이하면(그 버킷에 기관이 아예 없는 경우 등) 무조건 0을 반환한다 — 그냥 두면
+// 최저 구간(minAmount:0)의 기본수수료가 "기본값"처럼 잡혀서, 예를 들어 전 기관이 자체정산이라
+// 일반(nonExempt) 버킷에 기관이 하나도 없는데도 최저 구간 요금이 청구되는 오류가 있었다.
 export function getBaseFee(cashBudget: number, brackets: FeeRateBracket[]): number {
+  if (cashBudget <= 0) return 0;
   const sorted = [...brackets].sort((a, b) => a.minAmount - b.minAmount);
   let result = sorted[0]?.baseFee ?? 0;
   for (const b of sorted) {
@@ -394,6 +410,23 @@ export function calcTermFee(input: CalcInput): CalcResult {
   // 그대로 적용하므로, 여기서 return하지 않고 아래 일반과제 로직으로 흘려보낸다(fall through).
   if (projectType === "AUTONOMY_TRACK" && hasAutonomyTrack && (autonomySettlementType ?? "자체정산") === "자체정산") {
     const calculatedFee = Math.round(standardFee * billingRatio);
+    // 면제/일반 구분 없이 cashMembers 전원이 동일한 billingRatio를 적용받으므로, 표준액은 standardFee를,
+    // 산정·청구액은 calculatedFee를 각자 사업비 비율로 배분한다 — store.ts가 기관별 TermFee를 만들 때
+    // 이 배열(generalBreakdown)에서 몫을 찾으므로, 비워두면 전 기관이 0원으로 떨어진다.
+    const memberStdShares = allocateExact(standardFee, cashMembers.map((m) => amountOf(m)));
+    const memberCalcShares = allocateExact(calculatedFee, cashMembers.map((m) => amountOf(m)));
+    const generalBreakdown: ExemptInstDetail[] = cashMembers.map((m, idx) => ({
+      institutionId: m.institutionId,
+      institutionName: m.institutionName,
+      grade: m.grade,
+      cashBudget: m.cashBudget,
+      standardFee: memberStdShares[idx],
+      calculatedFee: memberCalcShares[idx],
+      // 산정 단계에서 이미 billingRatio가 반영됐고 정산 연차 개념도 없으므로(연 균일 적용), 청구액은
+      // 산정액과 항상 같다 — 이월/미청구도 추적하지 않는다(위 generalUnclaimedFee: 0과 동일한 설계).
+      billingFee: memberCalcShares[idx],
+      unclaimedFee: 0,
+    }));
     return {
       totalCashBudget,
       coInstCount,
@@ -412,7 +445,7 @@ export function calcTermFee(input: CalcInput): CalcResult {
       generalCalcFee: calculatedFee,
       generalBillingFee: calculatedFee,
       generalUnclaimedFee: 0,
-      generalBreakdown: [],
+      generalBreakdown,
       carriedOverUnclaimed: 0,
       totalBillingFee: calculatedFee + carriedOverUnclaimed,
       billingRatio,

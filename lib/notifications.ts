@@ -16,7 +16,7 @@ export function isOverdueByRule(r: { status: Receivable["status"]; dueDate: stri
 // ─── 알림 수신 대상 판정 (연체 채권 알림 등) ───────────────────────
 // 규칙: ADMIN은 항상 수신 / 회계담당자(ACCOUNTANT)는 항상 수신 /
 // 과제 담당자(삼화담당자)로 지정된 사람은 역할과 무관하게(조회전용 포함) 이름이 일치하면 수신 /
-// 담당자가 비어있으면 전문기관담당자(SETTLEMENT) 전체에게 폴백.
+// 담당자가 비어있으면 전담기관 담당자(SETTLEMENT) 전체에게 폴백.
 // 참고: 조회전용 계정도 "해당 과제 담당자"인 경우엔 수신 대상에 포함된다 — VIEWER를 통째로
 // 막던 예전 규칙은 "회계담당자·조회전용 담당자·전담기관 담당자에게 발송" 요건과 맞지 않았다.
 export function isAlertVisibleToUser(assignedManager: string | undefined, user: NotifiableUser | null | undefined): boolean {
@@ -53,7 +53,7 @@ export function computeOverdueAlerts(receivables: Receivable[], projects: Projec
     .filter((x): x is OverdueAlert => x !== null);
 }
 
-// 이슈/메모 작성 시 선택한 수신 대상(담당자/회계담당자/전문기관담당자 그룹 + 개인 지정)에 따라
+// 이슈/메모 작성 시 선택한 수신 대상(담당자/회계담당자/전담기관 담당자 그룹 + 개인 지정)에 따라
 // 특정 사용자에게 알림을 보여줄지 판정. 아무것도 선택 안 했으면 담당자 규칙(위 isAlertVisibleToUser)만 적용.
 // 그룹 선택과 개인 지정은 배타적이지 않다 — 개인으로 지정된 사람은 그룹 선택 여부와 무관하게 항상 수신.
 export function isIssueVisibleToUser(

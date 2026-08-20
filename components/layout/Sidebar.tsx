@@ -189,7 +189,7 @@ const navGroups: NavGroup[] = [
 const ROLE_LABELS: Record<string, string> = {
   ADMIN: "시스템 관리자",
   ACCOUNTANT: "회계 담당자",
-  SETTLEMENT: "전문기관담당자",
+  SETTLEMENT: "전담기관 담당자",
   VIEWER: "조회 전용",
 };
 

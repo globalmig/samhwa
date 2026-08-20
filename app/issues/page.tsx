@@ -33,7 +33,7 @@ const sel = `${inp} bg-white`;
 const RECIPIENT_OPTIONS: { value: IssueRecipientGroup; label: string }[] = [
   { value: "MANAGER",    label: "담당자" },
   { value: "ACCOUNTANT", label: "회계담당자 전체" },
-  { value: "SETTLEMENT", label: "전문기관담당자 전체" },
+  { value: "SETTLEMENT", label: "전담기관 담당자 전체" },
 ];
 
 type EditDraft = {

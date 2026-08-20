@@ -14,7 +14,7 @@ import { useCanWrite } from "@/lib/permissions";
 const ROLE_MAP: Record<SystemUser["role"], { label: string; color: "red" | "blue" | "purple" | "slate"; desc: string }> = {
   ADMIN: { label: "시스템 관리자", color: "red", desc: "전체 권한" },
   ACCOUNTANT: { label: "회계 담당자", color: "blue", desc: "수수료·세금계산서" },
-  SETTLEMENT: { label: "전문기관담당자", color: "purple", desc: "정산·채권 등 전체 업무 권한" },
+  SETTLEMENT: { label: "전담기관 담당자", color: "purple", desc: "정산·채권 등 전체 업무 권한" },
   VIEWER: { label: "조회 전용", color: "slate", desc: "수수료·이슈·변경이력 조회 전용 (이슈 등록만 가능)" },
 };
 
@@ -73,7 +73,7 @@ function UserForm({ initial, existingUsers, excludeId, onSubmit, onClose }: {
           <select className={selectCls} value={form.role} onChange={(e) => s("role", e.target.value as SystemUser["role"])}>
             <option value="ADMIN">시스템 관리자</option>
             <option value="ACCOUNTANT">회계 담당자</option>
-            <option value="SETTLEMENT">전문기관담당자</option>
+            <option value="SETTLEMENT">전담기관 담당자</option>
             <option value="VIEWER">조회 전용</option>
           </select>
         </Field>
@@ -187,7 +187,7 @@ export default function AdminUsersPage() {
             <option value="ALL">전체 역할</option>
             <option value="ADMIN">시스템 관리자</option>
             <option value="ACCOUNTANT">회계 담당자</option>
-            <option value="SETTLEMENT">전문기관담당자</option>
+            <option value="SETTLEMENT">전담기관 담당자</option>
             <option value="VIEWER">조회 전용</option>
           </select>
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="text-xs border border-slate-200 rounded-lg px-3 py-1.5 text-slate-600 bg-white">

@@ -12,7 +12,7 @@ import { useCanWrite } from "@/lib/permissions";
 const ROLE_MAP: Record<SystemUser["role"], { label: string; color: "red" | "blue" | "purple" | "slate"; desc: string }> = {
   ADMIN:      { label: "시스템 관리자", color: "red",    desc: "전체 데이터 조회·수정·삭제 및 사용자 관리" },
   ACCOUNTANT: { label: "회계 담당자",   color: "blue",   desc: "수수료·세금계산서·미수금·공문 발송 관리" },
-  SETTLEMENT: { label: "전문기관담당자", color: "purple", desc: "정산·채권·미청구액 등 전체 업무 관리" },
+  SETTLEMENT: { label: "전담기관 담당자", color: "purple", desc: "정산·채권·미청구액 등 전체 업무 관리" },
   VIEWER:     { label: "조회 전용",     color: "slate",  desc: "수수료 청구·이슈 현황·변경 이력 조회 (이슈 등록만 가능)" },
 };
 
@@ -156,7 +156,7 @@ export default function UserDetailPage({ params }: { params: Promise<{ id: strin
                 className={selectCls}>
                 <option value="ADMIN">시스템 관리자</option>
                 <option value="ACCOUNTANT">회계 담당자</option>
-                <option value="SETTLEMENT">전문기관담당자</option>
+                <option value="SETTLEMENT">전담기관 담당자</option>
                 <option value="VIEWER">조회 전용</option>
               </select>
             </div>

@@ -28,21 +28,26 @@ const PAGE_ACCESS: Record<string, Role[]> = {
 // ─── 쓰기(생성/수정/삭제) 권한 ──────────────────────────────
 const WRITE_ACCESS: Record<string, Role[]> = {
   fees:           ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  // 매출발행·매출취소·수금관리: 전담기관담당자·조회전용은 입력 불가
+  // 매출발행·매출취소·수금관리: 전담기관 담당자·조회전용은 입력 불가
   "fees-sales":   ["ADMIN", "ACCOUNTANT"],
   // 타회계법인 진행 여부 체크: 시스템관리자·회계담당자만 설정 가능
   "fees-other-firm": ["ADMIN", "ACCOUNTANT"],
   "company-class":["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   unclaimed:      ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  receivables:    ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  // 수금관리 입력: 전담기관 담당자는 입력 불가(조회만)
+  receivables:    ["ADMIN", "ACCOUNTANT"],
   settlements:    ["ADMIN", "SETTLEMENT"],
-  "tax-invoices": ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  // 공문 발송(세금계산서·정산절차 안내 등): 회계담당자만 발송 가능 — 전담기관담당자(SETTLEMENT)는 발송 불가
+  // 세금계산서 발행·취소(매출관리): 전담기관 담당자는 입력 불가(조회만)
+  "tax-invoices": ["ADMIN", "ACCOUNTANT"],
+  // 공문 발송(세금계산서·정산절차 안내 등): 회계담당자만 발송 가능 — 전담기관 담당자(SETTLEMENT)는 발송 불가
   emails:         ["ADMIN", "ACCOUNTANT"],
+  // 계산서발행 서류 요청·입금 확인 요청(첨부 없는 간단 안내 메일): 금액 확정이나 발행 권한과 무관한
+  // 단순 요청/독촉 메일이라 전담기관 담당자·조회전용도 (개별/일괄) 발송할 수 있다.
+  "simple-notices": ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
   projects:            ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   "funding-agencies":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   "notice-templates":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  // 사업자등록증·통장사본(공통 첨부 파일): 회계담당자·시스템관리자만 등록/교체 가능 — 전담기관담당자는 조회만
+  // 사업자등록증·통장사본(공통 첨부 파일): 회계담당자·시스템관리자만 등록/교체 가능 — 전담기관 담당자는 조회만
   "standard-attachments": ["ADMIN", "ACCOUNTANT"],
   institutions:        ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   users:          ["ADMIN"],

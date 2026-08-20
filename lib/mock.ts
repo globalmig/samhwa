@@ -536,7 +536,7 @@ export interface Project {
   internalAssignedAt?: string;   // 내부 배정일
   projectCategory?: string;      // 과제 구분
   researchLead?: string;         // 연구책임자
-  projectCode?: string;          // 전담기관 과제코드 (전담기관 약칭-순번, 등록 시 시스템이 자동 생성)
+  projectCode?: string;          // 과제코드 (SH+6자리 일련번호, 등록 순서대로 시스템이 자동 생성)
   projectDivision?: "위탁" | "공동"; // 과제 구분 (위탁/공동)
   billingType?: "정발행" | "역발행요청" | "역발행" | "대상아님" | "면제"; // 발행구분 (없으면 계산서 유무로 자동 판별)
   // 협약 구조
@@ -2975,7 +2975,7 @@ export const systemUsers: SystemUser[] = [
 ];
 
 // ============================================================
-// 공지사항 (알림 - 회계담당자/전문기관담당자 공유용)
+// 공지사항 (알림 - 회계담당자/전담기관 담당자 공유용)
 // ============================================================
 
 export interface Notice {
