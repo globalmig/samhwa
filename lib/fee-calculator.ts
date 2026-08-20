@@ -246,10 +246,13 @@ export function getAddonFee(baseFee: number, coInstCount: number, method: "TIERE
 
 // ─── 공동기관 수 산정 ────────────────────────────────────────────
 // 기본: 주관을 제외한 모든 기관(PARTICIPANT+ENTRUSTED, 즉 공동+위탁) 수.
-// excludeLeadFromCalc(RDA2): 주관기관이 산정기준액에서 완전히 빠지므로, 남은 기관 중 1개를
-// 가상의 주관기관으로 보정하여 -1 한다 (문서 예시: 공동기관 3개 중 면제기관 제외 후 2개 남으면 1개로 보정).
-function getCoInstCount(list: CalcMember[], policy: FeePolicy): number {
-  if (policy.excludeLeadFromCalc) return Math.max(0, list.length - 1);
+// leadExcluded: 주관기관이 산정기준액 자체에서 완전히 빠진 경우 — excludeLeadFromCalc(RDA2) 정책이거나,
+// 그 해 주관기관이 하필 EXCLUDE 모드 정책(RDA1 등)의 완전제외 등급(예: 최우수)을 받아 isExcludedMember로
+// 걸러진 경우 모두 해당한다. 두 경우 다 list엔 이미 주관기관이 없으므로, 남은 기관 수를 그대로 세면
+// "주관기관 자리가 원래 있었다"는 사실이 반영되지 않아 공동기관 수가 1개 많게 잡힌다 — 남은 기관 중
+// 1개를 가상의 주관기관으로 보정하여 -1 한다 (문서 예시: 공동기관 3개 중 면제기관 제외 후 2개 남으면 1개로 보정).
+function getCoInstCount(list: CalcMember[], leadExcluded: boolean): number {
+  if (leadExcluded) return Math.max(0, list.length - 1);
   return list.filter((m) => m.role !== "LEAD").length;
 }
 
@@ -337,6 +340,10 @@ export function calcTermFee(input: CalcInput): CalcResult {
   // excludeLeadFromCalc(RDA2): 주관기관(농진청/소속기관)도 함께 완전히 제외된다.
   const excludedMembers = members.filter((m) => isExcludedMember(m.grade, policy) || (policy.excludeLeadFromCalc === true && m.role === "LEAD"));
   const excludedInstitutionIds = excludedMembers.map((m) => m.institutionId);
+  // 주관기관이 위 두 사유(excludeLeadFromCalc 또는 그 해 등급이 하필 완전제외 등급) 중 하나로
+  // 산정기준액에서 완전히 빠졌는지 — getCoInstCount의 -1 보정 여부를 여기서 한 번만 판정해 아래
+  // 두 호출부(표준수수료/일반수수료)에 동일하게 적용한다.
+  const leadExcludedFromCalc = excludedMembers.some((m) => m.role === "LEAD");
   const eligibleMembers = members.filter((m) => !excludedMembers.includes(m));
 
   // 산정 기준액(현금 또는 현금+현물)이 있는 기관만 대상
@@ -399,7 +406,7 @@ export function calcTermFee(input: CalcInput): CalcResult {
 
   // 1. 표준수수료
   const totalCashBudget = cashMembers.reduce((s, m) => s + amountOf(m), 0);
-  const coInstCount = getCoInstCount(cashMembers, policy);
+  const coInstCount = getCoInstCount(cashMembers, leadExcludedFromCalc);
   const baseFee = Math.max(getBaseFee(totalCashBudget, feeRateBrackets), minimumFee);
   const addonFee = getAddonFee(baseFee, coInstCount, coInstAddonMethod, customAddonRates);
   const standardFee = baseFee + addonFee;
@@ -467,7 +474,7 @@ export function calcTermFee(input: CalcInput): CalcResult {
   const nonExemptMembers = cashMembers.filter((m) => !exemptMembers.includes(m));
 
   const nonExemptCashBudget = nonExemptMembers.reduce((s, m) => s + amountOf(m), 0);
-  const nonExemptCoInstCount = getCoInstCount(nonExemptMembers, policy);
+  const nonExemptCoInstCount = getCoInstCount(nonExemptMembers, leadExcludedFromCalc);
   const nonExemptBaseFee = Math.max(getBaseFee(nonExemptCashBudget, feeRateBrackets), minimumFee);
   const nonExemptAddonFee = getAddonFee(nonExemptBaseFee, nonExemptCoInstCount, coInstAddonMethod, customAddonRates);
   const generalFee = nonExemptBaseFee + nonExemptAddonFee;
