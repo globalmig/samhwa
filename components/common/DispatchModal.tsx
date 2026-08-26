@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { FiChevronRight, FiMail, FiX } from "react-icons/fi";
 import { useStore, addEmailDispatch, updateStandardAttachment } from "@/lib/store";
 import { EMPTY_FEE_INVOICE_TEMPLATE } from "@/lib/mock";
@@ -74,76 +75,86 @@ export type DispatchChoice =
   | { kind: "DOC_REQUEST" | "PAYMENT_REMINDER" };
 
 // ── DispatchDropdown (공문 발송 드롭다운 버튼) ────────────────
+// 메뉴를 버튼의 형제로 두면(position: absolute) 수수료청구관리 목록의 가로/세로 스크롤 컨테이너나
+// 과제 상세의 rounded-xl overflow-hidden 카드 안에서 메뉴 아래쪽이 그 경계에 잘려 보인다 — 그래서
+// fixed 좌표를 직접 계산해 document.body에 포탈로 그린다(이 파일의 InfoEditModal 등과 별개로,
+// 과제 상세 페이지의 explainPopover와 동일한 해법).
+const DISPATCH_MENU_WIDTH = 190;
+
 export function DispatchDropdown({
   onSelect,
 }: {
   onSelect: (choice: DispatchChoice) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
-  useEffect(() => {
-    function handler(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    }
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
+  function toggle(e: React.MouseEvent<HTMLButtonElement>) {
+    if (pos) { setPos(null); return; }
+    const rect = e.currentTarget.getBoundingClientRect();
+    setPos({ top: rect.bottom + 4, left: Math.max(8, rect.right - DISPATCH_MENU_WIDTH) });
+  }
 
   function pick(choice: DispatchChoice) {
-    setOpen(false);
+    setPos(null);
     onSelect(choice);
   }
 
   return (
-    <div ref={ref} className="relative inline-block">
+    <div className="relative inline-block">
       <button
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggle}
         className="flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded transition-colors whitespace-nowrap bg-teal-50 text-teal-700 hover:bg-teal-100 border border-teal-200"
       >
         <FiMail size={11} />
         공문발송
-        <FiChevronRight size={10} className={`transition-transform ${open ? "rotate-90" : ""}`} />
+        <FiChevronRight size={10} className={`transition-transform ${pos ? "rotate-90" : ""}`} />
       </button>
-      {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden min-w-[190px]">
-          <button
-            className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors"
-            onClick={() => pick({ kind: "REGULAR", feeCategory: "ANNUAL" })}
+      {pos && createPortal(
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setPos(null)} />
+          <div
+            className="fixed z-50 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden"
+            style={{ top: pos.top, left: pos.left, width: DISPATCH_MENU_WIDTH }}
           >
-            연차상시점검 수수료 공문
-          </button>
-          <button
-            className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors border-t border-slate-100"
-            onClick={() => pick({ kind: "REGULAR", feeCategory: "SETTLEMENT" })}
-          >
-            위탁정산 수수료 공문
-          </button>
-          <button
-            className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors border-t border-slate-100"
-            onClick={() => pick({ kind: "REVERSE", feeCategory: "ANNUAL" })}
-          >
-            역발행 수수료 공문
-          </button>
-          <button
-            className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors border-t border-slate-100"
-            onClick={() => pick({ kind: "OTHER" })}
-          >
-            기타 공문
-          </button>
-          <button
-            className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors border-t border-slate-100"
-            onClick={() => pick({ kind: "DOC_REQUEST" })}
-          >
-            계산서발행 서류 요청
-          </button>
-          <button
-            className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors border-t border-slate-100"
-            onClick={() => pick({ kind: "PAYMENT_REMINDER" })}
-          >
-            입금 확인 요청
-          </button>
-        </div>
+            <button
+              className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors"
+              onClick={() => pick({ kind: "REGULAR", feeCategory: "ANNUAL" })}
+            >
+              연차상시점검 수수료 공문
+            </button>
+            <button
+              className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors border-t border-slate-100"
+              onClick={() => pick({ kind: "REGULAR", feeCategory: "SETTLEMENT" })}
+            >
+              위탁정산 수수료 공문
+            </button>
+            <button
+              className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors border-t border-slate-100"
+              onClick={() => pick({ kind: "REVERSE", feeCategory: "ANNUAL" })}
+            >
+              역발행 수수료 공문
+            </button>
+            <button
+              className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors border-t border-slate-100"
+              onClick={() => pick({ kind: "OTHER" })}
+            >
+              기타 공문
+            </button>
+            <button
+              className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors border-t border-slate-100"
+              onClick={() => pick({ kind: "DOC_REQUEST" })}
+            >
+              계산서발행 서류 요청
+            </button>
+            <button
+              className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors border-t border-slate-100"
+              onClick={() => pick({ kind: "PAYMENT_REMINDER" })}
+            >
+              입금 확인 요청
+            </button>
+          </div>
+        </>,
+        document.body
       )}
     </div>
   );
