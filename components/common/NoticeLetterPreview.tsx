@@ -31,6 +31,14 @@ function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
+// 배열의 index번째 항목 "바로 아래"에 새 항목을 끼워 넣는다 — 맨 끝에만 붙던 AddRow와 달리
+// 리스트 중간에도 행을 추가할 수 있게 해준다(각 행의 InsertDot 버튼에서 호출).
+function insertAt<T>(arr: T[], index: number, item: T): T[] {
+  const next = [...arr];
+  next.splice(index + 1, 0, item);
+  return next;
+}
+
 // ─── 편집 모드 전용 인라인 위젯 ────────────────────────────────
 // 공문 디자인 위에서 바로 값을 고칠 수 있도록, 어느 자리가 수정 가능한지 항상 옅은 테두리로
 // 드러내고, 포커스 시에는 파란 테두리로 활성 상태를 보여주는 인라인 input/textarea.
@@ -96,6 +104,20 @@ function RemoveDot({ onClick, title = "삭제" }: { onClick: () => void; title?:
       className="shrink-0 p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
     >
       <FiX size={12} />
+    </button>
+  );
+}
+
+// 이 행 바로 아래에 빈 행을 끼워 넣는다 — AddRow(맨 끝에만 추가)와 달리 리스트 중간에 삽입할 수 있다.
+function InsertDot({ onClick, title = "아래에 행 추가" }: { onClick: () => void; title?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className="shrink-0 p-1 text-slate-300 hover:text-blue-500 hover:bg-blue-50 rounded transition-colors"
+    >
+      <FiPlus size={12} />
     </button>
   );
 }
@@ -223,6 +245,7 @@ export default function NoticeLetterPreview({
                   rows={Math.max(1, line.split("\n").length)}
                   className={`${editableCls} flex-1 resize-y`}
                 />
+                <InsertDot onClick={() => setField("bodyIntro", insertAt(template.bodyIntro, i, ""))} />
                 <RemoveDot onClick={() => setField("bodyIntro", template.bodyIntro.filter((_, j) => j !== i))} />
               </div>
             ) : (
@@ -278,7 +301,7 @@ export default function NoticeLetterPreview({
                 <th className="px-3 py-2.5 text-sm font-semibold text-slate-700 border-r border-slate-300 w-28">업무구분</th>
                 <th className="px-3 py-2.5 text-sm font-semibold text-slate-700 border-r border-slate-300">연구기관</th>
                 <th className="px-3 py-2.5 text-sm font-semibold text-slate-700">회계법인</th>
-                {editable && <th className="w-8 border-l border-slate-300" />}
+                {editable && <th className="w-14 border-l border-slate-300" />}
               </tr>
             </thead>
             <tbody>
@@ -314,7 +337,10 @@ export default function NoticeLetterPreview({
                         />
                       </td>
                       <td className="px-1 py-2 text-center align-middle">
-                        <RemoveDot onClick={() => setField("scheduleRows", template.scheduleRows.filter((_, j) => j !== i))} />
+                        <div className="flex items-center justify-center">
+                          <InsertDot onClick={() => setField("scheduleRows", insertAt(template.scheduleRows, i, { category: "", institutionTask: "", firmTask: "" }))} />
+                          <RemoveDot onClick={() => setField("scheduleRows", template.scheduleRows.filter((_, j) => j !== i))} />
+                        </div>
                       </td>
                     </>
                   ) : (
@@ -347,7 +373,7 @@ export default function NoticeLetterPreview({
                 <th className="px-3 py-2.5 text-sm font-semibold text-slate-700 border-r border-slate-300">담당자</th>
                 <th className="px-3 py-2.5 text-sm font-semibold text-slate-700 border-r border-slate-300 w-40">연락처</th>
                 <th className="px-3 py-2.5 text-sm font-semibold text-slate-700">이메일</th>
-                {editable && <th className="w-8 border-l border-slate-300" />}
+                {editable && <th className="w-14 border-l border-slate-300" />}
               </tr>
             </thead>
             <tbody>
@@ -383,7 +409,10 @@ export default function NoticeLetterPreview({
                         />
                       </td>
                       <td className="px-1 py-2 text-center">
-                        <RemoveDot onClick={() => setField("contactRows", template.contactRows.filter((_, j) => j !== i))} />
+                        <div className="flex items-center justify-center">
+                          <InsertDot onClick={() => setField("contactRows", insertAt(template.contactRows, i, { role: "", contact: "", email: "" }))} />
+                          <RemoveDot onClick={() => setField("contactRows", template.contactRows.filter((_, j) => j !== i))} />
+                        </div>
                       </td>
                     </>
                   ) : (
@@ -458,6 +487,7 @@ export default function NoticeLetterPreview({
                         onChange={(v) => setField("feeRequiredDocs", template.feeRequiredDocs.map((it, j) => (j === i ? v : it)))}
                         className="flex-1"
                       />
+                      <InsertDot onClick={() => setField("feeRequiredDocs", insertAt(template.feeRequiredDocs, i, ""))} />
                       <RemoveDot onClick={() => setField("feeRequiredDocs", template.feeRequiredDocs.filter((_, j) => j !== i))} />
                     </>
                   ) : (
@@ -481,6 +511,7 @@ export default function NoticeLetterPreview({
                       onChange={(v) => setField("feeNotes", template.feeNotes.map((it, j) => (j === i ? v : it)))}
                       className="flex-1"
                     />
+                    <InsertDot onClick={() => setField("feeNotes", insertAt(template.feeNotes, i, ""))} />
                     <RemoveDot onClick={() => setField("feeNotes", template.feeNotes.filter((_, j) => j !== i))} />
                   </>
                 ) : (
@@ -532,6 +563,7 @@ export default function NoticeLetterPreview({
                       }}
                     />
                   </label>
+                  <InsertDot onClick={() => setField("attachments", insertAt(template.attachments, i, { name: "" }))} />
                   <RemoveDot onClick={() => setField("attachments", template.attachments.filter((_, j) => j !== i))} />
                 </>
               ) : (

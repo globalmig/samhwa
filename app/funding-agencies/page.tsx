@@ -857,6 +857,35 @@ function AgencyForm({
           <input className={inputCls} value={form.website ?? ""} onChange={(e) => s("website", e.target.value)} placeholder="https://www.agency.re.kr" />
         </Field>
       </div>
+
+      {/* 소속기관 자동판별 — RDA1/RDA2처럼 실제로는 같은 기관(예: 농촌진흥청)을 정책이 다른 여러
+          전담기관 레코드로 나눠 관리할 때, 주관기관명으로 어느 레코드를 써야 할지 자동으로 골라준다
+          (resolveAutoDetectedAgencyId). 소속기관 이름은 하드코딩이 아니라 여기서 직접 관리한다 —
+          실제 업무에서 새로 계약을 맺는 소속기관이 계속 늘어날 수 있고, 이름이 정확히 일치해야
+          인식되므로(오탈자·띄어쓰기 포함) 담당자가 직접 정확한 명칭으로 등록/수정할 수 있어야 한다. */}
+      <div className="space-y-2 border border-slate-200 rounded-lg p-3 bg-slate-50/50">
+        <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={form.autoDetectByLeadInstitution ?? false}
+            onChange={(e) => s("autoDetectByLeadInstitution", e.target.checked)}
+            className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30"
+          />
+          소속기관 자동판별 — 주관기관명이 아래 목록과 일치하면 다른 전담기관을 선택해도 이 전담기관으로 자동 교정됩니다 (예: RDA1/RDA2)
+        </label>
+        {form.autoDetectByLeadInstitution && (
+          <Field label="소속기관 목록 (한 줄에 하나씩 — 주관기관명이 정확히 일치해야 인식됩니다)">
+            <textarea
+              className={`${inputCls} font-mono resize-y`}
+              rows={5}
+              value={(form.affiliatedInstitutionNames ?? []).join("\n")}
+              onChange={(e) => s("affiliatedInstitutionNames", e.target.value.split("\n").map((v) => v.trim()).filter(Boolean))}
+              placeholder={"농촌진흥청\n국립원예특작과학원\n산림원예특작과학원"}
+            />
+          </Field>
+        )}
+      </div>
+
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
         <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
         <button onClick={() => onSubmit(form)} disabled={!form.name || !form.shortName} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40 transition-colors">저장</button>

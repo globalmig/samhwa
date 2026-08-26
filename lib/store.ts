@@ -21,7 +21,6 @@ import {
   simpleNoticeTemplates as initialSimpleNoticeTemplates,
   notices as initialNotices,
   standardAttachments as initialStandardAttachments,
-  managerContacts as initialManagerContacts,
   COMPANY_INFO as initialCompanyInfo,
   type CompanyInfo,
   type Institution,
@@ -48,7 +47,6 @@ import {
   type SimpleNoticeTemplateEntry,
   type Notice,
   type StandardAttachment,
-  type ManagerContact,
 } from "./mock";
 
 export type { TermFeeCalc, FeeOverride };
@@ -86,7 +84,6 @@ export const ENTITY_NAMES: Record<string, string> = {
   projectIssue: "이슈/메모",
   notice: "공지사항",
   standardAttachment: "표준 첨부서류",
-  managerContact: "담당자 연락처",
   feeInvoiceTemplate: "수수료 청구서 양식",
   simpleNoticeTemplate: "간단 안내 메일 양식",
   companyInfo: "공문 발신 회사 정보",
@@ -119,7 +116,6 @@ interface StoreState {
   feeInvoiceTemplates: FeeInvoiceTemplateEntry[];
   simpleNoticeTemplates: SimpleNoticeTemplateEntry[];
   standardAttachments: StandardAttachment[];
-  managerContacts: ManagerContact[];
   companyInfo: CompanyInfo;
 }
 
@@ -263,7 +259,6 @@ let _state: StoreState = {
   feeInvoiceTemplates: [...initialFeeInvoiceTemplates],
   simpleNoticeTemplates: [...initialSimpleNoticeTemplates],
   standardAttachments: [...initialStandardAttachments],
-  managerContacts: [...initialManagerContacts],
   companyInfo: { ...initialCompanyInfo },
 };
 
@@ -1538,35 +1533,6 @@ export function deleteAgencyNoticeTemplate(id: string): void {
   if (!item) return;
   _state = { ..._state, agencyNoticeTemplates: _state.agencyNoticeTemplates.filter((t) => t.id !== id) };
   record("fundingAgency", item.agencyShortName, `${item.agencyShortName} 공문 템플릿 삭제 (${item.name})`, "DELETE");
-  notify();
-}
-
-// ============================================================
-// MANAGER CONTACTS (과제담당자 연락처 — 공문 발송 시 이름으로 조회)
-// ============================================================
-
-export function addManagerContact(data: Omit<ManagerContact, "id">): ManagerContact {
-  const item: ManagerContact = { ...data, id: genId("mgr") };
-  _state = { ..._state, managerContacts: [..._state.managerContacts, item] };
-  record("managerContact", item.id, item.name, "CREATE");
-  notify();
-  return item;
-}
-
-export function updateManagerContact(id: string, data: Partial<Omit<ManagerContact, "id">>): void {
-  const before = _state.managerContacts.find((m) => m.id === id);
-  if (!before) return;
-  const after = { ...before, ...data };
-  _state = { ..._state, managerContacts: _state.managerContacts.map((m) => (m.id === id ? after : m)) };
-  record("managerContact", id, after.name, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
-  notify();
-}
-
-export function deleteManagerContact(id: string): void {
-  const item = _state.managerContacts.find((m) => m.id === id);
-  if (!item) return;
-  _state = { ..._state, managerContacts: _state.managerContacts.filter((m) => m.id !== id) };
-  record("managerContact", id, item.name, "DELETE");
   notify();
 }
 

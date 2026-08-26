@@ -950,9 +950,18 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               </div>
               <div>
                 <div className="mb-3">
-                  <label className="block text-xs font-medium text-slate-500 mb-1">과제담당자(정)</label>
+                  <label className="block text-xs font-medium text-slate-500 mb-1">
+                    과제담당자(정)
+                    <span className="ml-1 text-slate-400 font-normal">· 정산절차 안내 공문 문의사항 연락처에 자동 반영</span>
+                  </label>
                   <input className={`${inp} w-full bg-white`} value={draft.assignedManagerPrimary ?? ""}
                     onChange={(e) => setDraft((p) => ({ ...p, assignedManagerPrimary: e.target.value }))} placeholder="담당자명" />
+                  <div className="grid grid-cols-2 gap-2 mt-1.5">
+                    <input className={`${inp} w-full bg-white`} value={draft.assignedManagerPrimaryPhone ?? ""}
+                      onChange={(e) => setDraft((p) => ({ ...p, assignedManagerPrimaryPhone: e.target.value }))} placeholder="연락처" />
+                    <input className={`${inp} w-full bg-white`} value={draft.assignedManagerPrimaryEmail ?? ""}
+                      onChange={(e) => setDraft((p) => ({ ...p, assignedManagerPrimaryEmail: e.target.value }))} placeholder="이메일" />
+                  </div>
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-500 mb-1">
@@ -962,8 +971,16 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                     )}
                   </label>
                   {isCurrentTermFinancials ? (
-                    <input className={`${inp} w-full bg-white`} value={draft.assignedManager ?? ""}
-                      onChange={(e) => setDraft((p) => ({ ...p, assignedManager: e.target.value }))} placeholder="담당자명" />
+                    <>
+                      <input className={`${inp} w-full bg-white`} value={draft.assignedManager ?? ""}
+                        onChange={(e) => setDraft((p) => ({ ...p, assignedManager: e.target.value }))} placeholder="담당자명" />
+                      <div className="grid grid-cols-2 gap-2 mt-1.5">
+                        <input className={`${inp} w-full bg-white`} value={draft.assignedManagerPhone ?? ""}
+                          onChange={(e) => setDraft((p) => ({ ...p, assignedManagerPhone: e.target.value }))} placeholder="연락처" />
+                        <input className={`${inp} w-full bg-white`} value={draft.assignedManagerEmail ?? ""}
+                          onChange={(e) => setDraft((p) => ({ ...p, assignedManagerEmail: e.target.value }))} placeholder="이메일" />
+                      </div>
+                    </>
                   ) : (
                     <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500">
                       {viewAssignedManager || "기록 없음"}
@@ -4263,7 +4280,7 @@ function SettlementNoticeModal({
   senderUser: SystemUser | null;
   onClose: () => void;
 }) {
-  const { companyInfo, managerContacts } = useStore();
+  const { companyInfo } = useStore();
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
   const [toEmail, setToEmail] = useState(recipientEmail);
   const [sending, setSending] = useState(false);
@@ -4271,12 +4288,12 @@ function SettlementNoticeModal({
   const [sendError, setSendError] = useState("");
 
   const selectedTemplate = templates.find((t) => t.id === templateId) ?? templates[0];
-  // 문의사항 연락처의 "과제담당(정)/(부)" 행은 템플릿 기본값이 아니라 이 과제의 실제 담당자
-  // (assignedManagerPrimary/assignedManager)와 그 사람의 등록된 연락처로 바꿔치기한다.
+  // 문의사항 연락처의 "과제담당(정)/(부)" 행은 템플릿 기본값이 아니라 이 과제에 저장된 실제 담당자
+  // 이름·연락처·이메일(assignedManagerPrimary/Phone/Email, assignedManager/Phone/Email)로 바꿔치기한다.
   const template = useMemo(() => {
     const base = selectedTemplate?.content ?? EMPTY_NOTICE_TEMPLATE;
-    return { ...base, contactRows: applyManagerContactRows(base.contactRows, project, managerContacts) };
-  }, [selectedTemplate, project, managerContacts]);
+    return { ...base, contactRows: applyManagerContactRows(base.contactRows, project) };
+  }, [selectedTemplate, project]);
 
   const canSendMail = !!senderUser?.hiworksEmail && !!senderUser?.hiworksMailPassword;
 

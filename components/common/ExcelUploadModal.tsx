@@ -447,6 +447,11 @@ export interface ProjectScalarInfo {
   // 과제담당자(정)는 부담당자와 달리 연차별 이력을 쌓지 않는 단순 스칼라값이다 — 다른 값들과 같은
   // 규칙으로, 같은 과제의 여러 행에서 값이 갈리면 자동 반영하지 않고 이슈로 남긴다.
   assignedManagersPrimary: Set<string>;
+  // 과제담당자(정)/(부)의 연락처·이메일 — 이름과 마찬가지로 단순 스칼라값(연차별 이력 없음)이다.
+  assignedManagerPrimaryPhones: Set<string>;
+  assignedManagerPrimaryEmails: Set<string>;
+  assignedManagerPhones: Set<string>;
+  assignedManagerEmails: Set<string>;
   researchLeads: Set<string>;     // 주관기관 기관책임자
   researchLeadEmails: Set<string>; // 주관기관 "책임자 메일주소"
   isAutonomyTrack: boolean;
@@ -466,6 +471,7 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
     if (!info) {
       info = {
         projectNames: new Set(), assignedManagers: new Set(), assignedManagersByTerm: new Map(), assignedManagersPrimary: new Set(), researchLeads: new Set(),
+        assignedManagerPrimaryPhones: new Set(), assignedManagerPrimaryEmails: new Set(), assignedManagerPhones: new Set(), assignedManagerEmails: new Set(),
         researchLeadEmails: new Set(),
         isAutonomyTrack: false, projectCategories: new Set(), agencyAssignedAts: new Set(), internalAssignedAts: new Set(),
         startDates: new Set(),
@@ -503,6 +509,15 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
 
       const managerPrimary = get("assignedManagerPrimary", row);
       if (managerPrimary) info.assignedManagersPrimary.add(managerPrimary);
+
+      const managerPrimaryPhone = get("assignedManagerPrimaryPhone", row);
+      if (managerPrimaryPhone) info.assignedManagerPrimaryPhones.add(managerPrimaryPhone);
+      const managerPrimaryEmail = get("assignedManagerPrimaryEmail", row);
+      if (managerPrimaryEmail) info.assignedManagerPrimaryEmails.add(managerPrimaryEmail);
+      const managerPhone = get("assignedManagerPhone", row);
+      if (managerPhone) info.assignedManagerPhones.add(managerPhone);
+      const managerEmail = get("assignedManagerEmail", row);
+      if (managerEmail) info.assignedManagerEmails.add(managerEmail);
 
       if (get("autonomyTrack", row) === "자율성트랙") info.isAutonomyTrack = true;
 
@@ -2212,6 +2227,10 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         const scalarInfo = scalarAggregates.get(normNum);
         const assignedManager = scalarInfo?.assignedManagers.size === 1 ? [...scalarInfo.assignedManagers][0] : undefined;
         const assignedManagerPrimary = scalarInfo?.assignedManagersPrimary.size === 1 ? [...scalarInfo.assignedManagersPrimary][0] : undefined;
+        const assignedManagerPrimaryPhone = scalarInfo?.assignedManagerPrimaryPhones.size === 1 ? [...scalarInfo.assignedManagerPrimaryPhones][0] : undefined;
+        const assignedManagerPrimaryEmail = scalarInfo?.assignedManagerPrimaryEmails.size === 1 ? [...scalarInfo.assignedManagerPrimaryEmails][0] : undefined;
+        const assignedManagerPhone = scalarInfo?.assignedManagerPhones.size === 1 ? [...scalarInfo.assignedManagerPhones][0] : undefined;
+        const assignedManagerEmail = scalarInfo?.assignedManagerEmails.size === 1 ? [...scalarInfo.assignedManagerEmails][0] : undefined;
         const researchLead = scalarInfo?.researchLeads.size === 1 ? [...scalarInfo.researchLeads][0] : undefined;
         const researchLeadEmail = scalarInfo?.researchLeadEmails.size === 1 ? [...scalarInfo.researchLeadEmails][0] : undefined;
         const agencyAssignedAt = scalarInfo?.agencyAssignedAts.size === 1 ? [...scalarInfo.agencyAssignedAts][0] : undefined;
@@ -2296,6 +2315,10 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             assignedManager: resolvedAssignedManager ?? renamedFrom.assignedManager,
             assignedManagerHistory: mergeAssignedManagerHistory(renamedFrom.assignedManagerHistory, assignedManagerHistory),
             assignedManagerPrimary: assignedManagerPrimary ?? renamedFrom.assignedManagerPrimary,
+            assignedManagerPrimaryPhone: assignedManagerPrimaryPhone ?? renamedFrom.assignedManagerPrimaryPhone,
+            assignedManagerPrimaryEmail: assignedManagerPrimaryEmail ?? renamedFrom.assignedManagerPrimaryEmail,
+            assignedManagerPhone: assignedManagerPhone ?? renamedFrom.assignedManagerPhone,
+            assignedManagerEmail: assignedManagerEmail ?? renamedFrom.assignedManagerEmail,
             researchLead: researchLead ?? renamedFrom.researchLead,
             researchLeadEmail: researchLeadEmail ?? renamedFrom.researchLeadEmail,
             agencyAssignedAt: agencyAssignedAt ?? renamedFrom.agencyAssignedAt,
@@ -2335,6 +2358,10 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             assignedManager: resolvedAssignedManager,
             assignedManagerHistory: assignedManagerHistory.length > 0 ? assignedManagerHistory : undefined,
             assignedManagerPrimary,
+            assignedManagerPrimaryPhone,
+            assignedManagerPrimaryEmail,
+            assignedManagerPhone,
+            assignedManagerEmail,
             researchLead,
             researchLeadEmail,
             agencyAssignedAt,
@@ -2557,6 +2584,10 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         const scalarInfo = scalarAggregates.get(info.normNum);
         const assignedManager = scalarInfo?.assignedManagers.size === 1 ? [...scalarInfo.assignedManagers][0] : undefined;
         const assignedManagerPrimary = scalarInfo?.assignedManagersPrimary.size === 1 ? [...scalarInfo.assignedManagersPrimary][0] : undefined;
+        const assignedManagerPrimaryPhone = scalarInfo?.assignedManagerPrimaryPhones.size === 1 ? [...scalarInfo.assignedManagerPrimaryPhones][0] : undefined;
+        const assignedManagerPrimaryEmail = scalarInfo?.assignedManagerPrimaryEmails.size === 1 ? [...scalarInfo.assignedManagerPrimaryEmails][0] : undefined;
+        const assignedManagerPhone = scalarInfo?.assignedManagerPhones.size === 1 ? [...scalarInfo.assignedManagerPhones][0] : undefined;
+        const assignedManagerEmail = scalarInfo?.assignedManagerEmails.size === 1 ? [...scalarInfo.assignedManagerEmails][0] : undefined;
         const researchLead = scalarInfo?.researchLeads.size === 1 ? [...scalarInfo.researchLeads][0] : undefined;
         const researchLeadEmail = scalarInfo?.researchLeadEmails.size === 1 ? [...scalarInfo.researchLeadEmails][0] : undefined;
         const agencyAssignedAt = scalarInfo?.agencyAssignedAts.size === 1 ? [...scalarInfo.agencyAssignedAts][0] : undefined;
@@ -2575,6 +2606,10 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           assignedManager: resolvedAssignedManager ?? existingProject.assignedManager,
           assignedManagerHistory: mergeAssignedManagerHistory(existingProject.assignedManagerHistory, assignedManagerHistory),
           assignedManagerPrimary: assignedManagerPrimary ?? existingProject.assignedManagerPrimary,
+          assignedManagerPrimaryPhone: assignedManagerPrimaryPhone ?? existingProject.assignedManagerPrimaryPhone,
+          assignedManagerPrimaryEmail: assignedManagerPrimaryEmail ?? existingProject.assignedManagerPrimaryEmail,
+          assignedManagerPhone: assignedManagerPhone ?? existingProject.assignedManagerPhone,
+          assignedManagerEmail: assignedManagerEmail ?? existingProject.assignedManagerEmail,
           researchLead: researchLead ?? existingProject.researchLead,
           researchLeadEmail: researchLeadEmail ?? existingProject.researchLeadEmail,
           agencyAssignedAt: agencyAssignedAt ?? existingProject.agencyAssignedAt,

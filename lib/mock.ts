@@ -482,6 +482,7 @@ export const fundingAgencies: FundingAgency[] = [
       "농촌인력자원개발센터",
       "국립원예특작과학원",
       "국립축산과학원",
+      "산림원예특작과학원",
     ],
     specialNotes: [
       "RDA1과 동일 기준 + 주관기관(농진청 또는 소속기관)을 산정기준액에서 완전 제외하고 공동기관수 -1 보정",
@@ -566,10 +567,19 @@ export interface Project {
   // docReplyDate로 관리한다 — 과제 레벨엔 두지 않는다.
   // 과제담당자(정) — 부담당자와 달리 연차별 이력을 따로 쌓지 않는다(엑셀 업로드 시점 값을 그대로 유지).
   assignedManagerPrimary?: string;
+  // 과제담당자(정)의 연락처·이메일 — 책임자이메일/실무자이메일과 동일하게 엑셀 업로드(또는 과제 정보
+  // 수정에서 수동 입력)로 채워지고, 정산절차 안내 공문의 "문의사항 연락처" 표에 자동 반영된다(별도
+  // 명부를 두지 않고 과제 자체에 바로 저장 — resolveAutoDetectedAgencyId처럼 이름으로 딴 데서 찾지 않음).
+  assignedManagerPrimaryPhone?: string;
+  assignedManagerPrimaryEmail?: string;
   // 과제담당자(부) — 예전엔 "삼화담당자"라 불렸다. 현재 진행연차 기준 값이며, 담당자 배정은 인사이동
   // 등으로 연차마다 바뀔 수 있어 연차별 이력은 assignedManagerHistory에 따로 쌓는다.
   assignedManager?: string;
   assignedManagerHistory?: { termNumber: number; assignedManager: string }[];
+  // 과제담당자(부)의 연락처·이메일 — assignedManagerPrimaryPhone/Email과 동일한 방식(과제담당자(정)과
+  // 달리 이 값 자체는 연차별 이력을 두지 않는다 — 이름만 바뀌어도 연락처는 그때그때 최신값으로 덮어쓴다).
+  assignedManagerPhone?: string;
+  assignedManagerEmail?: string;
   registeredAt?: string;    // 과제 등록일 — 연도별 대시보드 집계 기준(배정일). 과거 데이터는 미입력일 수 있음
 }
 
@@ -3286,25 +3296,6 @@ export interface StandardAttachment {
   // 역발행엔 불필요한 경우처럼, 유형마다 다르게 켜고 끌 수 있다.
   enabledByCategory?: Partial<Record<"ANNUAL" | "SETTLEMENT" | "REVERSE" | "OTHER", boolean>>;
 }
-
-// ─── 과제담당자 연락처(정/부) ───────────────────────────────────
-// Project.assignedManagerPrimary(과제담당자 정)·assignedManager(과제담당자 부)는 엑셀 업로드로
-// 들어오는 "이름"만 들고 있어 연락처·이메일이 없다 — 정산절차 안내 공문의 "문의사항 연락처" 표
-// (NoticeContactRow의 "과제담당(정)"·"과제담당(부)" 행)에 쓸 실제 연락처는 이 이름을 키로 여기서
-// 찾아 채운다(lib/notice-contacts.ts의 applyManagerContactRows). 같은 사람이 여러 과제를 담당해도
-// 여기 한 번만 등록해두면 모든 과제 공문에 그대로 반영된다 — 이름이 이 목록에 없으면 템플릿에
-// 등록된 기본값을 그대로 쓴다.
-export interface ManagerContact {
-  id: string;
-  name: string;
-  phone: string;
-  email: string;
-}
-
-export const managerContacts: ManagerContact[] = [
-  { id: "mgr-001", name: "김철진", phone: "070-4347-7505", email: "luffy1.5@shcpa.co.kr" },
-  { id: "mgr-002", name: "이청아", phone: "070-4347-7511", email: "cayi@shcpa.co.kr" },
-];
 
 export const standardAttachments: StandardAttachment[] = [
   { id: "sa-biz-reg",   name: "사업자등록증.pdf", updatedAt: "2024-01-02" },
