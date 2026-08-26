@@ -1795,12 +1795,17 @@ function BulkSettlementNoticeModal({
       )}
 
       {(noTemplate.length > 0 || noEmail.length > 0) && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700 space-y-1">
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700 space-y-1.5">
+          {/* 대상이 많아지면 목록이 모달을 밀어 늘리지 않고 이 영역 안에서만 스크롤되게 높이를 제한한다. */}
           {noTemplate.length > 0 && (
-            <p>공문 양식이 없는 전담기관 과제: {noTemplate.map((t) => t.projectName).join(", ")}</p>
+            <div className="max-h-24 overflow-y-auto leading-relaxed">
+              공문 양식이 없는 전담기관 과제: {noTemplate.map((t) => t.projectName).join(", ")}
+            </div>
           )}
           {noEmail.length > 0 && (
-            <p>주관기관 담당자 이메일이 없는 과제: {noEmail.map((t) => t.projectName).join(", ")}</p>
+            <div className="max-h-24 overflow-y-auto leading-relaxed">
+              주관기관 담당자 이메일이 없는 과제: {noEmail.map((t) => t.projectName).join(", ")}
+            </div>
           )}
         </div>
       )}
@@ -2009,9 +2014,12 @@ function BulkSimpleNoticeModal({
       </div>
 
       {noEmail.length > 0 && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700 space-y-1">
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700 space-y-1.5">
           <p className="font-medium">수신 이메일이 없어 제외된 대상 ({noEmail.length}건)</p>
-          <p className="text-amber-600">{noEmail.map((t) => t.projectName).join(", ")}</p>
+          {/* 대상이 많아지면 목록이 모달을 밀어 늘리지 않고 이 영역 안에서만 스크롤되게 높이를 제한한다. */}
+          <div className="max-h-24 overflow-y-auto text-amber-600 leading-relaxed">
+            {noEmail.map((t) => t.projectName).join(", ")}
+          </div>
         </div>
       )}
 

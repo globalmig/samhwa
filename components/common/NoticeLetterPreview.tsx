@@ -4,6 +4,7 @@ import { FiPlus, FiX } from "react-icons/fi";
 import { type AgencyNoticeTemplate } from "@/lib/mock";
 import { useStore, updateCompanyInfo } from "@/lib/store";
 import { sanitizeRichText } from "@/lib/notice-email-html";
+import { PRIMARY_PREFIX, DEPUTY_PREFIX } from "@/lib/notice-contacts";
 
 export interface NoticeStatusRow {
   label: string;
@@ -377,7 +378,15 @@ export default function NoticeLetterPreview({
               </tr>
             </thead>
             <tbody>
-              {template.contactRows.map((row, i) => (
+              {template.contactRows.map((row, i) => {
+                // 과제담당(정)/(부) 행은 실제 발송 시 그 과제에 등록된 담당자 이름·연락처·이메일로 항상
+                // 자동 치환된다(applyManagerContactRows) — 여기 저장된 값은 담당자가 아직 지정 안 된
+                // 과제에서만 쓰이는 폴백일 뿐인데, 템플릿 관리 화면에 실존 인물 이름이 그대로 보이면
+                // "항상 이 사람한테 간다"고 오해하기 쉽다. previewMode(템플릿 관리 화면)에서만, 읽기
+                // 전용으로 볼 때 그 자리를 자리표시자 토큰으로 바꿔 보여준다.
+                const managerPrefix = row.role.startsWith(PRIMARY_PREFIX) ? PRIMARY_PREFIX : row.role.startsWith(DEPUTY_PREFIX) ? DEPUTY_PREFIX : null;
+                const showAsToken = previewMode && !editable && managerPrefix;
+                return (
                 <tr key={i} className={i > 0 ? "border-t border-slate-300" : ""}>
                   {editable ? (
                     <>
@@ -389,6 +398,11 @@ export default function NoticeLetterPreview({
                           }
                           className="text-center font-medium"
                         />
+                        {previewMode && managerPrefix && (
+                          <p className="text-[10px] text-slate-400 mt-0.5">
+                            실제 발송 시 과제에 등록된 {managerPrefix} 정보로 자동 치환됩니다 — 아래 값은 담당자가 지정 안 된 과제에서만 쓰이는 기본값입니다
+                          </p>
+                        )}
                       </td>
                       <td className="px-2 py-2 text-center border-r border-slate-300">
                         <InlineInput
@@ -415,6 +429,12 @@ export default function NoticeLetterPreview({
                         </div>
                       </td>
                     </>
+                  ) : showAsToken ? (
+                    <>
+                      <td className="px-3 py-2.5 text-center font-medium whitespace-nowrap border-r border-slate-300 bg-slate-100 text-slate-500">{`{과제에 등록된 ${managerPrefix}}`}</td>
+                      <td className="px-3 py-2.5 text-center whitespace-nowrap border-r border-slate-300 bg-slate-100 text-slate-500">{`{${managerPrefix} 연락처}`}</td>
+                      <td className="px-3 py-2.5 text-center bg-slate-100 text-slate-500">{`{${managerPrefix} 이메일}`}</td>
+                    </>
                   ) : (
                     <>
                       <td className="px-3 py-2.5 text-center font-medium whitespace-nowrap border-r border-slate-300">{row.role}</td>
@@ -423,7 +443,8 @@ export default function NoticeLetterPreview({
                     </>
                   )}
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

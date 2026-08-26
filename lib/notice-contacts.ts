@@ -7,8 +7,8 @@ import type { NoticeContactRow } from "./mock";
 //
 // 연락처·이메일은 별도 명부에서 이름으로 찾지 않고, 책임자이메일/실무자이메일과 동일하게 과제
 // 자체(엑셀 업로드 또는 과제 정보 수정에서 직접 입력)에 저장된 값을 그대로 쓴다.
-const PRIMARY_PREFIX = "과제담당(정)";
-const DEPUTY_PREFIX = "과제담당(부)";
+export const PRIMARY_PREFIX = "과제담당(정)";
+export const DEPUTY_PREFIX = "과제담당(부)";
 
 export interface ManagerAssignment {
   assignedManagerPrimary?: string;      // 과제담당자(정)
