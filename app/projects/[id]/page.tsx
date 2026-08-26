@@ -481,14 +481,33 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       ...(draft.annualFinancials ?? []).filter((a) => a.termNumber !== draft.currentTerm),
       { termYear: savedTermYear, termNumber: draft.currentTerm, govGrant: draft.govGrant ?? 0, privateCash: draft.privateCash ?? 0, privateInKind: draft.privateInKind ?? 0 },
     ].sort((a, b) => a.termNumber - b.termNumber);
-    // 당해(draft.currentTerm) 담당자를 직접 수정했을 수 있으니, 연차별 이력(assignedManagerHistory)도
-    // 함께 갱신한다 — 안 그러면 다른 연차를 봤다가 돌아왔을 때 방금 수정한 값과 이력이 어긋난다.
-    const assignedManagerHistory = draft.assignedManager
+    // 당해(draft.currentTerm) 담당자·연락처·이메일을 직접 수정했을 수 있으니, 연차별 이력
+    // (assignedManagerHistory)도 함께 갱신한다 — 안 그러면 다른 연차를 봤다가 돌아왔을 때 방금
+    // 수정한 값과 이력이 어긋난다. 연락처·이메일도 이름과 마찬가지로 인사이동에 따라 바뀔 수 있어
+    // 그 연차의 담당자 정보로 함께 묶어 남긴다.
+    const assignedManagerHistory = (draft.assignedManager || draft.assignedManagerPhone || draft.assignedManagerEmail)
       ? [
           ...(draft.assignedManagerHistory ?? []).filter((h) => h.termNumber !== draft.currentTerm),
-          { termNumber: draft.currentTerm, assignedManager: draft.assignedManager },
+          {
+            termNumber: draft.currentTerm,
+            assignedManager: draft.assignedManager ?? "",
+            assignedManagerPhone: draft.assignedManagerPhone,
+            assignedManagerEmail: draft.assignedManagerEmail,
+          },
         ].sort((a, b) => a.termNumber - b.termNumber)
       : draft.assignedManagerHistory;
+    // 과제담당자(정)도 (부)와 동일하게 진행 연차 기준으로 이력을 남긴다.
+    const assignedManagerPrimaryHistory = (draft.assignedManagerPrimary || draft.assignedManagerPrimaryPhone || draft.assignedManagerPrimaryEmail)
+      ? [
+          ...(draft.assignedManagerPrimaryHistory ?? []).filter((h) => h.termNumber !== draft.currentTerm),
+          {
+            termNumber: draft.currentTerm,
+            assignedManagerPrimary: draft.assignedManagerPrimary ?? "",
+            assignedManagerPrimaryPhone: draft.assignedManagerPrimaryPhone,
+            assignedManagerPrimaryEmail: draft.assignedManagerPrimaryEmail,
+          },
+        ].sort((a, b) => a.termNumber - b.termNumber)
+      : draft.assignedManagerPrimaryHistory;
     updateProject(projectId, {
       ...draft,
       agencyId: resolvedAgencyId,
@@ -498,6 +517,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       firstStartDate: resolvedFirstStartDate,
       finalEndDate: resolvedFinalEndDate,
       annualFinancials,
+      assignedManagerPrimaryHistory,
       assignedManagerHistory,
     });
     setSavedMsg(true);
@@ -577,6 +597,23 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   const viewAssignedManager = isCurrentTermFinancials
     ? (draft.assignedManager ?? "")
     : (viewAssignedManagerRecord?.assignedManager ?? "");
+  const viewAssignedManagerPhone = isCurrentTermFinancials
+    ? (draft.assignedManagerPhone ?? "")
+    : (viewAssignedManagerRecord?.assignedManagerPhone ?? "");
+  const viewAssignedManagerEmail = isCurrentTermFinancials
+    ? (draft.assignedManagerEmail ?? "")
+    : (viewAssignedManagerRecord?.assignedManagerEmail ?? "");
+  // 과제담당자(정)도 (부)와 동일한 방식으로 연차별 이력을 본다.
+  const viewAssignedManagerPrimaryRecord = project.assignedManagerPrimaryHistory?.find((h) => h.termNumber === viewTerm);
+  const viewAssignedManagerPrimary = isCurrentTermFinancials
+    ? (draft.assignedManagerPrimary ?? "")
+    : (viewAssignedManagerPrimaryRecord?.assignedManagerPrimary ?? "");
+  const viewAssignedManagerPrimaryPhone = isCurrentTermFinancials
+    ? (draft.assignedManagerPrimaryPhone ?? "")
+    : (viewAssignedManagerPrimaryRecord?.assignedManagerPrimaryPhone ?? "");
+  const viewAssignedManagerPrimaryEmail = isCurrentTermFinancials
+    ? (draft.assignedManagerPrimaryEmail ?? "")
+    : (viewAssignedManagerPrimaryRecord?.assignedManagerPrimaryEmail ?? "");
 
   const totalCashBudget = members.reduce((s, m) => s + getMemberBudgetVal(m, "cashBudget"), 0);
   const totalInKindBudget = members.reduce((s, m) => s + getMemberBudgetVal(m, "inKindBudget"), 0);
@@ -953,15 +990,36 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                   <label className="block text-xs font-medium text-slate-500 mb-1">
                     과제담당자(정)
                     <span className="ml-1 text-slate-400 font-normal">· 정산절차 안내 공문 문의사항 연락처에 자동 반영</span>
+                    {!isCurrentTermFinancials && (
+                      <span className="ml-1 text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{viewTerm}연차 기준 · 읽기전용</span>
+                    )}
                   </label>
-                  <input className={`${inp} w-full bg-white`} value={draft.assignedManagerPrimary ?? ""}
-                    onChange={(e) => setDraft((p) => ({ ...p, assignedManagerPrimary: e.target.value }))} placeholder="담당자명" />
-                  <div className="grid grid-cols-2 gap-2 mt-1.5">
-                    <input className={`${inp} w-full bg-white`} value={draft.assignedManagerPrimaryPhone ?? ""}
-                      onChange={(e) => setDraft((p) => ({ ...p, assignedManagerPrimaryPhone: e.target.value }))} placeholder="연락처" />
-                    <input className={`${inp} w-full bg-white`} value={draft.assignedManagerPrimaryEmail ?? ""}
-                      onChange={(e) => setDraft((p) => ({ ...p, assignedManagerPrimaryEmail: e.target.value }))} placeholder="이메일" />
-                  </div>
+                  {isCurrentTermFinancials ? (
+                    <>
+                      <input className={`${inp} w-full bg-white`} value={draft.assignedManagerPrimary ?? ""}
+                        onChange={(e) => setDraft((p) => ({ ...p, assignedManagerPrimary: e.target.value }))} placeholder="담당자명" />
+                      <div className="grid grid-cols-2 gap-2 mt-1.5">
+                        <input className={`${inp} w-full bg-white`} value={draft.assignedManagerPrimaryPhone ?? ""}
+                          onChange={(e) => setDraft((p) => ({ ...p, assignedManagerPrimaryPhone: e.target.value }))} placeholder="연락처" />
+                        <input className={`${inp} w-full bg-white`} value={draft.assignedManagerPrimaryEmail ?? ""}
+                          onChange={(e) => setDraft((p) => ({ ...p, assignedManagerPrimaryEmail: e.target.value }))} placeholder="이메일" />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500">
+                        {viewAssignedManagerPrimary || "기록 없음"}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 mt-1.5">
+                        <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500 truncate">
+                          {viewAssignedManagerPrimaryPhone || "연락처 없음"}
+                        </div>
+                        <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500 truncate">
+                          {viewAssignedManagerPrimaryEmail || "이메일 없음"}
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-500 mb-1">
@@ -982,9 +1040,22 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                       </div>
                     </>
                   ) : (
-                    <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500">
-                      {viewAssignedManager || "기록 없음"}
-                    </div>
+                    <>
+                      <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500">
+                        {viewAssignedManager || "기록 없음"}
+                      </div>
+                      {/* 연락처·이메일도 이름과 마찬가지로 그 연차 당시 이력값을 보여준다(이력이 없으면
+                          비어있음) — 지금 등록된 최신 연락처가 아니라, 그 연차 시점에 담당했던 사람의
+                          연락처다. */}
+                      <div className="grid grid-cols-2 gap-2 mt-1.5">
+                        <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500 truncate">
+                          {viewAssignedManagerPhone || "연락처 없음"}
+                        </div>
+                        <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500 truncate">
+                          {viewAssignedManagerEmail || "이메일 없음"}
+                        </div>
+                      </div>
+                    </>
                   )}
                 </div>
               </div>

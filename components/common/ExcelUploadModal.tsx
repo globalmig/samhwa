@@ -444,14 +444,22 @@ export interface ProjectScalarInfo {
   // 하나로 통일돼야 하는 다른 스칼라 값들과 달리 연차별로 따로 모은다. "연차별기관별" 시트에만
   // 연차 값이 있어(termNumber 있는 행만) 채워진다.
   assignedManagersByTerm: Map<number, string>;
-  // 과제담당자(정)는 부담당자와 달리 연차별 이력을 쌓지 않는 단순 스칼라값이다 — 다른 값들과 같은
-  // 규칙으로, 같은 과제의 여러 행에서 값이 갈리면 자동 반영하지 않고 이슈로 남긴다.
+  // 과제담당자(정)도 (부)와 동일하게 인사이동 등으로 연차마다 바뀔 수 있어 이름·연락처·이메일 모두
+  // 연차별로 따로 모은다(...Primary는 과제 전체에 값이 하나로 모아지는지 확인용 스칼라 집합,
+  // ...PrimaryByTerm은 연차별 이력 구성용 — assignedManagers(By Term)와 동일한 이중 구조).
   assignedManagersPrimary: Set<string>;
-  // 과제담당자(정)/(부)의 연락처·이메일 — 이름과 마찬가지로 단순 스칼라값(연차별 이력 없음)이다.
   assignedManagerPrimaryPhones: Set<string>;
   assignedManagerPrimaryEmails: Set<string>;
+  assignedManagersPrimaryByTerm: Map<number, string>;
+  assignedManagerPrimaryPhonesByTerm: Map<number, string>;
+  assignedManagerPrimaryEmailsByTerm: Map<number, string>;
+  // 과제담당자(부)의 연락처·이메일 — 이름(assignedManagersByTerm)과 동일하게 연차마다 달라질 수 있어
+  // "연차별기관별" 시트 값을 연차별로 따로 모은다(assignedManagerPhones/Emails는 과제 전체에 값이
+  // 하나로 모아지는지 확인용 스칼라 집합, ...ByTerm은 연차별 이력 구성용).
   assignedManagerPhones: Set<string>;
   assignedManagerEmails: Set<string>;
+  assignedManagerPhonesByTerm: Map<number, string>;
+  assignedManagerEmailsByTerm: Map<number, string>;
   researchLeads: Set<string>;     // 주관기관 기관책임자
   researchLeadEmails: Set<string>; // 주관기관 "책임자 메일주소"
   isAutonomyTrack: boolean;
@@ -472,6 +480,8 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
       info = {
         projectNames: new Set(), assignedManagers: new Set(), assignedManagersByTerm: new Map(), assignedManagersPrimary: new Set(), researchLeads: new Set(),
         assignedManagerPrimaryPhones: new Set(), assignedManagerPrimaryEmails: new Set(), assignedManagerPhones: new Set(), assignedManagerEmails: new Set(),
+        assignedManagersPrimaryByTerm: new Map(), assignedManagerPrimaryPhonesByTerm: new Map(), assignedManagerPrimaryEmailsByTerm: new Map(),
+        assignedManagerPhonesByTerm: new Map(), assignedManagerEmailsByTerm: new Map(),
         researchLeadEmails: new Set(),
         isAutonomyTrack: false, projectCategories: new Set(), agencyAssignedAts: new Set(), internalAssignedAts: new Set(),
         startDates: new Set(),
@@ -508,16 +518,46 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
       }
 
       const managerPrimary = get("assignedManagerPrimary", row);
-      if (managerPrimary) info.assignedManagersPrimary.add(managerPrimary);
+      if (managerPrimary) {
+        info.assignedManagersPrimary.add(managerPrimary);
+        if (sheet.def.key === "annual") {
+          const termNumber = parseInt(get("termYear", row), 10) || 0;
+          if (termNumber > 0) info.assignedManagersPrimaryByTerm.set(termNumber, managerPrimary);
+        }
+      }
 
       const managerPrimaryPhone = get("assignedManagerPrimaryPhone", row);
-      if (managerPrimaryPhone) info.assignedManagerPrimaryPhones.add(managerPrimaryPhone);
+      if (managerPrimaryPhone) {
+        info.assignedManagerPrimaryPhones.add(managerPrimaryPhone);
+        if (sheet.def.key === "annual") {
+          const termNumber = parseInt(get("termYear", row), 10) || 0;
+          if (termNumber > 0) info.assignedManagerPrimaryPhonesByTerm.set(termNumber, managerPrimaryPhone);
+        }
+      }
       const managerPrimaryEmail = get("assignedManagerPrimaryEmail", row);
-      if (managerPrimaryEmail) info.assignedManagerPrimaryEmails.add(managerPrimaryEmail);
+      if (managerPrimaryEmail) {
+        info.assignedManagerPrimaryEmails.add(managerPrimaryEmail);
+        if (sheet.def.key === "annual") {
+          const termNumber = parseInt(get("termYear", row), 10) || 0;
+          if (termNumber > 0) info.assignedManagerPrimaryEmailsByTerm.set(termNumber, managerPrimaryEmail);
+        }
+      }
       const managerPhone = get("assignedManagerPhone", row);
-      if (managerPhone) info.assignedManagerPhones.add(managerPhone);
+      if (managerPhone) {
+        info.assignedManagerPhones.add(managerPhone);
+        if (sheet.def.key === "annual") {
+          const termNumber = parseInt(get("termYear", row), 10) || 0;
+          if (termNumber > 0) info.assignedManagerPhonesByTerm.set(termNumber, managerPhone);
+        }
+      }
       const managerEmail = get("assignedManagerEmail", row);
-      if (managerEmail) info.assignedManagerEmails.add(managerEmail);
+      if (managerEmail) {
+        info.assignedManagerEmails.add(managerEmail);
+        if (sheet.def.key === "annual") {
+          const termNumber = parseInt(get("termYear", row), 10) || 0;
+          if (termNumber > 0) info.assignedManagerEmailsByTerm.set(termNumber, managerEmail);
+        }
+      }
 
       if (get("autonomyTrack", row) === "자율성트랙") info.isAutonomyTrack = true;
 
@@ -598,19 +638,53 @@ function mergeAnnualFinancials(
 }
 
 // scalarInfo.assignedManagersByTerm(연차→담당자)을 Project.assignedManagerHistory 배열로 바꾼다.
-function buildAssignedManagerHistory(scalarInfo: ProjectScalarInfo | undefined): { termNumber: number; assignedManager: string }[] {
+type AssignedManagerHistoryEntry = { termNumber: number; assignedManager: string; assignedManagerPhone?: string; assignedManagerEmail?: string };
+type AssignedManagerPrimaryHistoryEntry = { termNumber: number; assignedManagerPrimary: string; assignedManagerPrimaryPhone?: string; assignedManagerPrimaryEmail?: string };
+
+// 이름뿐 아니라 연락처·이메일도 연차마다 달라질 수 있어(담당자가 바뀌면 그 사람의 연락처로) 같은
+// 연차에 관측된 세 값을 하나의 이력 행으로 묶는다 — 연차에 이름은 있는데 연락처가 없으면(엑셀에
+// 연락처 컬럼을 안 채운 경우) 그 항목만 비워둔다.
+function buildAssignedManagerHistory(scalarInfo: ProjectScalarInfo | undefined): AssignedManagerHistoryEntry[] {
   if (!scalarInfo) return [];
-  return Array.from(scalarInfo.assignedManagersByTerm.entries())
-    .map(([termNumber, assignedManager]) => ({ termNumber, assignedManager }))
+  const termNumbers = new Set<number>([
+    ...scalarInfo.assignedManagersByTerm.keys(),
+    ...scalarInfo.assignedManagerPhonesByTerm.keys(),
+    ...scalarInfo.assignedManagerEmailsByTerm.keys(),
+  ]);
+  return Array.from(termNumbers)
+    .map((termNumber) => ({
+      termNumber,
+      assignedManager: scalarInfo.assignedManagersByTerm.get(termNumber) ?? "",
+      assignedManagerPhone: scalarInfo.assignedManagerPhonesByTerm.get(termNumber),
+      assignedManagerEmail: scalarInfo.assignedManagerEmailsByTerm.get(termNumber),
+    }))
+    .sort((a, b) => a.termNumber - b.termNumber);
+}
+
+// buildAssignedManagerHistory와 동일한 방식으로 과제담당자(정)의 연차별 이력을 만든다.
+function buildAssignedManagerPrimaryHistory(scalarInfo: ProjectScalarInfo | undefined): AssignedManagerPrimaryHistoryEntry[] {
+  if (!scalarInfo) return [];
+  const termNumbers = new Set<number>([
+    ...scalarInfo.assignedManagersPrimaryByTerm.keys(),
+    ...scalarInfo.assignedManagerPrimaryPhonesByTerm.keys(),
+    ...scalarInfo.assignedManagerPrimaryEmailsByTerm.keys(),
+  ]);
+  return Array.from(termNumbers)
+    .map((termNumber) => ({
+      termNumber,
+      assignedManagerPrimary: scalarInfo.assignedManagersPrimaryByTerm.get(termNumber) ?? "",
+      assignedManagerPrimaryPhone: scalarInfo.assignedManagerPrimaryPhonesByTerm.get(termNumber),
+      assignedManagerPrimaryEmail: scalarInfo.assignedManagerPrimaryEmailsByTerm.get(termNumber),
+    }))
     .sort((a, b) => a.termNumber - b.termNumber);
 }
 
 // 이번에 업로드된 연차만 덮어쓰고, 파일에 없는 과거/미래 연차의 기존 담당자 이력은 보존한다 —
-// annualFinancials/annualBudgets와 동일한 병합 규칙.
-function mergeAssignedManagerHistory(
-  existing: { termNumber: number; assignedManager: string }[] | undefined,
-  updates: { termNumber: number; assignedManager: string }[],
-): { termNumber: number; assignedManager: string }[] | undefined {
+// annualFinancials/annualBudgets와 동일한 병합 규칙. 과제담당자(정)/(부) 이력 모두 이 규칙을 공유한다.
+function mergeTermHistory<T extends { termNumber: number }>(
+  existing: T[] | undefined,
+  updates: T[],
+): T[] | undefined {
   if (updates.length === 0) return existing;
   const updatedTermNumbers = new Set(updates.map((u) => u.termNumber));
   const kept = (existing ?? []).filter((e) => !updatedTermNumbers.has(e.termNumber));
@@ -2223,12 +2297,14 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         const startDateStr = row.startDate || today;
 
         // 과제담당자·연구책임자·자율성트랙 — 같은 과제의 여러 행에서 값이 하나로 모아질 때만 채택.
-        // 값이 갈리면 여기서 비워두고, 아래에서 이슈로 남겨 확인을 요청한다.
+        // 값이 갈리면 여기서 비워두고, 아래에서 이슈로 남겨 확인을 요청한다. 과제담당자(정)/(부)는
+        // 연차별 이력이 있어(아래 resolvedAssignedManagerPrimary/resolvedAssignedManager) 이 스칼라
+        // 값은 termYear가 없는 행(예: 단계기관별 시트)을 위한 폴백으로만 쓰인다.
         const scalarInfo = scalarAggregates.get(normNum);
         const assignedManager = scalarInfo?.assignedManagers.size === 1 ? [...scalarInfo.assignedManagers][0] : undefined;
-        const assignedManagerPrimary = scalarInfo?.assignedManagersPrimary.size === 1 ? [...scalarInfo.assignedManagersPrimary][0] : undefined;
-        const assignedManagerPrimaryPhone = scalarInfo?.assignedManagerPrimaryPhones.size === 1 ? [...scalarInfo.assignedManagerPrimaryPhones][0] : undefined;
-        const assignedManagerPrimaryEmail = scalarInfo?.assignedManagerPrimaryEmails.size === 1 ? [...scalarInfo.assignedManagerPrimaryEmails][0] : undefined;
+        const assignedManagerPrimaryFallback = scalarInfo?.assignedManagersPrimary.size === 1 ? [...scalarInfo.assignedManagersPrimary][0] : undefined;
+        const assignedManagerPrimaryPhoneFallback = scalarInfo?.assignedManagerPrimaryPhones.size === 1 ? [...scalarInfo.assignedManagerPrimaryPhones][0] : undefined;
+        const assignedManagerPrimaryEmailFallback = scalarInfo?.assignedManagerPrimaryEmails.size === 1 ? [...scalarInfo.assignedManagerPrimaryEmails][0] : undefined;
         const assignedManagerPhone = scalarInfo?.assignedManagerPhones.size === 1 ? [...scalarInfo.assignedManagerPhones][0] : undefined;
         const assignedManagerEmail = scalarInfo?.assignedManagerEmails.size === 1 ? [...scalarInfo.assignedManagerEmails][0] : undefined;
         const researchLead = scalarInfo?.researchLeads.size === 1 ? [...scalarInfo.researchLeads][0] : undefined;
@@ -2262,6 +2338,13 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         // 파일에 담긴 연차 전체 이력은 Project.assignedManagerHistory에 그대로 쌓는다.
         const assignedManagerHistory = buildAssignedManagerHistory(scalarInfo);
         const resolvedAssignedManager = scalarInfo?.assignedManagersByTerm.get(currentTerm) ?? assignedManager;
+        const resolvedAssignedManagerPhone = scalarInfo?.assignedManagerPhonesByTerm.get(currentTerm) ?? assignedManagerPhone;
+        const resolvedAssignedManagerEmail = scalarInfo?.assignedManagerEmailsByTerm.get(currentTerm) ?? assignedManagerEmail;
+        // 과제담당자(정)도 (부)와 동일하게 연차별 이력을 우선 채택한다.
+        const assignedManagerPrimaryHistory = buildAssignedManagerPrimaryHistory(scalarInfo);
+        const resolvedAssignedManagerPrimary = scalarInfo?.assignedManagersPrimaryByTerm.get(currentTerm) ?? assignedManagerPrimaryFallback;
+        const resolvedAssignedManagerPrimaryPhone = scalarInfo?.assignedManagerPrimaryPhonesByTerm.get(currentTerm) ?? assignedManagerPrimaryPhoneFallback;
+        const resolvedAssignedManagerPrimaryEmail = scalarInfo?.assignedManagerPrimaryEmailsByTerm.get(currentTerm) ?? assignedManagerPrimaryEmailFallback;
 
         // 현재 연차가 속한 단계의 실제 날짜 범위(있으면) → 단계시작일/단계종료일
         const currentStage = stages?.find((s) => currentTerm >= s.startTermNumber && currentTerm <= s.endTermNumber);
@@ -2313,12 +2396,13 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             firstStartDate: overallStartDate ?? renamedFrom.firstStartDate,
             finalEndDate: overallEndDate ?? renamedFrom.finalEndDate,
             assignedManager: resolvedAssignedManager ?? renamedFrom.assignedManager,
-            assignedManagerHistory: mergeAssignedManagerHistory(renamedFrom.assignedManagerHistory, assignedManagerHistory),
-            assignedManagerPrimary: assignedManagerPrimary ?? renamedFrom.assignedManagerPrimary,
-            assignedManagerPrimaryPhone: assignedManagerPrimaryPhone ?? renamedFrom.assignedManagerPrimaryPhone,
-            assignedManagerPrimaryEmail: assignedManagerPrimaryEmail ?? renamedFrom.assignedManagerPrimaryEmail,
-            assignedManagerPhone: assignedManagerPhone ?? renamedFrom.assignedManagerPhone,
-            assignedManagerEmail: assignedManagerEmail ?? renamedFrom.assignedManagerEmail,
+            assignedManagerHistory: mergeTermHistory(renamedFrom.assignedManagerHistory, assignedManagerHistory),
+            assignedManagerPrimary: resolvedAssignedManagerPrimary ?? renamedFrom.assignedManagerPrimary,
+            assignedManagerPrimaryPhone: resolvedAssignedManagerPrimaryPhone ?? renamedFrom.assignedManagerPrimaryPhone,
+            assignedManagerPrimaryEmail: resolvedAssignedManagerPrimaryEmail ?? renamedFrom.assignedManagerPrimaryEmail,
+            assignedManagerPrimaryHistory: mergeTermHistory(renamedFrom.assignedManagerPrimaryHistory, assignedManagerPrimaryHistory),
+            assignedManagerPhone: resolvedAssignedManagerPhone ?? renamedFrom.assignedManagerPhone,
+            assignedManagerEmail: resolvedAssignedManagerEmail ?? renamedFrom.assignedManagerEmail,
             researchLead: researchLead ?? renamedFrom.researchLead,
             researchLeadEmail: researchLeadEmail ?? renamedFrom.researchLeadEmail,
             agencyAssignedAt: agencyAssignedAt ?? renamedFrom.agencyAssignedAt,
@@ -2357,11 +2441,12 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             finalEndDate: overallEndDate,
             assignedManager: resolvedAssignedManager,
             assignedManagerHistory: assignedManagerHistory.length > 0 ? assignedManagerHistory : undefined,
-            assignedManagerPrimary,
-            assignedManagerPrimaryPhone,
-            assignedManagerPrimaryEmail,
-            assignedManagerPhone,
-            assignedManagerEmail,
+            assignedManagerPrimary: resolvedAssignedManagerPrimary,
+            assignedManagerPrimaryPhone: resolvedAssignedManagerPrimaryPhone,
+            assignedManagerPrimaryEmail: resolvedAssignedManagerPrimaryEmail,
+            assignedManagerPrimaryHistory: assignedManagerPrimaryHistory.length > 0 ? assignedManagerPrimaryHistory : undefined,
+            assignedManagerPhone: resolvedAssignedManagerPhone,
+            assignedManagerEmail: resolvedAssignedManagerEmail,
             researchLead,
             researchLeadEmail,
             agencyAssignedAt,
@@ -2583,9 +2668,9 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         // scalarInfo가 이번 파일에서 값을 하나로 특정하지 못하면(비어 있거나 여전히 갈리면) 기존 값을 유지한다.
         const scalarInfo = scalarAggregates.get(info.normNum);
         const assignedManager = scalarInfo?.assignedManagers.size === 1 ? [...scalarInfo.assignedManagers][0] : undefined;
-        const assignedManagerPrimary = scalarInfo?.assignedManagersPrimary.size === 1 ? [...scalarInfo.assignedManagersPrimary][0] : undefined;
-        const assignedManagerPrimaryPhone = scalarInfo?.assignedManagerPrimaryPhones.size === 1 ? [...scalarInfo.assignedManagerPrimaryPhones][0] : undefined;
-        const assignedManagerPrimaryEmail = scalarInfo?.assignedManagerPrimaryEmails.size === 1 ? [...scalarInfo.assignedManagerPrimaryEmails][0] : undefined;
+        const assignedManagerPrimaryFallback = scalarInfo?.assignedManagersPrimary.size === 1 ? [...scalarInfo.assignedManagersPrimary][0] : undefined;
+        const assignedManagerPrimaryPhoneFallback = scalarInfo?.assignedManagerPrimaryPhones.size === 1 ? [...scalarInfo.assignedManagerPrimaryPhones][0] : undefined;
+        const assignedManagerPrimaryEmailFallback = scalarInfo?.assignedManagerPrimaryEmails.size === 1 ? [...scalarInfo.assignedManagerPrimaryEmails][0] : undefined;
         const assignedManagerPhone = scalarInfo?.assignedManagerPhones.size === 1 ? [...scalarInfo.assignedManagerPhones][0] : undefined;
         const assignedManagerEmail = scalarInfo?.assignedManagerEmails.size === 1 ? [...scalarInfo.assignedManagerEmails][0] : undefined;
         const researchLead = scalarInfo?.researchLeads.size === 1 ? [...scalarInfo.researchLeads][0] : undefined;
@@ -2593,8 +2678,15 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         const agencyAssignedAt = scalarInfo?.agencyAssignedAts.size === 1 ? [...scalarInfo.agencyAssignedAts][0] : undefined;
         const internalAssignedAt = scalarInfo?.internalAssignedAts.size === 1 ? [...scalarInfo.internalAssignedAts][0] : undefined;
         // 담당자는 연차별 이력이 있으면(연차마다 다른 사람) 이번에 반영되는 연차 값을 우선 채택한다.
+        // 과제담당자(정)/(부) 모두 이름·연락처·이메일 전부 동일한 규칙을 따른다.
         const assignedManagerHistory = buildAssignedManagerHistory(scalarInfo);
         const resolvedAssignedManager = scalarInfo?.assignedManagersByTerm.get(nextCurrentTerm) ?? assignedManager;
+        const resolvedAssignedManagerPhone = scalarInfo?.assignedManagerPhonesByTerm.get(nextCurrentTerm) ?? assignedManagerPhone;
+        const resolvedAssignedManagerEmail = scalarInfo?.assignedManagerEmailsByTerm.get(nextCurrentTerm) ?? assignedManagerEmail;
+        const assignedManagerPrimaryHistory = buildAssignedManagerPrimaryHistory(scalarInfo);
+        const resolvedAssignedManagerPrimary = scalarInfo?.assignedManagersPrimaryByTerm.get(nextCurrentTerm) ?? assignedManagerPrimaryFallback;
+        const resolvedAssignedManagerPrimaryPhone = scalarInfo?.assignedManagerPrimaryPhonesByTerm.get(nextCurrentTerm) ?? assignedManagerPrimaryPhoneFallback;
+        const resolvedAssignedManagerPrimaryEmail = scalarInfo?.assignedManagerPrimaryEmailsByTerm.get(nextCurrentTerm) ?? assignedManagerPrimaryEmailFallback;
 
         Object.assign(updates, {
           currentTerm: nextCurrentTerm,
@@ -2604,12 +2696,13 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           privateInKind: privateInKind > 0 ? privateInKind : existingProject.privateInKind,
           annualFinancials: mergeAnnualFinancials(existingProject.annualFinancials, allTermFinancials),
           assignedManager: resolvedAssignedManager ?? existingProject.assignedManager,
-          assignedManagerHistory: mergeAssignedManagerHistory(existingProject.assignedManagerHistory, assignedManagerHistory),
-          assignedManagerPrimary: assignedManagerPrimary ?? existingProject.assignedManagerPrimary,
-          assignedManagerPrimaryPhone: assignedManagerPrimaryPhone ?? existingProject.assignedManagerPrimaryPhone,
-          assignedManagerPrimaryEmail: assignedManagerPrimaryEmail ?? existingProject.assignedManagerPrimaryEmail,
-          assignedManagerPhone: assignedManagerPhone ?? existingProject.assignedManagerPhone,
-          assignedManagerEmail: assignedManagerEmail ?? existingProject.assignedManagerEmail,
+          assignedManagerHistory: mergeTermHistory(existingProject.assignedManagerHistory, assignedManagerHistory),
+          assignedManagerPrimary: resolvedAssignedManagerPrimary ?? existingProject.assignedManagerPrimary,
+          assignedManagerPrimaryPhone: resolvedAssignedManagerPrimaryPhone ?? existingProject.assignedManagerPrimaryPhone,
+          assignedManagerPrimaryEmail: resolvedAssignedManagerPrimaryEmail ?? existingProject.assignedManagerPrimaryEmail,
+          assignedManagerPrimaryHistory: mergeTermHistory(existingProject.assignedManagerPrimaryHistory, assignedManagerPrimaryHistory),
+          assignedManagerPhone: resolvedAssignedManagerPhone ?? existingProject.assignedManagerPhone,
+          assignedManagerEmail: resolvedAssignedManagerEmail ?? existingProject.assignedManagerEmail,
           researchLead: researchLead ?? existingProject.researchLead,
           researchLeadEmail: researchLeadEmail ?? existingProject.researchLeadEmail,
           agencyAssignedAt: agencyAssignedAt ?? existingProject.agencyAssignedAt,
@@ -2706,12 +2799,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         if (scalarInfo.projectNames.size > 1) {
           reasons.push(`같은 과제번호인데 과제명이 서로 다릅니다: ${[...scalarInfo.projectNames].join(" / ")}`);
         }
-        // 과제담당자(부)는 연차마다 바뀔 수 있어(인사이동 등) assignedManagersByTerm으로 연차별 이력을
-        // 그대로 반영하므로, 값이 여러 개라고 해서 확인 이슈로 남기지 않는다. 과제담당자(정)은 연차별
-        // 이력을 두지 않는 단순값이라 다른 스칼라값과 동일하게 갈리면 이슈로 남긴다.
-        if (scalarInfo.assignedManagersPrimary.size > 1) {
-          reasons.push(`같은 과제번호인데 과제담당자(정)가 서로 달라 등록하지 않았습니다: ${[...scalarInfo.assignedManagersPrimary].join(" / ")}`);
-        }
+        // 과제담당자(정)/(부) 모두 연차마다 바뀔 수 있어(인사이동 등) ...ByTerm으로 연차별 이력을
+        // 그대로 반영하므로, 값이 여러 개라고 해서 확인 이슈로 남기지 않는다.
         if (scalarInfo.researchLeads.size > 1) {
           reasons.push(`주관기관 기관책임자(연구책임자)가 서로 달라 등록하지 않았습니다: ${[...scalarInfo.researchLeads].join(" / ")}`);
         }

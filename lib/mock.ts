@@ -565,19 +565,19 @@ export interface Project {
   programType?: "GENERAL" | "ICT_FUND";        // 일반 R&D과제 | ICT 기금사업 (IITP 전용 별도 수수료체계)
   // 서류요청일/회신일(공문발송일)은 기관별로 다를 수 있어(RDA2 등 기관별 개별청구 과제) TermFee.docRequestDate/
   // docReplyDate로 관리한다 — 과제 레벨엔 두지 않는다.
-  // 과제담당자(정) — 부담당자와 달리 연차별 이력을 따로 쌓지 않는다(엑셀 업로드 시점 값을 그대로 유지).
+  // 과제담당자(정) — 부담당자와 마찬가지로 인사이동 등으로 연차마다 바뀔 수 있어 연차별 이력을
+  // assignedManagerPrimaryHistory에 따로 쌓는다. 이 필드 자체는 "현재 진행 연차" 값만 담는다.
   assignedManagerPrimary?: string;
-  // 과제담당자(정)의 연락처·이메일 — 책임자이메일/실무자이메일과 동일하게 엑셀 업로드(또는 과제 정보
-  // 수정에서 수동 입력)로 채워지고, 정산절차 안내 공문의 "문의사항 연락처" 표에 자동 반영된다(별도
-  // 명부를 두지 않고 과제 자체에 바로 저장 — resolveAutoDetectedAgencyId처럼 이름으로 딴 데서 찾지 않음).
   assignedManagerPrimaryPhone?: string;
   assignedManagerPrimaryEmail?: string;
+  assignedManagerPrimaryHistory?: { termNumber: number; assignedManagerPrimary: string; assignedManagerPrimaryPhone?: string; assignedManagerPrimaryEmail?: string }[];
   // 과제담당자(부) — 예전엔 "삼화담당자"라 불렸다. 현재 진행연차 기준 값이며, 담당자 배정은 인사이동
   // 등으로 연차마다 바뀔 수 있어 연차별 이력은 assignedManagerHistory에 따로 쌓는다.
   assignedManager?: string;
-  assignedManagerHistory?: { termNumber: number; assignedManager: string }[];
-  // 과제담당자(부)의 연락처·이메일 — assignedManagerPrimaryPhone/Email과 동일한 방식(과제담당자(정)과
-  // 달리 이 값 자체는 연차별 이력을 두지 않는다 — 이름만 바뀌어도 연락처는 그때그때 최신값으로 덮어쓴다).
+  // 이름과 마찬가지로 연락처·이메일도 인사이동에 따라 그때그때 달라질 수 있어(이전 담당자의 연락처를
+  // 나중에 그 연차를 다시 볼 때도 그대로 보여줘야 함) 이력 배열에 함께 쌓는다.
+  assignedManagerHistory?: { termNumber: number; assignedManager: string; assignedManagerPhone?: string; assignedManagerEmail?: string }[];
+  // 과제담당자(부)의 "현재 진행 연차" 연락처·이메일 — 과거 연차 값은 assignedManagerHistory에서 찾는다.
   assignedManagerPhone?: string;
   assignedManagerEmail?: string;
   registeredAt?: string;    // 과제 등록일 — 연도별 대시보드 집계 기준(배정일). 과거 데이터는 미입력일 수 있음
