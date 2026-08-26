@@ -126,7 +126,10 @@ function parseSheet(wb: XLSX.WorkBook, sheetName: string, institutions: Institut
   const nameIdx = header.indexOf("기관명");
   const rcmsNameIdx = header.findIndex((h) => h.includes("RCMS") && h.includes("기관명"));
 
-  // "연구지원체계 등급(...)" 컬럼 중 날짜가 가장 최신인 컬럼을 채택
+  // "연구지원체계 등급(...)" 컬럼 중 날짜가 가장 최신인 컬럼을 채택한다. 날짜 표기가 없는(또는
+  // "(YYYY.MM.DD)" 형식과 다른) "연구지원체계 등급" 컬럼만 있는 파일도 있을 수 있으므로, 날짜로
+  // 골라낼 컬럼이 하나도 없으면 "연구지원체계 등급"으로 시작하는 첫 번째 컬럼을 그대로 채택한다
+  // — 안 그러면 날짜 없이 이 컬럼 하나만 있는(사용자가 직접 만든) 정상 파일도 계속 거부당한다.
   let gradeIdx = -1;
   let latestDate = -1;
   header.forEach((h, i) => {
@@ -134,6 +137,9 @@ function parseSheet(wb: XLSX.WorkBook, sheetName: string, institutions: Institut
     const d = extractHeaderDate(h);
     if (d !== null && d > latestDate) { latestDate = d; gradeIdx = i; }
   });
+  if (gradeIdx === -1) {
+    gradeIdx = header.findIndex((h) => h.startsWith("연구지원체계 등급"));
+  }
   if (gradeIdx === -1) {
     return { error: '"연구지원체계 등급" 컬럼을 찾을 수 없습니다. 파일 형식을 확인해주세요.' };
   }
