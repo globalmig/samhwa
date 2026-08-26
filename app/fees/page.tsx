@@ -3077,9 +3077,11 @@ export default function FeesPage() {
                           </td>
                         );
                       })}
-                      {/* 공문발송 드롭다운 — 회계담당자만 발송 가능 */}
+                      {/* 공문발송 드롭다운 — 회계담당자만 발송 가능. 세금계산서 발행 전에도 청구서 공문을
+                          보낼 수 있어야 하므로(과제 상세 페이지의 BillingBlock과 동일 기준) 발행 여부와
+                          무관하게 항상 노출한다 — 금액은 아직 없으면 산정액 기준 예상치로 채워진다. */}
                       <td className={`px-3 py-2.5 text-center align-middle w-24 ${rowBorder}`}>
-                        {canEditEmails && row.taxInvoiceId && row.taxInvoiceStatus !== "CANCELED" ? (
+                        {canEditEmails ? (
                           <DispatchDropdown
                             onSelect={(choice) => {
                               const dispatchProject = projects.find((p) => p.id === row.projectId);
