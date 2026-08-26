@@ -26,9 +26,10 @@ import {
   recalcProjectTotalBudget,
   setTermOtherFirmHandled,
 } from "@/lib/store";
-import type { Project, ProjectMember, AnnualBudget, AnnualFinancials, Institution } from "@/lib/mock";
+import type { Project, ProjectMember, AnnualBudget, AnnualFinancials, Institution, SystemUser } from "@/lib/mock";
 import { getCurrentUser } from "@/lib/auth";
 import { isSettlementTerm, resolveAutoDetectedAgencyId } from "@/lib/fee-calculator";
+import ManagerPickerModal from "@/components/common/ManagerPickerModal";
 
 type InstitutionGrade = NonNullable<ProjectMember["institutionGrade"]>;
 
@@ -444,22 +445,13 @@ export interface ProjectScalarInfo {
   // 하나로 통일돼야 하는 다른 스칼라 값들과 달리 연차별로 따로 모은다. "연차별기관별" 시트에만
   // 연차 값이 있어(termNumber 있는 행만) 채워진다.
   assignedManagersByTerm: Map<number, string>;
-  // 과제담당자(정)도 (부)와 동일하게 인사이동 등으로 연차마다 바뀔 수 있어 이름·연락처·이메일 모두
-  // 연차별로 따로 모은다(...Primary는 과제 전체에 값이 하나로 모아지는지 확인용 스칼라 집합,
+  // 과제담당자(정)도 (부)와 동일하게 인사이동 등으로 연차마다 바뀔 수 있어 이름을 연차별로 따로
+  // 모은다(assignedManagersPrimary는 과제 전체에 값이 하나로 모아지는지 확인용 스칼라 집합,
   // ...PrimaryByTerm은 연차별 이력 구성용 — assignedManagers(By Term)와 동일한 이중 구조).
+  // 연락처·이메일은 더 이상 여기서 다루지 않는다 — 공문 발송 시 이 이름으로 [권한관리](SystemUser)를
+  // 찾아 쓰므로(lib/notice-contacts.ts) 엑셀에 실을 필요가 없다.
   assignedManagersPrimary: Set<string>;
-  assignedManagerPrimaryPhones: Set<string>;
-  assignedManagerPrimaryEmails: Set<string>;
   assignedManagersPrimaryByTerm: Map<number, string>;
-  assignedManagerPrimaryPhonesByTerm: Map<number, string>;
-  assignedManagerPrimaryEmailsByTerm: Map<number, string>;
-  // 과제담당자(부)의 연락처·이메일 — 이름(assignedManagersByTerm)과 동일하게 연차마다 달라질 수 있어
-  // "연차별기관별" 시트 값을 연차별로 따로 모은다(assignedManagerPhones/Emails는 과제 전체에 값이
-  // 하나로 모아지는지 확인용 스칼라 집합, ...ByTerm은 연차별 이력 구성용).
-  assignedManagerPhones: Set<string>;
-  assignedManagerEmails: Set<string>;
-  assignedManagerPhonesByTerm: Map<number, string>;
-  assignedManagerEmailsByTerm: Map<number, string>;
   researchLeads: Set<string>;     // 주관기관 기관책임자
   researchLeadEmails: Set<string>; // 주관기관 "책임자 메일주소"
   isAutonomyTrack: boolean;
@@ -479,9 +471,7 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
     if (!info) {
       info = {
         projectNames: new Set(), assignedManagers: new Set(), assignedManagersByTerm: new Map(), assignedManagersPrimary: new Set(), researchLeads: new Set(),
-        assignedManagerPrimaryPhones: new Set(), assignedManagerPrimaryEmails: new Set(), assignedManagerPhones: new Set(), assignedManagerEmails: new Set(),
-        assignedManagersPrimaryByTerm: new Map(), assignedManagerPrimaryPhonesByTerm: new Map(), assignedManagerPrimaryEmailsByTerm: new Map(),
-        assignedManagerPhonesByTerm: new Map(), assignedManagerEmailsByTerm: new Map(),
+        assignedManagersPrimaryByTerm: new Map(),
         researchLeadEmails: new Set(),
         isAutonomyTrack: false, projectCategories: new Set(), agencyAssignedAts: new Set(), internalAssignedAts: new Set(),
         startDates: new Set(),
@@ -523,39 +513,6 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
         if (sheet.def.key === "annual") {
           const termNumber = parseInt(get("termYear", row), 10) || 0;
           if (termNumber > 0) info.assignedManagersPrimaryByTerm.set(termNumber, managerPrimary);
-        }
-      }
-
-      const managerPrimaryPhone = get("assignedManagerPrimaryPhone", row);
-      if (managerPrimaryPhone) {
-        info.assignedManagerPrimaryPhones.add(managerPrimaryPhone);
-        if (sheet.def.key === "annual") {
-          const termNumber = parseInt(get("termYear", row), 10) || 0;
-          if (termNumber > 0) info.assignedManagerPrimaryPhonesByTerm.set(termNumber, managerPrimaryPhone);
-        }
-      }
-      const managerPrimaryEmail = get("assignedManagerPrimaryEmail", row);
-      if (managerPrimaryEmail) {
-        info.assignedManagerPrimaryEmails.add(managerPrimaryEmail);
-        if (sheet.def.key === "annual") {
-          const termNumber = parseInt(get("termYear", row), 10) || 0;
-          if (termNumber > 0) info.assignedManagerPrimaryEmailsByTerm.set(termNumber, managerPrimaryEmail);
-        }
-      }
-      const managerPhone = get("assignedManagerPhone", row);
-      if (managerPhone) {
-        info.assignedManagerPhones.add(managerPhone);
-        if (sheet.def.key === "annual") {
-          const termNumber = parseInt(get("termYear", row), 10) || 0;
-          if (termNumber > 0) info.assignedManagerPhonesByTerm.set(termNumber, managerPhone);
-        }
-      }
-      const managerEmail = get("assignedManagerEmail", row);
-      if (managerEmail) {
-        info.assignedManagerEmails.add(managerEmail);
-        if (sheet.def.key === "annual") {
-          const termNumber = parseInt(get("termYear", row), 10) || 0;
-          if (termNumber > 0) info.assignedManagerEmailsByTerm.set(termNumber, managerEmail);
         }
       }
 
@@ -638,45 +595,57 @@ function mergeAnnualFinancials(
 }
 
 // scalarInfo.assignedManagersByTerm(연차→담당자)을 Project.assignedManagerHistory 배열로 바꾼다.
-type AssignedManagerHistoryEntry = { termNumber: number; assignedManager: string; assignedManagerPhone?: string; assignedManagerEmail?: string };
-type AssignedManagerPrimaryHistoryEntry = { termNumber: number; assignedManagerPrimary: string; assignedManagerPrimaryPhone?: string; assignedManagerPrimaryEmail?: string };
+// 연락처·이메일은 여기 담지 않는다 — 공문 발송 시 이 이름으로 [권한관리](SystemUser)를 찾아 쓴다.
+type AssignedManagerHistoryEntry = { termNumber: number; assignedManager: string };
+type AssignedManagerPrimaryHistoryEntry = { termNumber: number; assignedManagerPrimary: string };
 
-// 이름뿐 아니라 연락처·이메일도 연차마다 달라질 수 있어(담당자가 바뀌면 그 사람의 연락처로) 같은
-// 연차에 관측된 세 값을 하나의 이력 행으로 묶는다 — 연차에 이름은 있는데 연락처가 없으면(엑셀에
-// 연락처 컬럼을 안 채운 경우) 그 항목만 비워둔다.
-function buildAssignedManagerHistory(scalarInfo: ProjectScalarInfo | undefined): AssignedManagerHistoryEntry[] {
+// 엑셀 이름이 [권한관리]에 없어서(managerNameResolutions에 해소 결과가 있으면) 사람이 실제 계정을
+// 골랐다면, 그 계정의 진짜 이름으로 바꿔 쓴다 — 그대로 두면 오탈자·미등록 이름이 과제에 그대로
+// 남아 정산절차 안내 공문의 "문의사항 연락처" 표에 잘못된 이름이 계속 표시된다(연락처는 id로
+// 올바르게 연동되더라도 이름 칸만 틀리게 보이는 불일치가 생김). 동명이인 해소는 애초에 후보를
+// 이름이 이미 일치하는 사람들 중에서 고르므로 이 치환이 값을 바꾸지 않는다(안전하게 공용 가능).
+function applyManagerNameResolution(name: string, resolutions: Record<string, string>, users: SystemUser[]): string {
+  const userId = resolutions[name];
+  if (!userId) return name;
+  return users.find((u) => u.id === userId)?.name ?? name;
+}
+
+function buildAssignedManagerHistory(
+  scalarInfo: ProjectScalarInfo | undefined,
+  resolutions: Record<string, string>,
+  users: SystemUser[],
+): AssignedManagerHistoryEntry[] {
   if (!scalarInfo) return [];
-  const termNumbers = new Set<number>([
-    ...scalarInfo.assignedManagersByTerm.keys(),
-    ...scalarInfo.assignedManagerPhonesByTerm.keys(),
-    ...scalarInfo.assignedManagerEmailsByTerm.keys(),
-  ]);
-  return Array.from(termNumbers)
-    .map((termNumber) => ({
-      termNumber,
-      assignedManager: scalarInfo.assignedManagersByTerm.get(termNumber) ?? "",
-      assignedManagerPhone: scalarInfo.assignedManagerPhonesByTerm.get(termNumber),
-      assignedManagerEmail: scalarInfo.assignedManagerEmailsByTerm.get(termNumber),
-    }))
+  return Array.from(scalarInfo.assignedManagersByTerm.entries())
+    .map(([termNumber, assignedManager]) => ({ termNumber, assignedManager: applyManagerNameResolution(assignedManager, resolutions, users) }))
     .sort((a, b) => a.termNumber - b.termNumber);
 }
 
 // buildAssignedManagerHistory와 동일한 방식으로 과제담당자(정)의 연차별 이력을 만든다.
-function buildAssignedManagerPrimaryHistory(scalarInfo: ProjectScalarInfo | undefined): AssignedManagerPrimaryHistoryEntry[] {
+function buildAssignedManagerPrimaryHistory(
+  scalarInfo: ProjectScalarInfo | undefined,
+  resolutions: Record<string, string>,
+  users: SystemUser[],
+): AssignedManagerPrimaryHistoryEntry[] {
   if (!scalarInfo) return [];
-  const termNumbers = new Set<number>([
-    ...scalarInfo.assignedManagersPrimaryByTerm.keys(),
-    ...scalarInfo.assignedManagerPrimaryPhonesByTerm.keys(),
-    ...scalarInfo.assignedManagerPrimaryEmailsByTerm.keys(),
-  ]);
-  return Array.from(termNumbers)
-    .map((termNumber) => ({
-      termNumber,
-      assignedManagerPrimary: scalarInfo.assignedManagersPrimaryByTerm.get(termNumber) ?? "",
-      assignedManagerPrimaryPhone: scalarInfo.assignedManagerPrimaryPhonesByTerm.get(termNumber),
-      assignedManagerPrimaryEmail: scalarInfo.assignedManagerPrimaryEmailsByTerm.get(termNumber),
-    }))
+  return Array.from(scalarInfo.assignedManagersPrimaryByTerm.entries())
+    .map(([termNumber, assignedManagerPrimary]) => ({ termNumber, assignedManagerPrimary: applyManagerNameResolution(assignedManagerPrimary, resolutions, users) }))
     .sort((a, b) => a.termNumber - b.termNumber);
+}
+
+// 담당자 이름이 [권한관리]에 동명이인으로 등록돼 있거나(2명 이상) 아예 없으면(0명, 오탈자 등)
+// managerNameResolutions에 그 이름의 해소 결과가 있다 — 있으면 그 사용자 id를 쓴다. 이번
+// 업로드에서 이름이 안 바뀌었고(=기존 값과 동일) 예전에 이미 다른 방식(과제상세 수동 선택 등)으로
+// id가 연결돼 있었다면 그 값을 그대로 보존한다. 이름이 새로 바뀌었는데 이번엔 해소가 필요 없으면
+// (=이름만으로 유일하게 식별됨) id는 비워둔다 — 이름 매칭만으로 충분하다.
+function resolveManagerUserId(
+  resolvedName: string | undefined,
+  previousName: string | undefined,
+  previousUserId: string | undefined,
+  resolutions: Record<string, string>,
+): string | undefined {
+  if (!resolvedName) return previousUserId;
+  return resolutions[resolvedName] ?? (resolvedName === previousName ? previousUserId : undefined);
 }
 
 // 이번에 업로드된 연차만 덮어쓰고, 파일에 없는 과거/미래 연차의 기존 담당자 이력은 보존한다 —
@@ -1316,6 +1285,11 @@ function PreviewStep({
   calendarMismatches,
   stageSkipWarnings,
   memberDataWarnings,
+  managerAmbiguities,
+  managerNotFound,
+  managerNameResolutions,
+  users,
+  onResolveManagerName,
   onConfirm,
   onBack,
   loading,
@@ -1328,6 +1302,11 @@ function PreviewStep({
   calendarMismatches: TermCalendarMismatch[];
   stageSkipWarnings: { normNum: string; projectNumber: string; projectName: string; reasons: string[] }[];
   memberDataWarnings: { key: string; projectNumber: string; projectName: string; institutionName: string; missing: string[] }[];
+  managerAmbiguities: { name: string; candidates: SystemUser[] }[];
+  managerNotFound: string[];
+  managerNameResolutions: Record<string, string>;
+  users: SystemUser[];
+  onResolveManagerName: (name: string) => void;
   onConfirm: () => void;
   onBack: () => void;
   loading: boolean;
@@ -1374,7 +1353,9 @@ function PreviewStep({
   const approvedUpdateCount = projectUpdates.filter(
     (u) => updateChoices[u.normNum] ?? defaultChoiceForStatus(u.status)
   ).length;
-  const reviewCount = dupRows.length + stageSkipWarnings.length + projectUpdates.length + calendarMismatches.length + memberDataWarnings.length;
+  const unresolvedManagerAmbiguities = managerAmbiguities.filter((a) => !managerNameResolutions[a.name]);
+  const unresolvedManagerNotFound = managerNotFound.filter((name) => !managerNameResolutions[name]);
+  const reviewCount = dupRows.length + stageSkipWarnings.length + projectUpdates.length + calendarMismatches.length + memberDataWarnings.length + managerAmbiguities.length + managerNotFound.length;
 
   const totalToRegister = newAgency + newProject + newInst + newMemberCount + approvedUpdateCount;
 
@@ -1515,6 +1496,98 @@ function PreviewStep({
                     </div>
                   )}
 
+                  {/* 과제담당자(정)/(부) 동명이인 — 이름만으로는 [권한관리]에서 어느 계정인지 특정할 수
+                      없어, 공문 발송 시 연락처 자동 연동이 잘못될 수 있다. 등록 전에 반드시 선택하게 한다. */}
+                  {managerAmbiguities.length > 0 && (
+                    <div>
+                      <div className="px-4 py-2 bg-red-50 flex items-center gap-1.5">
+                        <FiAlertOctagon size={13} className="text-red-500 shrink-0" />
+                        <p className="text-xs font-semibold text-red-700">
+                          과제담당자 동명이인 ({managerAmbiguities.length}명) — 선택해야 공문 연락처가 정확히 연동됩니다
+                        </p>
+                      </div>
+                      <div className="divide-y divide-slate-100">
+                        {managerAmbiguities.map((a) => {
+                          const resolvedId = managerNameResolutions[a.name];
+                          const resolvedUser = resolvedId ? a.candidates.find((c) => c.id === resolvedId) : undefined;
+                          return (
+                            <div key={a.name} className="flex items-center gap-3 px-4 py-2.5">
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-medium text-slate-700">
+                                  {a.name} <span className="text-[10px] text-slate-400">[권한관리]에 {a.candidates.length}명 동명이인</span>
+                                </p>
+                                {resolvedUser ? (
+                                  <p className="text-[11px] text-emerald-600">선택됨 · {resolvedUser.email}</p>
+                                ) : (
+                                  <p className="text-[11px] text-red-600">누구인지 아직 선택되지 않았습니다</p>
+                                )}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => onResolveManagerName(a.name)}
+                                className={`shrink-0 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                                  resolvedUser ? "bg-slate-100 text-slate-600 hover:bg-slate-200" : "bg-red-600 text-white hover:bg-red-700"
+                                }`}
+                              >
+                                {resolvedUser ? "다시 선택" : "선택"}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <p className="text-[10px] text-red-600 px-4 py-2 bg-red-50/60">
+                        선택하지 않으면 [권한관리]에 먼저 등록된 계정으로 임의 연결되어, 공문의 연락처·이메일이 다른 사람 것으로 나갈 수 있습니다.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* 과제담당자(정)/(부) 이름이 [권한관리]에 아예 없는 경우 — 오탈자거나 아직 등록 안 된
+                      직원일 수 있다. 이름만으로 등록하면 공문 발송 시 연락처를 못 찾으니, 실제 [권한관리]
+                      계정을 사람이 직접 골라야 한다. */}
+                  {managerNotFound.length > 0 && (
+                    <div>
+                      <div className="px-4 py-2 bg-red-50 flex items-center gap-1.5">
+                        <FiAlertOctagon size={13} className="text-red-500 shrink-0" />
+                        <p className="text-xs font-semibold text-red-700">
+                          [권한관리]에 없는 과제담당자 ({managerNotFound.length}명) — 실제 계정을 선택해주세요
+                        </p>
+                      </div>
+                      <div className="divide-y divide-slate-100">
+                        {managerNotFound.map((name) => {
+                          const resolvedId = managerNameResolutions[name];
+                          const resolvedUser = resolvedId ? users.find((u) => u.id === resolvedId) : undefined;
+                          return (
+                            <div key={name} className="flex items-center gap-3 px-4 py-2.5">
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-medium text-slate-700">
+                                  {name} <span className="text-[10px] text-slate-400">[권한관리]에 등록되지 않음</span>
+                                </p>
+                                {resolvedUser ? (
+                                  <p className="text-[11px] text-emerald-600">선택됨 · {resolvedUser.name} ({resolvedUser.email})</p>
+                                ) : (
+                                  <p className="text-[11px] text-red-600">실제 담당자가 아직 선택되지 않았습니다</p>
+                                )}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => onResolveManagerName(name)}
+                                className={`shrink-0 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                                  resolvedUser ? "bg-slate-100 text-slate-600 hover:bg-slate-200" : "bg-red-600 text-white hover:bg-red-700"
+                                }`}
+                              >
+                                {resolvedUser ? "다시 선택" : "선택"}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <p className="text-[10px] text-red-600 px-4 py-2 bg-red-50/60">
+                        엑셀에 적힌 이름과 [권한관리]에 등록된 이름이 정확히 일치해야 공문 발송 시 연락처가 자동으로 연동됩니다.
+                        오탈자라면 실제 계정을 선택하고, 아직 [권한관리]에 등록되지 않은 직원이라면 먼저 등록한 뒤 다시 골라주세요.
+                      </p>
+                    </div>
+                  )}
+
                   {/* 기존 과제 갱신 — 재제출 등 확인이 특히 중요해 이 탭 안에서도 맨 위에 보여준다 */}
                   {projectUpdates.length > 0 && (
                     <div>
@@ -1636,6 +1709,11 @@ function PreviewStep({
         </div>
       )}
 
+      {(unresolvedManagerAmbiguities.length > 0 || unresolvedManagerNotFound.length > 0) && (
+        <p className="shrink-0 text-xs text-red-600 mt-2">
+          과제담당자 {unresolvedManagerAmbiguities.length + unresolvedManagerNotFound.length}명을 선택해야 등록할 수 있습니다 — 위 &quot;확인필요&quot; 탭에서 선택해주세요.
+        </p>
+      )}
       <div className="shrink-0 flex items-center justify-between pt-4 mt-4 border-t border-slate-100">
         <button onClick={onBack} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">이전</button>
         <div className="flex items-center gap-3">
@@ -1647,7 +1725,7 @@ function PreviewStep({
           )}
           <button
             onClick={onConfirm}
-            disabled={loading || (totalNew === 0 && approvedUpdateCount === 0)}
+            disabled={loading || (totalNew === 0 && approvedUpdateCount === 0) || unresolvedManagerAmbiguities.length > 0 || unresolvedManagerNotFound.length > 0}
             className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40 transition-colors"
           >
             {loading ? "등록 중..." : <><FiCheckCircle size={14} /> {totalToRegister}건 등록</>}
@@ -1919,7 +1997,7 @@ function parseSheetToParsedSheet(wb: XLSX.WorkBook, sheetName: string, def: Shee
 // ============================================================
 
 export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
-  const { fundingAgencies, institutions, projects, projectMembers } = useStore();
+  const { fundingAgencies, institutions, projects, projectMembers, users } = useStore();
   const [step, setStep] = useState<Step>("upload");
   const [workbook, setWorkbook] = useState<XLSX.WorkBook | null>(null);
   const [allSheetNames, setAllSheetNames] = useState<string[]>([]);
@@ -1931,6 +2009,11 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [previewBackStep, setPreviewBackStep] = useState<Step>("mapping");
   const [projectUpdateChoices, setProjectUpdateChoices] = useState<Record<string, boolean>>({});
+  // 엑셀에 적힌 과제담당자(정)/(부) 이름이 [권한관리]에 동명이인으로 등록돼 있으면, 이름만으로는
+  // 어느 계정인지 특정할 수 없다 — 등록 전 미리보기에서 사람이 직접 골라 이름별로 해소한다
+  // (한 이름이 여러 과제에 걸쳐 나와도 같은 사람일 가능성이 높으므로 이름 단위로 한 번만 고르면 된다).
+  const [managerNameResolutions, setManagerNameResolutions] = useState<Record<string, string>>({});
+  const [managerPickerName, setManagerPickerName] = useState<string | null>(null);
 
   // "단계기관별" 시트의 정산대상시작/종료단계·연차 값으로 과제별 단계 구조(Project.stages)를 추정
   // — 아래 buildMemberAggregates가 "연차별기관별" 시트의 상대연차를 절대연차로 바꾸는 데 이 결과가 필요하므로 먼저 계산한다.
@@ -1948,6 +2031,33 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
 
   // 과제담당자·자율성트랙·과제코드·연구책임자 등 과제 레벨 단일값 — 여러 행에 값이 갈리면 등록하지 않고 이슈로 남긴다
   const scalarAggregates = useMemo(() => buildProjectScalarAggregates(parsedSheets), [parsedSheets]);
+
+  // 엑셀에 등장하는 과제담당자(정)/(부) 이름을 [권한관리] 목록과 대조 — 동명이인(2명 이상 일치)이거나
+  // 아예 등록되지 않은 이름(0명 일치, 오탈자거나 신규 입사자 등)이면 이름만으로는 실제 어느 계정인지
+  // 또는 존재하는지조차 알 수 없다. 등록 전 미리보기에서 사람이 직접 골라야 공문 발송 시 연락처
+  // 자동 연동이 정확해진다.
+  const { managerAmbiguities, managerNotFound } = useMemo(() => {
+    const names = new Set<string>();
+    for (const info of scalarAggregates.values()) {
+      for (const n of info.assignedManagers) names.add(n);
+      for (const n of info.assignedManagersByTerm.values()) names.add(n);
+      for (const n of info.assignedManagersPrimary) names.add(n);
+      for (const n of info.assignedManagersPrimaryByTerm.values()) names.add(n);
+    }
+    const ambiguities: { name: string; candidates: SystemUser[] }[] = [];
+    const notFound: string[] = [];
+    for (const name of names) {
+      const candidates = users.filter((u) => u.name === name);
+      if (candidates.length >= 2) ambiguities.push({ name, candidates });
+      else if (candidates.length === 0) notFound.push(name);
+    }
+    return {
+      managerAmbiguities: ambiguities.sort((a, b) => a.name.localeCompare(b.name)),
+      managerNotFound: notFound.sort((a, b) => a.localeCompare(b)),
+    };
+  }, [scalarAggregates, users]);
+  const unresolvedManagerAmbiguities = managerAmbiguities.filter((a) => !managerNameResolutions[a.name]);
+  const unresolvedManagerNotFound = managerNotFound.filter((name) => !managerNameResolutions[name]);
 
   // 이미 등록된 과제 중 이번 엑셀이 다음/동일/과거 연차 중 무엇에 해당하는지 판단
   const projectUpdates = useMemo(
@@ -2211,6 +2321,10 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
   // ── 등록 실행 ───────────────────────────────────────────────
 
   function doRegister() {
+    // 미리보기의 "등록" 버튼이 이미 막아주지만, 방어적으로 한 번 더 확인한다 — 동명이인이나
+    // [권한관리]에 없는 담당자를 해소하지 않은 채로 등록하면 공문 발송 시 연락처가 엉뚱한 사람
+    // 것으로 나가거나 아예 연동되지 않을 수 있다.
+    if (unresolvedManagerAmbiguities.length > 0 || unresolvedManagerNotFound.length > 0) return;
     setLoading(true);
     const today = new Date().toISOString().slice(0, 10);
 
@@ -2303,10 +2417,6 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         const scalarInfo = scalarAggregates.get(normNum);
         const assignedManager = scalarInfo?.assignedManagers.size === 1 ? [...scalarInfo.assignedManagers][0] : undefined;
         const assignedManagerPrimaryFallback = scalarInfo?.assignedManagersPrimary.size === 1 ? [...scalarInfo.assignedManagersPrimary][0] : undefined;
-        const assignedManagerPrimaryPhoneFallback = scalarInfo?.assignedManagerPrimaryPhones.size === 1 ? [...scalarInfo.assignedManagerPrimaryPhones][0] : undefined;
-        const assignedManagerPrimaryEmailFallback = scalarInfo?.assignedManagerPrimaryEmails.size === 1 ? [...scalarInfo.assignedManagerPrimaryEmails][0] : undefined;
-        const assignedManagerPhone = scalarInfo?.assignedManagerPhones.size === 1 ? [...scalarInfo.assignedManagerPhones][0] : undefined;
-        const assignedManagerEmail = scalarInfo?.assignedManagerEmails.size === 1 ? [...scalarInfo.assignedManagerEmails][0] : undefined;
         const researchLead = scalarInfo?.researchLeads.size === 1 ? [...scalarInfo.researchLeads][0] : undefined;
         const researchLeadEmail = scalarInfo?.researchLeadEmails.size === 1 ? [...scalarInfo.researchLeadEmails][0] : undefined;
         const agencyAssignedAt = scalarInfo?.agencyAssignedAts.size === 1 ? [...scalarInfo.agencyAssignedAts][0] : undefined;
@@ -2336,15 +2446,11 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         const allTermFinancials = sumAllTermFinancials(memberAggregates, normNum);
         // 담당자도 연차별 이력이 있으면(연차마다 다른 사람이 찍혀 있으면) 진행연차 값을 우선 채택하고,
         // 파일에 담긴 연차 전체 이력은 Project.assignedManagerHistory에 그대로 쌓는다.
-        const assignedManagerHistory = buildAssignedManagerHistory(scalarInfo);
+        const assignedManagerHistory = buildAssignedManagerHistory(scalarInfo, managerNameResolutions, users);
         const resolvedAssignedManager = scalarInfo?.assignedManagersByTerm.get(currentTerm) ?? assignedManager;
-        const resolvedAssignedManagerPhone = scalarInfo?.assignedManagerPhonesByTerm.get(currentTerm) ?? assignedManagerPhone;
-        const resolvedAssignedManagerEmail = scalarInfo?.assignedManagerEmailsByTerm.get(currentTerm) ?? assignedManagerEmail;
         // 과제담당자(정)도 (부)와 동일하게 연차별 이력을 우선 채택한다.
-        const assignedManagerPrimaryHistory = buildAssignedManagerPrimaryHistory(scalarInfo);
+        const assignedManagerPrimaryHistory = buildAssignedManagerPrimaryHistory(scalarInfo, managerNameResolutions, users);
         const resolvedAssignedManagerPrimary = scalarInfo?.assignedManagersPrimaryByTerm.get(currentTerm) ?? assignedManagerPrimaryFallback;
-        const resolvedAssignedManagerPrimaryPhone = scalarInfo?.assignedManagerPrimaryPhonesByTerm.get(currentTerm) ?? assignedManagerPrimaryPhoneFallback;
-        const resolvedAssignedManagerPrimaryEmail = scalarInfo?.assignedManagerPrimaryEmailsByTerm.get(currentTerm) ?? assignedManagerPrimaryEmailFallback;
 
         // 현재 연차가 속한 단계의 실제 날짜 범위(있으면) → 단계시작일/단계종료일
         const currentStage = stages?.find((s) => currentTerm >= s.startTermNumber && currentTerm <= s.endTermNumber);
@@ -2395,14 +2501,12 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             stageEndDate: stageDateRange?.end ?? renamedFrom.stageEndDate,
             firstStartDate: overallStartDate ?? renamedFrom.firstStartDate,
             finalEndDate: overallEndDate ?? renamedFrom.finalEndDate,
-            assignedManager: resolvedAssignedManager ?? renamedFrom.assignedManager,
+            assignedManager: resolvedAssignedManager ? applyManagerNameResolution(resolvedAssignedManager, managerNameResolutions, users) : renamedFrom.assignedManager,
+            assignedManagerUserId: resolveManagerUserId(resolvedAssignedManager, renamedFrom.assignedManager, renamedFrom.assignedManagerUserId, managerNameResolutions),
             assignedManagerHistory: mergeTermHistory(renamedFrom.assignedManagerHistory, assignedManagerHistory),
-            assignedManagerPrimary: resolvedAssignedManagerPrimary ?? renamedFrom.assignedManagerPrimary,
-            assignedManagerPrimaryPhone: resolvedAssignedManagerPrimaryPhone ?? renamedFrom.assignedManagerPrimaryPhone,
-            assignedManagerPrimaryEmail: resolvedAssignedManagerPrimaryEmail ?? renamedFrom.assignedManagerPrimaryEmail,
+            assignedManagerPrimary: resolvedAssignedManagerPrimary ? applyManagerNameResolution(resolvedAssignedManagerPrimary, managerNameResolutions, users) : renamedFrom.assignedManagerPrimary,
+            assignedManagerPrimaryUserId: resolveManagerUserId(resolvedAssignedManagerPrimary, renamedFrom.assignedManagerPrimary, renamedFrom.assignedManagerPrimaryUserId, managerNameResolutions),
             assignedManagerPrimaryHistory: mergeTermHistory(renamedFrom.assignedManagerPrimaryHistory, assignedManagerPrimaryHistory),
-            assignedManagerPhone: resolvedAssignedManagerPhone ?? renamedFrom.assignedManagerPhone,
-            assignedManagerEmail: resolvedAssignedManagerEmail ?? renamedFrom.assignedManagerEmail,
             researchLead: researchLead ?? renamedFrom.researchLead,
             researchLeadEmail: researchLeadEmail ?? renamedFrom.researchLeadEmail,
             agencyAssignedAt: agencyAssignedAt ?? renamedFrom.agencyAssignedAt,
@@ -2439,14 +2543,12 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             stageEndDate: stageDateRange?.end,
             firstStartDate: overallStartDate,
             finalEndDate: overallEndDate,
-            assignedManager: resolvedAssignedManager,
+            assignedManager: resolvedAssignedManager ? applyManagerNameResolution(resolvedAssignedManager, managerNameResolutions, users) : resolvedAssignedManager,
+            assignedManagerUserId: resolvedAssignedManager ? managerNameResolutions[resolvedAssignedManager] : undefined,
             assignedManagerHistory: assignedManagerHistory.length > 0 ? assignedManagerHistory : undefined,
-            assignedManagerPrimary: resolvedAssignedManagerPrimary,
-            assignedManagerPrimaryPhone: resolvedAssignedManagerPrimaryPhone,
-            assignedManagerPrimaryEmail: resolvedAssignedManagerPrimaryEmail,
+            assignedManagerPrimary: resolvedAssignedManagerPrimary ? applyManagerNameResolution(resolvedAssignedManagerPrimary, managerNameResolutions, users) : resolvedAssignedManagerPrimary,
+            assignedManagerPrimaryUserId: resolvedAssignedManagerPrimary ? managerNameResolutions[resolvedAssignedManagerPrimary] : undefined,
             assignedManagerPrimaryHistory: assignedManagerPrimaryHistory.length > 0 ? assignedManagerPrimaryHistory : undefined,
-            assignedManagerPhone: resolvedAssignedManagerPhone,
-            assignedManagerEmail: resolvedAssignedManagerEmail,
             researchLead,
             researchLeadEmail,
             agencyAssignedAt,
@@ -2669,24 +2771,16 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         const scalarInfo = scalarAggregates.get(info.normNum);
         const assignedManager = scalarInfo?.assignedManagers.size === 1 ? [...scalarInfo.assignedManagers][0] : undefined;
         const assignedManagerPrimaryFallback = scalarInfo?.assignedManagersPrimary.size === 1 ? [...scalarInfo.assignedManagersPrimary][0] : undefined;
-        const assignedManagerPrimaryPhoneFallback = scalarInfo?.assignedManagerPrimaryPhones.size === 1 ? [...scalarInfo.assignedManagerPrimaryPhones][0] : undefined;
-        const assignedManagerPrimaryEmailFallback = scalarInfo?.assignedManagerPrimaryEmails.size === 1 ? [...scalarInfo.assignedManagerPrimaryEmails][0] : undefined;
-        const assignedManagerPhone = scalarInfo?.assignedManagerPhones.size === 1 ? [...scalarInfo.assignedManagerPhones][0] : undefined;
-        const assignedManagerEmail = scalarInfo?.assignedManagerEmails.size === 1 ? [...scalarInfo.assignedManagerEmails][0] : undefined;
         const researchLead = scalarInfo?.researchLeads.size === 1 ? [...scalarInfo.researchLeads][0] : undefined;
         const researchLeadEmail = scalarInfo?.researchLeadEmails.size === 1 ? [...scalarInfo.researchLeadEmails][0] : undefined;
         const agencyAssignedAt = scalarInfo?.agencyAssignedAts.size === 1 ? [...scalarInfo.agencyAssignedAts][0] : undefined;
         const internalAssignedAt = scalarInfo?.internalAssignedAts.size === 1 ? [...scalarInfo.internalAssignedAts][0] : undefined;
         // 담당자는 연차별 이력이 있으면(연차마다 다른 사람) 이번에 반영되는 연차 값을 우선 채택한다.
-        // 과제담당자(정)/(부) 모두 이름·연락처·이메일 전부 동일한 규칙을 따른다.
-        const assignedManagerHistory = buildAssignedManagerHistory(scalarInfo);
+        // 과제담당자(정)/(부) 모두 이름은 동일한 규칙을 따른다(연락처·이메일은 더 이상 여기서 다루지 않음).
+        const assignedManagerHistory = buildAssignedManagerHistory(scalarInfo, managerNameResolutions, users);
         const resolvedAssignedManager = scalarInfo?.assignedManagersByTerm.get(nextCurrentTerm) ?? assignedManager;
-        const resolvedAssignedManagerPhone = scalarInfo?.assignedManagerPhonesByTerm.get(nextCurrentTerm) ?? assignedManagerPhone;
-        const resolvedAssignedManagerEmail = scalarInfo?.assignedManagerEmailsByTerm.get(nextCurrentTerm) ?? assignedManagerEmail;
-        const assignedManagerPrimaryHistory = buildAssignedManagerPrimaryHistory(scalarInfo);
+        const assignedManagerPrimaryHistory = buildAssignedManagerPrimaryHistory(scalarInfo, managerNameResolutions, users);
         const resolvedAssignedManagerPrimary = scalarInfo?.assignedManagersPrimaryByTerm.get(nextCurrentTerm) ?? assignedManagerPrimaryFallback;
-        const resolvedAssignedManagerPrimaryPhone = scalarInfo?.assignedManagerPrimaryPhonesByTerm.get(nextCurrentTerm) ?? assignedManagerPrimaryPhoneFallback;
-        const resolvedAssignedManagerPrimaryEmail = scalarInfo?.assignedManagerPrimaryEmailsByTerm.get(nextCurrentTerm) ?? assignedManagerPrimaryEmailFallback;
 
         Object.assign(updates, {
           currentTerm: nextCurrentTerm,
@@ -2695,14 +2789,12 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           privateCash: privateCash > 0 ? privateCash : existingProject.privateCash,
           privateInKind: privateInKind > 0 ? privateInKind : existingProject.privateInKind,
           annualFinancials: mergeAnnualFinancials(existingProject.annualFinancials, allTermFinancials),
-          assignedManager: resolvedAssignedManager ?? existingProject.assignedManager,
+          assignedManager: resolvedAssignedManager ? applyManagerNameResolution(resolvedAssignedManager, managerNameResolutions, users) : existingProject.assignedManager,
+          assignedManagerUserId: resolveManagerUserId(resolvedAssignedManager, existingProject.assignedManager, existingProject.assignedManagerUserId, managerNameResolutions),
           assignedManagerHistory: mergeTermHistory(existingProject.assignedManagerHistory, assignedManagerHistory),
-          assignedManagerPrimary: resolvedAssignedManagerPrimary ?? existingProject.assignedManagerPrimary,
-          assignedManagerPrimaryPhone: resolvedAssignedManagerPrimaryPhone ?? existingProject.assignedManagerPrimaryPhone,
-          assignedManagerPrimaryEmail: resolvedAssignedManagerPrimaryEmail ?? existingProject.assignedManagerPrimaryEmail,
+          assignedManagerPrimary: resolvedAssignedManagerPrimary ? applyManagerNameResolution(resolvedAssignedManagerPrimary, managerNameResolutions, users) : existingProject.assignedManagerPrimary,
+          assignedManagerPrimaryUserId: resolveManagerUserId(resolvedAssignedManagerPrimary, existingProject.assignedManagerPrimary, existingProject.assignedManagerPrimaryUserId, managerNameResolutions),
           assignedManagerPrimaryHistory: mergeTermHistory(existingProject.assignedManagerPrimaryHistory, assignedManagerPrimaryHistory),
-          assignedManagerPhone: resolvedAssignedManagerPhone ?? existingProject.assignedManagerPhone,
-          assignedManagerEmail: resolvedAssignedManagerEmail ?? existingProject.assignedManagerEmail,
           researchLead: researchLead ?? existingProject.researchLead,
           researchLeadEmail: researchLeadEmail ?? existingProject.researchLeadEmail,
           agencyAssignedAt: agencyAssignedAt ?? existingProject.agencyAssignedAt,
@@ -2960,6 +3052,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
   const stepIdx = STEPS.indexOf(step);
 
   return (
+    <>
     <Modal title={TITLES[step]} onClose={onClose} size="xl" fixedHeight>
       {/* 진행 표시 */}
       {step !== "done" && (
@@ -3024,6 +3117,11 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             calendarMismatches={calendarMismatches}
             stageSkipWarnings={stageSkipWarnings}
             memberDataWarnings={memberDataWarnings}
+            managerAmbiguities={managerAmbiguities}
+            managerNotFound={managerNotFound}
+            managerNameResolutions={managerNameResolutions}
+            users={users}
+            onResolveManagerName={setManagerPickerName}
             onConfirm={doRegister}
             onBack={() => setStep(previewBackStep)}
             loading={loading}
@@ -3035,5 +3133,18 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         )}
       </div>
     </Modal>
+    {managerPickerName && (
+      <ManagerPickerModal
+        title={
+          managerAmbiguities.some((a) => a.name === managerPickerName)
+            ? `"${managerPickerName}" 중 어느 계정인가요?`
+            : `"${managerPickerName}"은(는) [권한관리]에 없습니다 — 실제 계정을 선택해주세요`
+        }
+        users={managerAmbiguities.find((a) => a.name === managerPickerName)?.candidates ?? users.filter((u) => u.status === "ACTIVE")}
+        onSelect={(user) => setManagerNameResolutions((prev) => ({ ...prev, [managerPickerName]: user.id }))}
+        onClose={() => setManagerPickerName(null)}
+      />
+    )}
+    </>
   );
 }
