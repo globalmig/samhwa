@@ -47,7 +47,8 @@ export const FIELD_LABELS: Record<string, string> = {
   settlementTypeOverrides: "연차별 정산구분",
   recipientOverrides:  "연차별 공문 수신자",
   projectDivision:     "과제구분(위탁/공동)",
-  assignedManager:     "담당자",
+  assignedManager:     "과제담당자(부)",
+  assignedManagerPrimary: "과제담당자(정)",
   registeredAt:        "등록일",
   researchLead:        "연구책임자",
   projectCode:         "과제코드",
@@ -57,6 +58,7 @@ export const FIELD_LABELS: Record<string, string> = {
   inKindBudget:        "현물사업비",
   assignedManagerHistory: "연차별 담당자",
   exemptRefGrade:      "참고 면제등급",
+  deletedTerms:        "삭제된 연차",
 };
 
 // 엔티티별 상태값 라벨 — 같은 영문 토큰(예: ACTIVE, PENDING)이 엔티티마다 다른 의미를 가지므로

@@ -11,11 +11,11 @@ import {
 import {
   useStore, updateProject, addProjectIssue, updateProjectIssue, deleteProjectIssue, addTaxInvoice, updateTaxInvoice,
   addReceivable, updateReceivable, addEmailDispatch, updateTermFee, updateUnclaimedFee,
-  updateProjectMember, autoGenerateTermFees, addProjectMember, deleteProjectMember, deleteProject,
+  updateProjectMember, autoGenerateTermFees, addProjectMember, deleteProjectMember, deleteProject, deleteProjectTerms,
   setTermOtherFirmHandled, setTermBillingType, setTermDates,
 } from "@/lib/store";
 import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type SystemUser, type EmailDispatch, type FeePolicy, type AnnualFinancials, EMPTY_NOTICE_TEMPLATE } from "@/lib/mock";
-import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, type CalcMember } from "@/lib/fee-calculator";
+import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, type CalcMember } from "@/lib/fee-calculator";
 import { fmtWonFull, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange } from "@/lib/utils";
 import { fmtValue, fieldLabel, describeOverrideChange } from "@/lib/audit-log-format";
 import StatusBadge from "@/components/common/StatusBadge";
@@ -24,7 +24,9 @@ import MoneyInput from "@/components/common/MoneyInput";
 import DateInput from "@/components/common/DateInput";
 import NoticeLetterPreview, { type NoticeStatusRow } from "@/components/common/NoticeLetterPreview";
 import SimpleNoticeModal, { type SimpleNoticeTarget } from "@/components/common/SimpleNoticeModal";
+import DispatchModal, { DispatchDropdown, generateDocNumber, type DispatchChoice, type DispatchTarget } from "@/components/common/DispatchModal";
 import { buildNoticeEmailHtml } from "@/lib/notice-email-html";
+import { applyManagerContactRows } from "@/lib/notice-contacts";
 import InstitutionQuickAdd from "@/components/common/InstitutionQuickAdd";
 import UserMultiSelect from "@/components/common/UserMultiSelect";
 import AgreementStructureEditor from "@/components/common/AgreementStructureEditor";
@@ -141,6 +143,19 @@ function termNumberToYear(startDate: string, termNumber: number): number {
   const d = new Date(startDate);
   d.setFullYear(d.getFullYear() + termNumber - 1);
   return d.getFullYear();
+}
+
+// 콤마·세미콜론·공백으로 구분된 이메일 문자열 여러 개를 하나로 합치고 중복을 제거한다 — 정산절차
+// 안내 공문은 책임자(researchLeadEmail)+실무자(contactEmail) 두 필드를 합쳐서 기본 수신자로 쓴다.
+function combineEmails(...raws: (string | undefined)[]): string {
+  const seen = new Set<string>();
+  const emails: string[] = [];
+  for (const raw of raws) {
+    for (const e of (raw ?? "").split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean)) {
+      if (!seen.has(e)) { seen.add(e); emails.push(e); }
+    }
+  }
+  return emails.join(", ");
 }
 
 // ─── TermGroup ───────────────────────────────────────────────
@@ -373,7 +388,12 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   const calcMembers: CalcMember[] = policy ? members.flatMap((m) => {
     const { cashBudget, inKindBudget } = getViewTermBudget(m, viewTerm);
     const amount = policy.feeBasis === "CASH_PLUS_INKIND" ? cashBudget + inKindBudget : cashBudget;
-    if (amount <= 0) return [];
+    // RDA2처럼 주관기관을 산정기준액에서 항상 완전제외(excludeLeadFromCalc)하는 정책은 실제로
+    // 주관기관 사업비를 0원으로 등록해두는 경우가 많다 — amount<=0이라고 여기서 걸러버리면
+    // calcTermFee에 주관기관이 아예 안 들어가 excludeLeadFromCalc의 공동기관수 -1 보정이 빠지고,
+    // 그 보정이 없는 RDA1과 같은 값으로 계산돼버린다.
+    const isExcludedLead = policy.excludeLeadFromCalc === true && m.role === "LEAD";
+    if (amount <= 0 && !isExcludedLead) return [];
     return [{
       institutionId: m.institutionId,
       institutionName: m.institutionName,
@@ -733,13 +753,16 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             {/* 과제코드 + 상태 + 과제구분 */}
             <div className="grid grid-cols-3 gap-4">
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">과제코드</label>
+                <label className="block text-xs font-medium text-slate-500 mb-1">
+                  과제코드
+                  <span className="ml-1 text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{viewTerm}연차</span>
+                </label>
                 <input
                   className={`${inp} w-full font-mono bg-slate-50 text-slate-500 cursor-not-allowed`}
-                  value={draft.projectCode ?? ""}
+                  value={resolveProjectCodeForTerm(project, viewTerm) ?? "미발급"}
                   disabled
                   readOnly
-                  title="과제코드는 직접 수정할 수 없습니다 — 과제 등록 시 SH + 6자리 일련번호로 시스템이 자동 생성합니다."
+                  title="과제코드는 직접 수정할 수 없습니다 — 연차마다 SH + 6자리 일련번호가 따로 자동 생성됩니다."
                 />
               </div>
               <div>
@@ -791,8 +814,8 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 onChange={(e) => setDraft((p) => ({ ...p, projectName: e.target.value }))} />
             </div>
 
-            {/* 주관기관 + 연구책임자명 */}
-            <div className="grid grid-cols-2 gap-4">
+            {/* 주관기관 + 연구책임자명 + 책임자이메일 */}
+            <div className="grid grid-cols-3 gap-4">
               <div>
                 <InstitutionQuickAdd
                   label="주관기관"
@@ -805,6 +828,15 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 <label className="block text-xs font-medium text-slate-500 mb-1">연구책임자명</label>
                 <input className={`${inp} w-full bg-white`} value={draft.researchLead ?? ""}
                   onChange={(e) => setDraft((p) => ({ ...p, researchLead: e.target.value }))} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">
+                  책임자이메일
+                  <span className="ml-1 text-slate-400 font-normal">· 정산절차 안내 공문만 실무자와 함께 수신</span>
+                </label>
+                <input className={`${inp} w-full bg-white`} value={draft.researchLeadEmail ?? ""}
+                  onChange={(e) => setDraft((p) => ({ ...p, researchLeadEmail: e.target.value }))}
+                  placeholder="email@example.com (여러 명은 콤마로 구분)" />
               </div>
             </div>
           </div>
@@ -917,20 +949,27 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">
-                  삼화담당자
-                  {!isCurrentTermFinancials && (
-                    <span className="ml-1 text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{viewTerm}연차 기준 · 읽기전용</span>
+                <div className="mb-3">
+                  <label className="block text-xs font-medium text-slate-500 mb-1">과제담당자(정)</label>
+                  <input className={`${inp} w-full bg-white`} value={draft.assignedManagerPrimary ?? ""}
+                    onChange={(e) => setDraft((p) => ({ ...p, assignedManagerPrimary: e.target.value }))} placeholder="담당자명" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-500 mb-1">
+                    과제담당자(부)
+                    {!isCurrentTermFinancials && (
+                      <span className="ml-1 text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{viewTerm}연차 기준 · 읽기전용</span>
+                    )}
+                  </label>
+                  {isCurrentTermFinancials ? (
+                    <input className={`${inp} w-full bg-white`} value={draft.assignedManager ?? ""}
+                      onChange={(e) => setDraft((p) => ({ ...p, assignedManager: e.target.value }))} placeholder="담당자명" />
+                  ) : (
+                    <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500">
+                      {viewAssignedManager || "기록 없음"}
+                    </div>
                   )}
-                </label>
-                {isCurrentTermFinancials ? (
-                  <input className={`${inp} w-full bg-white`} value={draft.assignedManager ?? ""}
-                    onChange={(e) => setDraft((p) => ({ ...p, assignedManager: e.target.value }))} placeholder="담당자명" />
-                ) : (
-                  <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500">
-                    {viewAssignedManager || "기록 없음"}
-                  </div>
-                )}
+                </div>
               </div>
             </div>
             {editingPastFinancials && (
@@ -990,17 +1029,39 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             </p>
             <div className="grid grid-cols-3 gap-4">
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">과제 구분</label>
-                <select className={`${sel} w-full`} value={draft.projectCategory ?? "연차상시"}
-                  onChange={(e) => setDraft((p) => ({ ...p, projectCategory: e.target.value }))}>
-                  <option value="연차상시">연차상시</option>
-                  <option value="정산">정산</option>
-                </select>
+                <label className="block text-xs font-medium text-slate-500 mb-1">
+                  과제 구분
+                  {!isCurrentTermFinancials && (
+                    <span className="ml-1 text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{viewTerm}연차 기준 · 읽기전용</span>
+                  )}
+                </label>
+                {isCurrentTermFinancials ? (
+                  <select className={`${sel} w-full`} value={draft.projectCategory ?? "연차상시"}
+                    onChange={(e) => setDraft((p) => ({ ...p, projectCategory: e.target.value }))}>
+                    <option value="연차상시">연차상시</option>
+                    <option value="정산">정산</option>
+                  </select>
+                ) : (
+                  <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500">
+                    {currentWorkType === "SETTLEMENT" ? "정산" : "연차상시"}
+                  </div>
+                )}
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">연차 (현재/총)</label>
-                <input className={`${inp} w-full bg-white`} placeholder="예: 2/3" value={termText}
-                  onChange={(e) => handleTermTextChange(e.target.value)} />
+                <label className="block text-xs font-medium text-slate-500 mb-1">
+                  연차 (현재/총)
+                  {!isCurrentTermFinancials && (
+                    <span className="ml-1 text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{viewTerm}연차 기준 · 읽기전용</span>
+                  )}
+                </label>
+                {isCurrentTermFinancials ? (
+                  <input className={`${inp} w-full bg-white`} placeholder="예: 2/3" value={termText}
+                    onChange={(e) => handleTermTextChange(e.target.value)} />
+                ) : (
+                  <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500">
+                    {viewTerm}/{draft.totalTerms}
+                  </div>
+                )}
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">자율성트랙 여부</label>
@@ -1187,7 +1248,11 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 const displaySettlementType = resolveMemberSettlementTypeForTerm(m, viewTerm, defaultSettlementType);
                 const cashBudget = editingMembers ? getMemberBudgetVal(m, "cashBudget") : getViewTermBudget(m, viewTerm).cashBudget;
                 const inKindBudget = editingMembers ? getMemberBudgetVal(m, "inKindBudget") : getViewTermBudget(m, viewTerm).inKindBudget;
-                const isParticipatingThisTerm = cashBudget > 0 || inKindBudget > 0;
+                // RDA2처럼 주관기관을 산정기준액에서 항상 완전제외(excludeLeadFromCalc)하는 정책은
+                // 주관기관 사업비를 실제로 0원으로 등록해둔다 — 계산에서 빠지는 것과 별개로 이 기관은
+                // 여전히 이번 연차에 참여 중이므로 "미참여"로 표시하면 안 된다.
+                const isExcludedLeadMember = policy?.excludeLeadFromCalc === true && m.role === "LEAD";
+                const isParticipatingThisTerm = cashBudget > 0 || inKindBudget > 0 || isExcludedLeadMember;
                 // 위탁정산 기관은 이 연차에 참여가 없어도(중간 탈퇴 등) 정산 연차엔 그동안 쌓인
                 // 미청구액을 전액 청구하므로, 그 금액만은 계속 활성 상태로 보여준다 — 자체정산
                 // 기관은 정산 연차에도 이월분을 걷지 못하고 소멸하므로(매몰비용) 따로 보여줄 값이 없다.
@@ -2827,6 +2892,7 @@ function BillingBlock({
   canEditEmails: boolean;
   emailDispatches: EmailDispatch[];
 }) {
+  const { fundingAgencies } = useStore();
   const [issuingInvoice, setIssuingInvoice] = useState(false);
   const [invForm, setInvForm] = useState({
     issuedAt: new Date().toISOString().slice(0, 10),
@@ -3023,28 +3089,47 @@ function BillingBlock({
   }
 
   // 공문 발송 — 기관별 개별 청구 단위는 그 기관 앞으로 간 발송 이력만(recipientEmail 기준) "마지막 발송"으로 잡는다.
+  // 청구서 첨부파일명(청구서_과제번호_N연차.pdf)에는 항상 연차가 들어가므로, 제목에 연차가 안 들어가는
+  // 공문(예: 기타 공문)도 첨부파일명으로 이 연차 발송 이력임을 판별할 수 있다.
   const sentEmails = emailDispatches.filter((e) =>
-    e.subject.includes(projectNumber) && e.subject.includes(termLabel) &&
+    e.subject.includes(projectNumber) &&
+    (e.subject.includes(termLabel) || (e.attachments ?? []).some((a) => a.includes(termLabel))) &&
     (unit.institutionId ? unit.recipients.some((r) => !!r.email && r.email === e.recipientEmail) : true)
   );
   const lastSent = [...sentEmails].sort((a, b) => b.sentAt.localeCompare(a.sentAt))[0];
 
-  function sendLetter() {
-    const batchId = `BATCH-${Date.now()}`;
-    const sentAt = new Date().toISOString().replace("T", " ").slice(0, 16);
-    unit.recipients.forEach((r) => {
-      addEmailDispatch({
-        batchId,
-        sentAt,
-        senderName: getCurrentUser()?.name ?? "시스템",
-        recipientInstitution: r.institutionName,
-        recipientEmail: r.email,
-        subject: `[${projectNumber}] ${termLabel} 수수료 청구서${unit.institutionId ? ` (${unit.billingLabel})` : ""}`,
-        emailType: "TAX_INVOICE",
-        feeCategory: "ANNUAL",
-        attachments: [`청구서_${projectNumber}_${termLabel}.pdf`],
-        status: "SUCCESS",
-      });
+  // 공문 발송 드롭다운 — 수수료청구관리 목록과 동일한 DispatchDropdown/DispatchModal을 그대로 써서,
+  // 세금계산서 발행 여부와 무관하게(발행 전에도) 연차상시/위탁정산/역발행/기타 공문을 보낼 수 있게 한다.
+  // 계산서발행 서류 요청·입금 확인 요청은 첨부 없는 간단 메일이라 SimpleNoticeModal로 그대로 넘긴다.
+  const [dispatchTarget, setDispatchTarget] = useState<DispatchTarget | null>(null);
+  function handleDispatchSelect(choice: DispatchChoice) {
+    if (choice.kind === "DOC_REQUEST" || choice.kind === "PAYMENT_REMINDER") {
+      openSimpleNotice(choice.kind);
+      return;
+    }
+    const agency = fundingAgencies.find((a) => a.id === project.agencyId);
+    setDispatchTarget({
+      kind:                choice.kind,
+      projectNumber,
+      projectName:         project.projectName,
+      leadInstitutionName: unit.billingLabel,
+      agencyShortName:     agency?.shortName ?? project.agency,
+      termYear,
+      termNumber,
+      recipientEmail:      recipient?.recipientEmail ?? "",
+      recipientName:       recipient?.recipientName ?? "",
+      feeCategory:         (choice.kind === "REGULAR" || choice.kind === "REVERSE") ? choice.feeCategory : "ANNUAL",
+      supplyAmount:        unit.invoice?.supplyAmount ?? (unit.amount > 0 ? splitVatInclusive(unit.amount).supplyAmount : 0),
+      taxAmount:           unit.invoice?.taxAmount ?? (unit.amount > 0 ? splitVatInclusive(unit.amount).taxAmount : 0),
+      totalAmount:         unit.invoice?.totalAmount ?? unit.amount,
+      startDate:           termRangeForEmail.start,
+      endDate:             termRangeForEmail.end,
+      stageStartDate:      project.stageStartDate ?? "",
+      stageEndDate:        project.stageEndDate ?? "",
+      researchLead:        project.researchLead ?? "",
+      agencyFullName:      agency?.name ?? project.agency,
+      participantCount:    coInstitutionCount,
+      docNumber:           generateDocNumber(),
     });
   }
 
@@ -3054,11 +3139,12 @@ function BillingBlock({
         <p className="text-xs font-semibold text-slate-500">{unit.billingLabel}</p>
       )}
 
-      {/* 수신자 — 공문 발송 대상 담당자명·이메일·연락처. 연차별로 담당자가 다를 수 있어 이 연차에만
-          적용되는 값으로 저장한다(연차별 오버라이드가 없으면 참여기관의 기본 담당자 정보를 그대로 보여준다). */}
+      {/* 실무자(구 "수신자") — 공문 발송 대상 담당자명·이메일·연락처. 연차별로 담당자가 다를 수 있어
+          이 연차에만 적용되는 값으로 저장한다(연차별 오버라이드가 없으면 참여기관의 기본 담당자 정보를
+          그대로 보여준다). 이메일은 여러 명이면 콤마(,)로 구분해서 입력한다. */}
       {recipientMember && recipient && (
         <div className="flex items-start gap-3">
-          <span className="text-xs font-semibold text-slate-600 w-24 shrink-0 pt-1.5">수신자</span>
+          <span className="text-xs font-semibold text-slate-600 w-24 shrink-0 pt-1.5">실무자</span>
           {editingRecipient ? (
             <div className="flex-1 flex flex-wrap items-center gap-2">
               <input
@@ -3070,13 +3156,13 @@ function BillingBlock({
               <input
                 value={recipientDraft.recipientEmail}
                 onChange={(e) => setRecipientDraft((p) => ({ ...p, recipientEmail: e.target.value }))}
-                placeholder="email@example.com"
+                placeholder="email@example.com (여러 명은 콤마로 구분)"
                 className="w-48 text-xs border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
               />
               <input
                 value={recipientDraft.recipientPhone}
                 onChange={(e) => setRecipientDraft((p) => ({ ...p, recipientPhone: e.target.value }))}
-                placeholder="수신자 연락처"
+                placeholder="실무자 연락처"
                 className="w-32 text-xs border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
               />
               <button onClick={() => setEditingRecipient(false)}
@@ -3134,19 +3220,7 @@ function BillingBlock({
               {lastSent && (
                 <span className="text-xs text-slate-400">마지막 발송 {lastSent.sentAt}</span>
               )}
-              {canEditEmails && (
-                <button onClick={sendLetter}
-                  title={unit.recipients.length > 1 ? `${unit.recipients.length}곳으로 발송됩니다` : "발송됩니다"}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 transition-colors">
-                  <FiSend size={12} /> 공문 발송{unit.recipients.length > 1 ? ` (${unit.recipients.length}곳)` : ""}
-                </button>
-              )}
-              {canEditEmails && (
-                <button onClick={() => openSimpleNotice("DOC_REQUEST")}
-                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-50 transition-colors">
-                  <FiSend size={12} /> 서류 요청
-                </button>
-              )}
+              {canEditEmails && <DispatchDropdown onSelect={handleDispatchSelect} />}
               {canEditInvoices && (
                 <button onClick={() => { openInvoiceForm(); setIssuingInvoice(true); }}
                   className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
@@ -3166,7 +3240,7 @@ function BillingBlock({
             {BILLING_OPTIONS.find((o) => o.value === billingType)?.label} — 세금계산서 발행이 필요하지 않습니다
           </span>
         ) : (
-          <div className="flex items-center gap-3">
+          <div className="flex-1 flex items-center gap-3">
             <span className="text-xs text-slate-400">발행 전</span>
             {canEditInvoices && !issuingInvoice && (
               <button onClick={openInvoiceForm}
@@ -3174,12 +3248,12 @@ function BillingBlock({
                 <FiPlus size={12} /> 세금계산서 발행
               </button>
             )}
-            {canEditEmails && (
-              <button onClick={() => openSimpleNotice("DOC_REQUEST")}
-                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-50 transition-colors">
-                <FiSend size={12} /> 서류 요청
-              </button>
-            )}
+            <div className="ml-auto flex items-center gap-2">
+              {lastSent && (
+                <span className="text-xs text-slate-400">마지막 발송 {lastSent.sentAt}</span>
+              )}
+              {canEditEmails && <DispatchDropdown onSelect={handleDispatchSelect} />}
+            </div>
           </div>
         )}
       </div>
@@ -3208,7 +3282,7 @@ function BillingBlock({
             </div>
           </div>
           <div className="flex items-center justify-between">
-            <p className="text-xs text-slate-400">발행 후 <strong>공문 발송</strong> 버튼으로 즉시 발송할 수 있습니다</p>
+            <p className="text-xs text-slate-400">발행 전에도 <strong>공문발송</strong> 버튼으로 청구서를 보낼 수 있고, 발행하면 금액이 실제 발행액으로 맞춰집니다</p>
             <div className="flex gap-2">
               <button onClick={() => setIssuingInvoice(false)}
                 className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
@@ -3298,6 +3372,11 @@ function BillingBlock({
 
       {simpleNotice && (
         <SimpleNoticeModal target={simpleNotice} onClose={() => setSimpleNotice(null)} />
+      )}
+      {dispatchTarget && (
+        <Modal title="세금계산서 공문 발송" onClose={() => setDispatchTarget(null)} size="lg">
+          <DispatchModal target={dispatchTarget} onClose={() => setDispatchTarget(null)} />
+        </Modal>
       )}
     </div>
   );
@@ -3996,6 +4075,10 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
 function FeeManagementTab({ projectId }: { projectId: string }) {
   const { projects, termFees, termFeeCalcs, taxInvoices, receivables, unclaimedFees, projectMembers } = useStore();
   const canRecalc = useCanWrite('fees');
+  // 연차 삭제 — 확정(청구완료)·수동조정된 연차는 골라도 실제로는 안 지워지도록 store에서도 한 번 더
+  // 막지만, 여기서도 애초에 "초안" 연차만 체크할 수 있게 해서 실수를 줄인다.
+  const [selectedTermKeys, setSelectedTermKeys] = useState<Set<string>>(new Set());
+  const [showDeleteTermsConfirm, setShowDeleteTermsConfirm] = useState(false);
 
   const project = projects.find((p) => p.id === projectId) ?? null;
   const members = projectMembers.filter((m) => m.projectId === projectId);
@@ -4065,24 +4148,93 @@ function FeeManagementTab({ projectId }: { projectId: string }) {
     );
   }
 
+  function toggleTermSelected(key: string) {
+    setSelectedTermKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }
+  const selectedGroups = termGroups.filter((g) => selectedTermKeys.has(g.key));
+  function confirmDeleteSelectedTerms() {
+    deleteProjectTerms(projectId, selectedGroups.map((g) => g.termNumber));
+    setSelectedTermKeys(new Set());
+    setShowDeleteTermsConfirm(false);
+  }
+
   return (
     <div className="space-y-3">
+      {canRecalc && selectedTermKeys.size > 0 && (
+        <div className="flex items-center justify-between px-4 py-2.5 bg-red-50 border border-red-200 rounded-xl">
+          <p className="text-xs text-red-700">{selectedTermKeys.size}개 연차 선택됨 — 초안 상태의 연차만 삭제할 수 있습니다</p>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setSelectedTermKeys(new Set())}
+              className="text-xs text-slate-500 hover:text-slate-700 transition-colors">선택 해제</button>
+            <button onClick={() => setShowDeleteTermsConfirm(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors">
+              <FiTrash2 size={12} /> 선택 연차 삭제
+            </button>
+          </div>
+        </div>
+      )}
       {termGroups.map((group) => (
-        <TermSection
-          key={group.key}
-          group={group}
-          allFees={termFees}
-          project={project}
-          projectNumber={project.projectNumber}
-          agencyId={project.agencyId}
-          leadInstitutionId={project.leadInstitutionId}
-          leadInstitutionName={project.leadInstitutionName}
-          members={members}
-          isSettlement={isSettlementTerm(project, group.termNumber)}
-          taxInvoices={taxInvoices}
-          receivables={receivables}
-        />
+        <div key={group.key} className="flex items-start gap-2">
+          {canRecalc && (
+            <input
+              type="checkbox"
+              checked={selectedTermKeys.has(group.key)}
+              disabled={group.termStatus !== "DRAFT"}
+              onChange={() => toggleTermSelected(group.key)}
+              title={group.termStatus !== "DRAFT" ? "확정·청구완료된 연차는 삭제할 수 없습니다" : "이 연차 선택"}
+              className="mt-5 shrink-0 rounded border-slate-300 text-red-600 focus:ring-red-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
+            />
+          )}
+          <div className="flex-1 min-w-0">
+            <TermSection
+              group={group}
+              allFees={termFees}
+              project={project}
+              projectNumber={project.projectNumber}
+              agencyId={project.agencyId}
+              leadInstitutionId={project.leadInstitutionId}
+              leadInstitutionName={project.leadInstitutionName}
+              members={members}
+              isSettlement={isSettlementTerm(project, group.termNumber)}
+              taxInvoices={taxInvoices}
+              receivables={receivables}
+            />
+          </div>
+        </div>
       ))}
+
+      {showDeleteTermsConfirm && (
+        <Modal title="선택 연차 삭제" onClose={() => setShowDeleteTermsConfirm(false)}>
+          <div className="p-5 space-y-4">
+            <p className="text-sm text-slate-700">다음 {selectedGroups.length}개 연차를 삭제하시겠습니까?</p>
+            <ul className="text-sm text-slate-600 list-disc list-inside space-y-0.5">
+              {selectedGroups.map((g) => (
+                <li key={g.key}>{g.termYear}년 {g.termNumber}연차</li>
+              ))}
+            </ul>
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-700 space-y-1">
+              <p className="font-medium">함께 삭제되는 데이터 (되돌릴 수 없습니다)</p>
+              <ul className="list-disc list-inside space-y-0.5">
+                <li>해당 연차의 참여기관별 사업비·수수료 산정 내역</li>
+                <li>해당 연차의 미청구액·미수금·세금계산서 내역</li>
+              </ul>
+              <p>다른 연차는 그대로 유지됩니다. 다시 채우려면 참여기관 목록에서 해당 연차 사업비를 다시 입력해야 합니다.</p>
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button onClick={() => setShowDeleteTermsConfirm(false)}
+                className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
+              <button onClick={confirmDeleteSelectedTerms}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors">
+                삭제
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -4111,7 +4263,7 @@ function SettlementNoticeModal({
   senderUser: SystemUser | null;
   onClose: () => void;
 }) {
-  const { companyInfo } = useStore();
+  const { companyInfo, managerContacts } = useStore();
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
   const [toEmail, setToEmail] = useState(recipientEmail);
   const [sending, setSending] = useState(false);
@@ -4119,7 +4271,12 @@ function SettlementNoticeModal({
   const [sendError, setSendError] = useState("");
 
   const selectedTemplate = templates.find((t) => t.id === templateId) ?? templates[0];
-  const template = selectedTemplate?.content ?? EMPTY_NOTICE_TEMPLATE;
+  // 문의사항 연락처의 "과제담당(정)/(부)" 행은 템플릿 기본값이 아니라 이 과제의 실제 담당자
+  // (assignedManagerPrimary/assignedManager)와 그 사람의 등록된 연락처로 바꿔치기한다.
+  const template = useMemo(() => {
+    const base = selectedTemplate?.content ?? EMPTY_NOTICE_TEMPLATE;
+    return { ...base, contactRows: applyManagerContactRows(base.contactRows, project, managerContacts) };
+  }, [selectedTemplate, project, managerContacts]);
 
   const canSendMail = !!senderUser?.hiworksEmail && !!senderUser?.hiworksMailPassword;
 
@@ -4232,9 +4389,11 @@ function SettlementNoticeModal({
       </div>
 
       <div>
-        <label className="block text-xs font-medium text-slate-600 mb-1">수신 이메일</label>
+        <label className="block text-xs font-medium text-slate-600 mb-1">
+          수신 이메일 <span className="text-slate-400 font-normal">(책임자+실무자 — 여러 명은 콤마로 구분)</span>
+        </label>
         <input
-          type="email"
+          type="text"
           value={toEmail}
           onChange={(e) => setToEmail(e.target.value)}
           className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
@@ -4267,7 +4426,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const { id } = use(params);
   const router = useRouter();
   const { projects, fundingAgencies, agencyNoticeTemplates, projectMembers, emailDispatches, users, termFees, companyInfo } = useStore();
-  const canEditProjects = useCanWrite('projects');
+  const canDeleteProject = useCanWrite('projects-delete');
   const canSendNotice = useCanWrite('emails');
   const [activeTab, setActiveTab] = useState<"info" | "fees">("info");
   const [showNotice, setShowNotice] = useState(false);
@@ -4297,7 +4456,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const currentStageStartDate = currentStage?.stageStartDate ?? project.stageStartDate ?? project.startDate;
   const currentStageEndDate = currentStage?.stageEndDate ?? project.stageEndDate ?? project.endDate;
   const noticeStatusRows: NoticeStatusRow[] = [
-    { label: "과제번호 (RCMS)", value: project.projectCode || project.projectNumber },
+    { label: "과제번호 (RCMS)", value: resolveProjectCodeForTerm(project, project.currentTerm) || project.projectNumber },
     { label: "과제명", value: project.projectName },
     { label: "단계연구개발기간", value: `${fmtDate(currentStageStartDate)} ~ ${fmtDate(currentStageEndDate)}` },
     { label: "대상기간", value: `${fmtDate(project.firstStartDate ?? project.startDate)} ~ ${fmtDate(project.finalEndDate ?? project.endDate)}` },
@@ -4353,7 +4512,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
                 <FiFileText size={12} /> 정산절차 안내 공문
               </button>
             )}
-            {canEditProjects && (
+            {canDeleteProject && (
               <button
                 onClick={() => setShowDeleteConfirm(true)}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors"
@@ -4427,7 +4586,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
             templates={noticeAgencyTemplates}
             statusRows={noticeStatusRows}
             feeRows={noticeFeeRows}
-            recipientEmail={leadMember?.contactEmail ?? ""}
+            recipientEmail={combineEmails(project.researchLeadEmail, leadMember?.contactEmail)}
             docNumber={noticeDocNumber}
             issuedDate={noticeIssuedDate}
             senderUser={senderUser}

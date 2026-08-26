@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { getCurrentUser } from "./auth";
-import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, type CalcMember } from "./fee-calculator";
+import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveProjectCodeForTerm, type CalcMember } from "./fee-calculator";
 import {
   institutions as initialInstitutions,
   projects as initialProjects,
@@ -21,6 +21,7 @@ import {
   simpleNoticeTemplates as initialSimpleNoticeTemplates,
   notices as initialNotices,
   standardAttachments as initialStandardAttachments,
+  managerContacts as initialManagerContacts,
   COMPANY_INFO as initialCompanyInfo,
   type CompanyInfo,
   type Institution,
@@ -47,6 +48,7 @@ import {
   type SimpleNoticeTemplateEntry,
   type Notice,
   type StandardAttachment,
+  type ManagerContact,
 } from "./mock";
 
 export type { TermFeeCalc, FeeOverride };
@@ -84,6 +86,7 @@ export const ENTITY_NAMES: Record<string, string> = {
   projectIssue: "이슈/메모",
   notice: "공지사항",
   standardAttachment: "표준 첨부서류",
+  managerContact: "담당자 연락처",
   feeInvoiceTemplate: "수수료 청구서 양식",
   simpleNoticeTemplate: "간단 안내 메일 양식",
   companyInfo: "공문 발신 회사 정보",
@@ -116,6 +119,7 @@ interface StoreState {
   feeInvoiceTemplates: FeeInvoiceTemplateEntry[];
   simpleNoticeTemplates: SimpleNoticeTemplateEntry[];
   standardAttachments: StandardAttachment[];
+  managerContacts: ManagerContact[];
   companyInfo: CompanyInfo;
 }
 
@@ -259,6 +263,7 @@ let _state: StoreState = {
   feeInvoiceTemplates: [...initialFeeInvoiceTemplates],
   simpleNoticeTemplates: [...initialSimpleNoticeTemplates],
   standardAttachments: [...initialStandardAttachments],
+  managerContacts: [...initialManagerContacts],
   companyInfo: { ...initialCompanyInfo },
 };
 
@@ -500,20 +505,27 @@ function ensureLeadMember(project: Project): void {
 }
 
 // 과제코드(SH + 6자리 순번, 예: SH000001) — 전담기관마다 제각각으로 붙던 방식을 버리고, 등록 순서
-// 그대로 회사 전체 기준 일련번호 하나로 통일해서 시스템이 매긴다(전담기관과 무관).
-function nextProjectCode(): string {
+// 그대로 회사 전체 기준 일련번호 하나로 통일해서 시스템이 매긴다(전담기관과 무관). 연차마다 코드가
+// 달라야 해서(termCodes) 과제 전체가 아니라 "회사 전체에서 지금까지 발급된 모든 연차 코드" 중
+// 최댓값 다음 번호를 내준다 — projectCode(과거 방식의 1연차 코드)와 termCodes를 모두 훑는다.
+function nextTermCode(): string {
   let max = 0;
-  for (const p of _state.projects) {
-    if (!p.projectCode?.startsWith("SH")) continue;
-    const n = parseInt(p.projectCode.slice(2), 10);
+  const consider = (code: string | undefined) => {
+    if (!code?.startsWith("SH")) return;
+    const n = parseInt(code.slice(2), 10);
     if (Number.isFinite(n) && n > max) max = n;
+  };
+  for (const p of _state.projects) {
+    consider(p.projectCode);
+    for (const t of p.termCodes ?? []) consider(t.code);
   }
   return `SH${String(max + 1).padStart(6, "0")}`;
 }
 
 export function addProject(data: Omit<Project, "id">): Project {
-  const projectCode = data.projectCode ?? nextProjectCode();
-  const item: Project = { registeredAt: new Date().toISOString().slice(0, 10), ...data, projectCode, id: genId("p") };
+  const projectCode = data.projectCode ?? nextTermCode();
+  const termCodes = data.termCodes ?? [{ termNumber: 1, code: projectCode }];
+  const item: Project = { registeredAt: new Date().toISOString().slice(0, 10), ...data, projectCode, termCodes, id: genId("p") };
   _state = { ..._state, projects: [..._state.projects, item] };
   record("project", item.id, item.projectName, "CREATE");
   ensureLeadMember(item);
@@ -594,6 +606,48 @@ export function deleteProject(id: string): void {
     settlements: _state.settlements.filter((s) => s.projectNumber !== num),
   };
   record("project", id, item.projectName, "DELETE");
+  notify();
+}
+
+// 과제 하나를 통째로 지우지 않고, 특정 연차(들)의 수수료·세금계산서·미청구·미수금 데이터만 지운다 —
+// 잘못 생성된 연차나 엑셀 업로드로 중복 생성된 연차를 골라서 정리할 때 쓴다.
+// 참여기관의 annualBudgets(해당 연차 사업비)도 같이 지워야 한다 — 안 그러면 다음 자동 재계산
+// (autoGenerateTermFees)이 그 사업비를 보고 지운 연차를 그대로 다시 만들어낸다.
+// 확정(CONFIRMED/BILLED)되었거나 수동조정된 연차는 호출부(UI)에서 애초에 선택 못 하게 막지만,
+// 혹시 몰라 여기서도 한 번 더 걸러 실수로 확정 데이터가 삭제되지 않게 한다.
+export function deleteProjectTerms(projectId: string, termNumbers: number[]): void {
+  const project = _state.projects.find((p) => p.id === projectId);
+  if (!project || termNumbers.length === 0) return;
+  const num = project.projectNumber;
+  const termSet = new Set(termNumbers);
+  const isDeletable = (f: TermFee) =>
+    termSet.has(f.termNumber) && f.status !== "CONFIRMED" && f.status !== "BILLED" && !f.manualOverride;
+  const actuallyDeleted = new Set(
+    _state.termFees.filter((f) => f.projectNumber === num && isDeletable(f)).map((f) => f.termNumber)
+  );
+  if (actuallyDeleted.size === 0) return;
+
+  _state = {
+    ..._state,
+    termFees: _state.termFees.filter((f) => !(f.projectNumber === num && actuallyDeleted.has(f.termNumber))),
+    termFeeCalcs: _state.termFeeCalcs.filter((c) => !(c.projectNumber === num && actuallyDeleted.has(c.termNumber))),
+    unclaimedFees: _state.unclaimedFees.filter((u) => !(u.projectNumber === num && actuallyDeleted.has(u.termNumber))),
+    receivables: _state.receivables.filter((r) => !(r.projectNumber === num && actuallyDeleted.has(r.termNumber))),
+    taxInvoices: _state.taxInvoices.filter((t) => !(t.projectNumber === num && actuallyDeleted.has(t.termNumber))),
+    projectMembers: _state.projectMembers.map((m) => {
+      if (m.projectId !== projectId) return m;
+      return {
+        ...m,
+        annualBudgets: m.annualBudgets?.filter((b) => !actuallyDeleted.has(b.termNumber)),
+        gradeOverrides: m.gradeOverrides?.filter((g) => !actuallyDeleted.has(g.termNumber)),
+        settlementTypeOverrides: m.settlementTypeOverrides?.filter((s) => !actuallyDeleted.has(s.termNumber)),
+        recipientOverrides: m.recipientOverrides?.filter((r) => !actuallyDeleted.has(r.termNumber)),
+      };
+    }),
+  };
+  record("project", projectId, project.projectName, "DELETE", {
+    deletedTerms: { before: [], after: Array.from(actuallyDeleted).sort((a, b) => a - b).map((n) => `${n}연차`) },
+  });
   notify();
 }
 
@@ -742,6 +796,19 @@ export function updateProjectMember(id: string, data: Partial<ProjectMember>): v
   }
   if ("cashBudget" in trackedData || "inKindBudget" in trackedData) {
     recalcProjectTotalBudget(before.projectId);
+  }
+  // 참여기관목록에서 역할을 "주관"으로 바꾸면 실제 과제의 주관기관(project.leadInstitutionId·
+  // leadInstitutionName)도 함께 바뀌어야 한다 — 안 그러면 목록 표시와, 이 값을 그대로 참조하는
+  // 수수료·공문발송·매출·수금 로직이 서로 다른 기관을 주관기관으로 보게 된다. 주관은 항상 한 곳이어야
+  // 하므로 기존에 "주관"이던 다른 참여기관은 "공동"으로 강등한다.
+  if (trackedData.role === "LEAD" && before.role !== "LEAD") {
+    _state.projectMembers
+      .filter((m) => m.projectId === after.projectId && m.id !== after.id && m.role === "LEAD")
+      .forEach((m) => updateProjectMember(m.id, { role: "PARTICIPANT" }));
+    updateProject(after.projectId, {
+      leadInstitutionId: after.institutionId,
+      leadInstitutionName: after.institutionName,
+    });
   }
   notify();
 }
@@ -1475,6 +1542,35 @@ export function deleteAgencyNoticeTemplate(id: string): void {
 }
 
 // ============================================================
+// MANAGER CONTACTS (과제담당자 연락처 — 공문 발송 시 이름으로 조회)
+// ============================================================
+
+export function addManagerContact(data: Omit<ManagerContact, "id">): ManagerContact {
+  const item: ManagerContact = { ...data, id: genId("mgr") };
+  _state = { ..._state, managerContacts: [..._state.managerContacts, item] };
+  record("managerContact", item.id, item.name, "CREATE");
+  notify();
+  return item;
+}
+
+export function updateManagerContact(id: string, data: Partial<Omit<ManagerContact, "id">>): void {
+  const before = _state.managerContacts.find((m) => m.id === id);
+  if (!before) return;
+  const after = { ...before, ...data };
+  _state = { ..._state, managerContacts: _state.managerContacts.map((m) => (m.id === id ? after : m)) };
+  record("managerContact", id, after.name, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
+  notify();
+}
+
+export function deleteManagerContact(id: string): void {
+  const item = _state.managerContacts.find((m) => m.id === id);
+  if (!item) return;
+  _state = { ..._state, managerContacts: _state.managerContacts.filter((m) => m.id !== id) };
+  record("managerContact", id, item.name, "DELETE");
+  notify();
+}
+
+// ============================================================
 // FEE INVOICE TEMPLATES (수수료 청구서 양식)
 // ============================================================
 
@@ -1677,6 +1773,9 @@ export function autoGenerateTermFees(projectId: string): void {
   // 일반기관 취급을 받게 되면(exemptBreakdown에서 빠지고 nonExempt로 재분류), 자체정산이던 동안 쌓인
   // 미청구분을 그제서야 함께 청구해야 한다 — 그렇지 않으면 전환 시점에 과거 미청구분이 그냥 사라진다.
   const stageExemptUnclaimedByInst: Record<number, Record<string, number>> = {};
+  // 실제로 사업비가 입력되어(=참여기관이 있어) 이번에 산정 대상이 된 연차들 — 아래에서 이 연차들에
+  // 아직 과제코드가 없으면 새로 발급한다(연차마다 코드가 달라야 하므로).
+  const activeTermNumbers = new Set<number>();
 
   for (let termNumber = 1; termNumber <= project.totalTerms; termNumber++) {
     const termStartDate = new Date(startDate);
@@ -1699,7 +1798,13 @@ export function autoGenerateTermFees(projectId: string): void {
     const calcMembers: CalcMember[] = [];
     for (const m of members) {
       const ab = m.annualBudgets?.find((b) => b.termNumber === termNumber);
-      if (!ab || getMemberAmount(ab, feeBasis) <= 0) continue;
+      if (!ab) continue;
+      // RDA2처럼 주관기관을 산정기준액에서 항상 완전제외(excludeLeadFromCalc)하는 정책은 실제로
+      // 주관기관 사업비를 0원으로 등록해두는 경우가 많다 — cashBudget<=0이라고 여기서 걸러버리면
+      // calcTermFee에 주관기관이 아예 안 들어가 excludeLeadFromCalc의 공동기관수 -1 보정이 빠지고,
+      // 그 보정이 없는 RDA1과 같은 값으로 계산돼버린다.
+      const isExcludedLead = policy.excludeLeadFromCalc === true && m.role === "LEAD";
+      if (!isExcludedLead && getMemberAmount(ab, feeBasis) <= 0) continue;
       calcMembers.push({
         institutionId: m.institutionId,
         institutionName: m.institutionName,
@@ -1712,6 +1817,7 @@ export function autoGenerateTermFees(projectId: string): void {
       });
     }
     if (calcMembers.length === 0) continue;
+    activeTermNumbers.add(termNumber);
 
     const result = calcTermFee({
       members: calcMembers,
@@ -1982,8 +2088,32 @@ export function autoGenerateTermFees(projectId: string): void {
     }
   }
 
+  // 이번에 산정 대상이 된 연차 중 아직 과제코드가 없는 연차 — 새 SH 코드를 발급해준다. 한 번에
+  // 여러 연차가 처음 채워져도(예: 엑셀로 3개 연차를 한꺼번에 등록) 연차마다 서로 다른 번호를 받는다.
+  // nextTermCode()는 _state를 훑어 다음 번호를 정하는데, 이 블록에서 여러 번 부르면 아직 _state가
+  // 갱신 전이라 매번 같은 번호를 돌려주므로, 첫 번호만 받아오고 이후는 로컬에서 순번을 이어간다.
+  const missingCodeTerms = [...activeTermNumbers]
+    .filter((t) => !resolveProjectCodeForTerm(project, t))
+    .sort((a, b) => a - b);
+  const newTermCodes: { termNumber: number; code: string }[] = [];
+  if (missingCodeTerms.length > 0) {
+    let nextNum = parseInt(nextTermCode().slice(2), 10);
+    for (const termNumber of missingCodeTerms) {
+      newTermCodes.push({ termNumber, code: `SH${String(nextNum).padStart(6, "0")}` });
+      nextNum++;
+    }
+  }
+  const updatedProjects = newTermCodes.length === 0
+    ? _state.projects
+    : _state.projects.map((p) =>
+        p.id === project.id
+          ? { ...p, termCodes: [...(p.termCodes ?? []), ...newTermCodes].sort((a, b) => a.termNumber - b.termNumber) }
+          : p
+      );
+
   _state = {
     ..._state,
+    projects: updatedProjects,
     termFees: [...keptFees, ...newFees],
     termFeeCalcs: [...keptCalcs, ...newCalcs],
   };

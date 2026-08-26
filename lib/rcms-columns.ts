@@ -43,11 +43,18 @@ const annualColumns: ColumnDef[] = [
     required: true,
   },
   {
-    field: "assignedManager",
-    label: "과제담당자",
-    aliases: ["과제담당자", "삼화담당자", "담당자"],
+    field: "assignedManagerPrimary",
+    label: "과제담당자(정)",
+    aliases: ["과제담당자(정)", "담당자(정)"],
     required: false,
-    description: "삼화 담당자로 등록",
+    description: "과제담당자(정)로 등록 — Project.assignedManagerPrimary",
+  },
+  {
+    field: "assignedManager",
+    label: "과제담당자(부)",
+    aliases: ["과제담당자(부)", "담당자(부)"],
+    required: false,
+    description: "과제담당자(부, 구 삼화담당자)로 등록 — Project.assignedManager",
   },
   {
     field: "autonomyTrack",
@@ -142,6 +149,20 @@ const annualColumns: ColumnDef[] = [
     aliases: ["연구책임자", "기관책임자"],
     required: false,
     description: "주관기관 행의 값을 과제의 연구책임자(Project.researchLead)로 등록",
+  },
+  {
+    field: "researchLeadEmail",
+    label: "책임자 메일주소",
+    aliases: ["책임자 메일주소", "책임자메일주소", "책임자이메일", "연구책임자메일주소"],
+    required: false,
+    description: "주관기관 행의 값을 과제의 책임자 이메일(Project.researchLeadEmail)로 등록 — 여러 개면 콤마(,)로 구분",
+  },
+  {
+    field: "contactEmail",
+    label: "실무자 메일주소",
+    aliases: ["실무자 메일주소", "실무자메일주소", "실무자이메일", "수신자메일주소", "수신자이메일"],
+    required: false,
+    description: "이 행 기관의 실무자 이메일(ProjectMember.contactEmail)로 등록 — 여러 개면 콤마(,)로 구분",
   },
   {
     field: "agencyAssignedAt",

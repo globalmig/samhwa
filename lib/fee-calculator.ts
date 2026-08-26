@@ -48,6 +48,19 @@ export function resolveMemberRecipientForTerm(
   };
 }
 
+// ─── 연차별 과제코드 조회 ────────────────────────────────────────────
+// 연차마다 서로 다른 SH 코드를 쓴다(termCodes, autoGenerateTermFees가 연차가 새로 생길 때마다 발급).
+// termCodes 마이그레이션 이전에 등록된 과제는 1연차 코드가 projectCode에만 남아 있을 수 있어,
+// 1연차 조회 시 termCodes에 없으면 projectCode로 대체한다.
+export function resolveProjectCodeForTerm(
+  project: Pick<Project, "projectCode" | "termCodes">,
+  termNumber: number,
+): string | undefined {
+  const fromHistory = project.termCodes?.find((t) => t.termNumber === termNumber)?.code;
+  if (fromHistory) return fromHistory;
+  return termNumber === 1 ? project.projectCode : undefined;
+}
+
 // ─── 정산(SETTLEMENT) 연차 판정 ───────────────────────────────────
 // 일괄협약: 총연차의 마지막 연차만 정산. 단계협약: 각 단계의 마지막 연차가 정산.
 // autoGenerateTermFees(store.ts)와 과제 상세 화면(연차별 수수료 현황·참여기관 목록)이
@@ -78,15 +91,8 @@ export function hasStageTermDateMismatch(project: Pick<Project, "stages">, termF
 // ─── 정산절차 안내 공문 "■ 수수료" 섹션용 — 해당 과제·해당 연차 요약 ──────────────
 // 정산절차 안내 공문은 항상 "지금 진행 중인 연차"를 대상으로 발송되므로, 그 연차의
 // 산정액·당해 청구액·미청구액을 공문 미리보기/발송 시 자동으로 채워 넣는 데 쓴다.
-// 과제 상세 화면의 연차별 수수료 카드와 계산 기준(FEE_STATUS·otherFirmHandled 처리 포함)을
+// 과제 상세 화면의 연차별 수수료 카드와 계산 기준(otherFirmHandled 처리 포함)을
 // 그대로 맞춰야 화면마다 다른 숫자가 나오지 않는다 — 로직을 각 발송 화면에 따로 두지 않고 여기 하나로 모은다.
-const FEE_STATUS_LABEL: Record<TermFee["status"], string> = {
-  BILLED: "청구완료",
-  CONFIRMED: "확정",
-  DRAFT: "초안",
-  SCHEDULED: "연차 미시작",
-};
-
 export function buildNoticeFeeRows(project: Pick<Project, "agreementType" | "stages" | "totalTerms">, projectTermFees: TermFee[], termNumber: number): { label: string; value: string }[] {
   const fees = projectTermFees.filter((f) => f.termNumber === termNumber);
   if (fees.length === 0) return [];
@@ -94,14 +100,12 @@ export function buildNoticeFeeRows(project: Pick<Project, "agreementType" | "sta
   const termYear = fees[0].termYear;
   const isSettlement = isSettlementTerm(project, termNumber);
   const otherFirmHandled = fees[0]?.otherFirmHandled ?? false;
-  const termStatus: TermFee["status"] = fees.some((f) => f.status === "DRAFT") ? "DRAFT" : fees.every((f) => f.status === "BILLED") ? "BILLED" : "CONFIRMED";
   const totalCalculated = fees.reduce((s, f) => s + f.calculatedFee, 0);
   const totalApplied = fees.reduce((s, f) => s + f.appliedFee, 0);
   const termUnclaimed = fees.reduce((s, f) => s + (f.unclaimedFee ?? 0), 0);
 
   const rows: { label: string; value: string }[] = [
     { label: "대상 연차", value: `${termYear}년 ${termNumber}연차 (${isSettlement ? "정산" : "연차상시"})` },
-    { label: "진행 상태", value: FEE_STATUS_LABEL[termStatus] },
   ];
 
   // 타회계법인이 진행한 연차는 85% 몫(당해 청구액) 금액을 외부로 보내는 공문에 노출하지 않는다 —
@@ -494,11 +498,18 @@ export function calcTermFee(input: CalcInput): CalcResult {
   const exemptBillingRatio = policy.exemptionMode === "CUSTOM" ? (policy.exemptCustomRate ?? billingRatio) : billingRatio;
 
   // 5. 청구수수료 (일반기관) — 표준수수료는 기관별로 미리 배분해둔다(allocateExact).
-  const generalCalcFee = generalFee;
-  const generalCalcShares = allocateExact(
-    generalCalcFee,
+  // RDA2(perInstitutionMinimumFee)는 이렇게 배분한 기관별 몫이 하한액 미만이면 하한액을 기준으로
+  // 올려 잡는다 — RDA1은 이 하한이 없어 배분액을 그대로 쓴다. 하한 적용으로 늘어난 만큼은 아래
+  // 청구비율 계산에도 그대로 반영되고(85% 청구·15% 이월 등), 기관별 합계(generalCalcFee)도 배분
+  // 원본(generalFee)이 아니라 하한 반영 후 합계로 다시 잡아야 화면에 보이는 합계와 실제 청구되는
+  // 기관별 금액의 합이 어긋나지 않는다.
+  const perInstitutionMinimumFee = policy.perInstitutionMinimumFee ?? 0;
+  const generalCalcSharesRaw = allocateExact(
+    generalFee,
     nonExemptMembers.map((m) => amountOf(m)),
   );
+  const generalCalcShares = generalCalcSharesRaw.map((v) => Math.max(v, perInstitutionMinimumFee));
+  const generalCalcFee = generalCalcShares.reduce((s, v) => s + v, 0);
 
   // 정산 연차엔 등급과 무관하게 이 기관의 정산구분만으로 청구비율이 갈린다 — 위탁정산은 이번
   // 연차 산정액을 100% 청구하고(이월 미청구액은 store.ts에서 기관별로 따로 더해 걷는다), 자체정산은
@@ -555,8 +566,9 @@ export function calcTermFee(input: CalcInput): CalcResult {
     };
   });
 
-  // 4. 과제 산정수수료
-  const calculatedFee = Math.round(generalFee + exemptFeeTotal * billingRatio);
+  // 4. 과제 산정수수료 — generalFee(배분 전 원본)가 아니라 generalCalcFee(기관별 하한 반영 후
+  // 합계)를 써야 RDA2에서 하한으로 늘어난 금액이 과제 전체 산정수수료에도 반영된다.
+  const calculatedFee = Math.round(generalCalcFee + exemptFeeTotal * billingRatio);
 
   const generalBillingFee = generalBillShares.reduce((s, v) => s + v, 0);
   const generalUnclaimedFee = generalCalcFee - generalBillingFee;

@@ -582,6 +582,17 @@ function AgencyGuideModal({ agency }: { agency: FundingAgency }) {
       ...t, tables: t.tables.map((tbl, j) => j !== tbi ? tbl : { ...tbl, rows: [...tbl.rows, newRow] }),
     }));
   }
+  // 특정 행 바로 아래에 새 빈 행을 끼워 넣는다 — "행 추가"는 항상 맨 아래에만 붙는데, 표 중간에
+  // 항목을 넣고 싶을 때(예: 상시점검과 연차상시점검 사이) 쓴다.
+  function insertRowAfter(ti: number, tbi: number, ri: number) {
+    const colCount = displayTabs[ti]?.tables[tbi]?.headers.length ?? 1;
+    const newRow: GuideRow = { cells: Array(colCount).fill("") as string[] };
+    setDraft((d) => d.map((t, i) => i !== ti ? t : {
+      ...t, tables: t.tables.map((tbl, j) => j !== tbi ? tbl : {
+        ...tbl, rows: [...tbl.rows.slice(0, ri + 1), newRow, ...tbl.rows.slice(ri + 1)],
+      }),
+    }));
+  }
   function removeRow(ti: number, tbi: number, ri: number) {
     setDraft((d) => d.map((t, i) => i !== ti ? t : {
       ...t, tables: t.tables.map((tbl, j) => j !== tbi ? tbl : {
@@ -677,6 +688,11 @@ function AgencyGuideModal({ agency }: { agency: FundingAgency }) {
                       {isEditing && (
                         <td className="px-2 py-2.5 text-center">
                           <div className="flex items-center justify-center gap-1">
+                            <button
+                              onClick={() => insertRowAfter(activeTab, tbi, ri)}
+                              title="이 행 아래에 새 행 추가"
+                              className="w-5 h-5 rounded text-[10px] flex items-center justify-center bg-blue-50 text-blue-500 hover:bg-blue-100 transition-colors"
+                            >+</button>
                             <button
                               onClick={() => toggleRowEm(activeTab, tbi, ri)}
                               title="강조 토글"

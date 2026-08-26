@@ -92,6 +92,7 @@ const navGroups: NavGroup[] = [
         children: [
           { label: "절차 안내 공문", href: "/notice-templates/documents" },
           { label: "수수료 청구서 양식", href: "/notice-templates/invoices" },
+          { label: "담당자 연락처", href: "/notice-templates/contacts" },
         ],
       },
     ],

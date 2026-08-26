@@ -1,10 +1,10 @@
-"use client";
+﻿"use client";
 
 import { useState, useMemo, useRef, useEffect, type CSSProperties } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import * as XLSX from "xlsx";
-import { FiPlus, FiChevronDown, FiChevronUp, FiChevronRight, FiMail, FiSend, FiDownload, FiX, FiSearch, FiSliders, FiCalendar } from "react-icons/fi";
+import { FiPlus, FiChevronDown, FiChevronUp, FiSend, FiDownload, FiSearch, FiSliders, FiCalendar } from "react-icons/fi";
 import ExcelUploadModal, { downloadExcelTemplate } from "@/components/common/ExcelUploadModal";
 import {
   useStore,
@@ -31,7 +31,6 @@ import {
   type AgencyNoticeTemplateEntry,
   type SystemUser,
   EMPTY_NOTICE_TEMPLATE,
-  EMPTY_FEE_INVOICE_TEMPLATE,
 } from "@/lib/mock";
 import { fmtWon, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange } from "@/lib/utils";
 import Modal from "@/components/common/Modal";
@@ -41,11 +40,25 @@ import MoneyInput from "@/components/common/MoneyInput";
 import AgreementStructureEditor, { type Stage } from "@/components/common/AgreementStructureEditor";
 import NoticeLetterPreview, { type NoticeStatusRow } from "@/components/common/NoticeLetterPreview";
 import SimpleNoticeModal, { fillTokens, SIMPLE_NOTICE_LABEL, type SimpleNoticeTarget, type SimpleNoticeKind } from "@/components/common/SimpleNoticeModal";
+import DispatchModal, { DispatchDropdown, generateBatchId, generateDocNumber, parseEmails, type DispatchChoice, type DispatchTarget } from "@/components/common/DispatchModal";
 import { buildNoticeEmailHtml } from "@/lib/notice-email-html";
+import { applyManagerContactRows } from "@/lib/notice-contacts";
 import { useCanWrite } from "@/lib/permissions";
 import { getCurrentUser } from "@/lib/auth";
-import { resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, hasStageTermDateMismatch, buildNoticeFeeRows } from "@/lib/fee-calculator";
-import { generateFeeInvoicePdfDataUrl, buildFeeInvoiceHtml, type FeeInvoiceTarget } from "@/lib/fee-invoice-pdf";
+import { resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows } from "@/lib/fee-calculator";
+
+// 여러 이메일 문자열(각각 콤마 구분일 수 있음)을 하나로 합치고 중복을 제거한다 — 정산절차 안내
+// 공문은 책임자(researchLeadEmail)+실무자(recipientEmail) 두 필드를 합쳐서 기본 수신자로 쓴다.
+function combineEmails(...raws: (string | undefined)[]): string {
+  const seen = new Set<string>();
+  const emails: string[] = [];
+  for (const raw of raws) {
+    for (const e of parseEmails(raw ?? "")) {
+      if (!seen.has(e)) { seen.add(e); emails.push(e); }
+    }
+  }
+  return emails.join(", ");
+}
 
 // ── 타입 ──────────────────────────────────────────────────────
 type FeeRow = {
@@ -63,6 +76,7 @@ type FeeRow = {
   // institutionId를 함께 저장해야 다음 렌더에서 이 기관의 것으로 다시 찾을 수 있다.
   isSplitRow: boolean;
   researchLead: string;
+  researchLeadEmail: string;
   projectCategory: string;
   startDate: string;
   endDate: string;
@@ -93,6 +107,7 @@ type FeeRow = {
   recipientEmail: string;
   projectDivision: string;
   assignedManager: string;
+  assignedManagerPrimary: string;
   registeredAt: string;
   // 매출 발행
   projectId: string;
@@ -113,6 +128,10 @@ type FeeRow = {
   // 파이프라인(진행중/완료/중단)에서 클릭해 들어왔을 때 과제 자체는 보이되 수수료 관련 칸은
   // 비어 있는 이유를 알 수 있게 표시한다.
   noFeeRecord: boolean;
+  // 과거 연차는 정상 청구됐지만(과제 자체엔 수수료 기록이 있음) 진행 중인 현재연차(currentTerm)엔
+  // 아무 참여기관도 사업비가 입력되지 않아 TermFee가 아예 생성되지 않은 경우 — noFeeRecord와 달리
+  // 이 과제 자체는 다른 연차 행으로 이미 목록에 보이므로, 현재연차 자리표시 행에만 이 배지를 띄운다.
+  currentTermFeeMissing: boolean;
   // 특정 연차에 담당자가 직접 지정한 날짜가, 그 뒤 단계 날짜가 바뀌면서 그 단계 기간 밖으로 벗어난
   // 상태인지 — 과제명 옆에 주의 배지로 표시한다.
   hasDateMismatch: boolean;
@@ -159,31 +178,6 @@ type SalesTarget = {
   paidAmount: number;
 };
 
-type DispatchTarget = {
-  kind:                "REGULAR" | "REVERSE" | "OTHER";
-  projectNumber:       string;
-  projectName:         string;
-  leadInstitutionName: string;
-  agencyShortName:     string;
-  termYear:            number;
-  termNumber:          number;
-  recipientEmail:      string;
-  recipientName:       string;
-  feeCategory:         "ANNUAL" | "SETTLEMENT";
-  supplyAmount:        number;
-  taxAmount:           number;
-  totalAmount:         number;
-  startDate:           string; // 당해사업연도
-  endDate:             string;
-  stageStartDate:      string; // 단계사업연도
-  stageEndDate:        string;
-  // 청구서 PDF 전용 — 공문 본문(제목/본문)엔 안 쓰이던 값들이지만 청구서 양식엔 필요하다.
-  researchLead:        string;
-  agencyFullName:      string; // 전담기관 정식명칭 (예: "한국산업기술기획평가원") — 약칭과 별개
-  participantCount:    number;
-  docNumber:           string;
-};
-
 type InfoEditTarget = {
   projectId:      string;
   projectName:    string;
@@ -194,7 +188,9 @@ type InfoEditTarget = {
   docReplyDate:   string;
   recipientName:  string;
   recipientEmail: string;
+  researchLeadEmail: string;
   assignedManager: string;
+  assignedManagerPrimary: string;
   registeredAt:   string;
 };
 
@@ -577,640 +573,6 @@ function SalesCancelModal({ target, onClose }: { target: SalesTarget; onClose: (
   );
 }
 
-// ── DispatchDropdown (공문 발송 드롭다운 버튼) ────────────────
-function fmtDot(s: string): string {
-  if (!s) return "";
-  const d = new Date(`${s}T00:00:00`);
-  if (isNaN(d.getTime())) return "";
-  return `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()}.`;
-}
-
-function parseEmails(raw: string): string[] {
-  return raw.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
-}
-
-function generateBatchId(): string {
-  return `BATCH-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.floor(Math.random() * 9000) + 1000}`;
-}
-
-function generateDocNumber(): string {
-  const yyyymm = new Date().toISOString().slice(0, 7).replace(/-/g, "");
-  const seq = String(Math.floor(Math.random() * 9000) + 1000);
-  return `E${yyyymm}-${seq}`;
-}
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
-type DispatchChoice =
-  | { kind: "REGULAR" | "REVERSE"; feeCategory: "ANNUAL" | "SETTLEMENT" }
-  | { kind: "OTHER" }
-  | { kind: "DOC_REQUEST" | "PAYMENT_REMINDER" };
-
-function DispatchDropdown({
-  onSelect,
-}: {
-  onSelect: (choice: DispatchChoice) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    function handler(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    }
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
-
-  function pick(choice: DispatchChoice) {
-    setOpen(false);
-    onSelect(choice);
-  }
-
-  return (
-    <div ref={ref} className="relative inline-block">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded transition-colors whitespace-nowrap bg-teal-50 text-teal-700 hover:bg-teal-100 border border-teal-200"
-      >
-        <FiMail size={11} />
-        공문발송
-        <FiChevronRight size={10} className={`transition-transform ${open ? "rotate-90" : ""}`} />
-      </button>
-      {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden min-w-[190px]">
-          <button
-            className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors"
-            onClick={() => pick({ kind: "REGULAR", feeCategory: "ANNUAL" })}
-          >
-            연차상시점검 수수료 공문
-          </button>
-          <button
-            className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors border-t border-slate-100"
-            onClick={() => pick({ kind: "REGULAR", feeCategory: "SETTLEMENT" })}
-          >
-            위탁정산 수수료 공문
-          </button>
-          <button
-            className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors border-t border-slate-100"
-            onClick={() => pick({ kind: "REVERSE", feeCategory: "ANNUAL" })}
-          >
-            역발행 수수료 공문
-          </button>
-          <button
-            className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors border-t border-slate-100"
-            onClick={() => pick({ kind: "OTHER" })}
-          >
-            기타 공문
-          </button>
-          <button
-            className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors border-t border-slate-100"
-            onClick={() => pick({ kind: "DOC_REQUEST" })}
-          >
-            계산서발행 서류 요청
-          </button>
-          <button
-            className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors border-t border-slate-100"
-            onClick={() => pick({ kind: "PAYMENT_REMINDER" })}
-          >
-            입금 확인 요청
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── StandardAttachmentsPanel (사업자등록증 등 기본 첨부서류 일괄 관리) ──
-// 여기서 파일을 바꾸면 이후 새로 여는 모든 공문 발송창에 기본값으로 반영된다.
-function StandardAttachmentsPanel() {
-  const { standardAttachments } = useStore();
-
-  async function handleReplace(id: string, files: FileList | null) {
-    const file = files?.[0];
-    if (!file) return;
-    const fileDataUrl = await fileToDataUrl(file);
-    updateStandardAttachment(id, { fileDataUrl, updatedAt: new Date().toISOString().slice(0, 10) });
-  }
-
-  return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3 space-y-2">
-      <p className="text-[11px] text-slate-500">여기서 교체한 파일은 이후 새로 작성하는 모든 공문에 기본으로 첨부됩니다.</p>
-      {standardAttachments.map((a) => (
-        <div key={a.id} className="flex items-center justify-between gap-3 bg-white rounded-lg border border-slate-200 px-3 py-2">
-          <div className="min-w-0">
-            <p className="text-xs font-medium text-slate-700 truncate">{a.name}</p>
-            <p className="text-[10px] text-slate-400">
-              {a.fileDataUrl ? `파일 등록됨 · ${a.updatedAt} 수정` : "등록된 파일 없음"}
-            </p>
-          </div>
-          <label className="shrink-0 text-[11px] font-medium text-teal-600 hover:text-teal-700 cursor-pointer whitespace-nowrap">
-            파일 선택
-            <input type="file" className="hidden" onChange={(e) => { handleReplace(a.id, e.target.files); e.target.value = ""; }} />
-          </label>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ── DispatchModal (공문 발송 모달) ────────────────────────────
-type AttachmentRow = { name: string; checked: boolean; dataUrl?: string; previewHtml?: string };
-
-function DispatchModal({ target, onClose }: { target: DispatchTarget; onClose: () => void }) {
-  const { standardAttachments, users, feeInvoiceTemplates, companyInfo } = useStore();
-  // getCurrentUser()는 로그인 시점 스냅샷이라 이후 등록된 하이웍스 계정 정보가 반영되지 않으므로,
-  // 실시간 store에서 같은 id의 사용자 레코드를 다시 찾아 발신 계정으로 사용한다.
-  const senderUser = users.find((u) => u.id === getCurrentUser()?.id) ?? null;
-  const canSendMail = !!senderUser?.hiworksEmail && !!senderUser?.hiworksMailPassword;
-  const isOther = target.kind === "OTHER";
-  const termLabel = `${target.termNumber}연차`;
-
-  const stageRange = target.stageStartDate && target.stageEndDate
-    ? `${fmtDot(target.stageStartDate)} ~ ${fmtDot(target.stageEndDate)}`
-    : "-";
-  const termRange = target.startDate && target.endDate
-    ? `${fmtDot(target.startDate)}～${fmtDot(target.endDate)}`
-    : "-";
-
-  function buildSubject(cat: "ANNUAL" | "SETTLEMENT"): string {
-    const label = cat === "ANNUAL" ? "연차상시점검 수수료" : "위탁정산 수수료";
-    const suffix = target.kind === "REVERSE" ? "역발행 요청" : "청구서";
-    return `[${target.projectNumber}] ${target.agencyShortName} 전담과제 ${label} ${suffix}_${target.leadInstitutionName}`;
-  }
-
-  function buildBody(cat: "ANNUAL" | "SETTLEMENT"): string {
-    const compact = cat === "ANNUAL" ? "연차상시점검수수료" : "위탁정산수수료";
-    if (target.kind === "REVERSE") {
-      return `안녕하세요.
-${companyInfo.name}입니다.
-
-수수료 역발행 관련하여 필요 서류 송부드립니다.
-첨부하여드린 청구서 참고하셔서 역발행하여 주시기 바랍니다.
-
-또한 역발행 하실 때 과제 정보 확인을 위해
-품목에 연구책임자님 성함 또는 과제명을 입력하여 주시기 바랍니다.
-
-
-감사합니다.`;
-    }
-    return `안녕하세요.
-${target.leadInstitutionName} 담당자님,
-
-${target.projectName} 과제의 ${termLabel} ${compact} 청구서를 첨부하여 안내 드립니다.
-
-【 청구 내역 】
-- 과제번호 : ${target.projectNumber}
-- 과    제 : ${target.projectName}
-- 대    상 : ${termLabel} ${compact}
-- 단계사업연도 : ${stageRange}
-- 당해사업연도 : ${termRange}
-- 공급가액 : ${target.supplyAmount > 0 ? target.supplyAmount.toLocaleString() + "원" : "별도 협의"}
-- 부  가  세 : ${target.taxAmount   > 0 ? target.taxAmount.toLocaleString()   + "원" : ""}
-- 합    계 : ${target.totalAmount  > 0 ? target.totalAmount.toLocaleString()  + "원" : ""}
-
-첨부파일을 확인하시고, 기한 내 납부 부탁드립니다.
-문의사항은 아래 연락처로 연락 주시기 바랍니다.
-
-■담당자 : ${companyInfo.managerName}(${companyInfo.managerEmail}, ${companyInfo.managerPhone})
-
-■입금계좌 : ${companyInfo.depositAccountNote}
-
-
-감사합니다.
-${companyInfo.name} 드림`;
-  }
-
-  // 청구서 문구/라벨은 하드코딩이 아니라 공문관리 > 수수료 청구서 양식(/notice-templates/invoices)에서
-  // 카테고리별로 등록해둔 대표양식을 그대로 쓴다 — 선택 UI 없이 항상 자동 적용. 역발행/기타는 연차상시/
-  // 위탁정산 어느 쪽이든 항상 REVERSE·OTHER 전용 대표양식을 쓴다(공문발송 드롭다운의 "역발행 수수료
-  // 공문"·"기타 공문"이 연차상시/위탁정산 구분 없이 하나뿐인 것과 대응).
-  // 청구서 대표양식뿐 아니라 공통 첨부파일(사업자등록증 등)의 "이 유형엔 첨부할지" 설정도 같은 카테고리
-  // 축(ANNUAL/SETTLEMENT/REVERSE/OTHER)을 기준으로 삼는다 — 역발행/기타는 항상 REVERSE·OTHER로 취급.
-  function resolveTemplateCategory(cat: "ANNUAL" | "SETTLEMENT"): "ANNUAL" | "SETTLEMENT" | "REVERSE" | "OTHER" {
-    return target.kind === "REVERSE" ? "REVERSE" : target.kind === "OTHER" ? "OTHER" : cat;
-  }
-
-  function resolveInvoiceTemplateEntry(cat: "ANNUAL" | "SETTLEMENT") {
-    const category = resolveTemplateCategory(cat);
-    return (
-      feeInvoiceTemplates.find((t) => t.category === category && t.isDefault)
-      ?? feeInvoiceTemplates.find((t) => t.category === category)
-    );
-  }
-
-  function resolveInvoiceTemplateContent(cat: "ANNUAL" | "SETTLEMENT") {
-    return resolveInvoiceTemplateEntry(cat)?.content ?? EMPTY_FEE_INVOICE_TEMPLATE;
-  }
-
-  function buildFeeInvoiceTargetData(cat: "ANNUAL" | "SETTLEMENT"): FeeInvoiceTarget {
-    return {
-      kind: target.kind,
-      projectNumber: target.projectNumber,
-      projectName: target.projectName,
-      leadInstitutionName: target.leadInstitutionName,
-      agencyShortName: target.agencyShortName,
-      agencyFullName: target.agencyFullName,
-      termYear: target.termYear,
-      termNumber: target.termNumber,
-      recipientName: target.recipientName,
-      feeCategory: cat,
-      supplyAmount: target.supplyAmount,
-      taxAmount: target.taxAmount,
-      totalAmount: target.totalAmount,
-      startDate: target.startDate,
-      endDate: target.endDate,
-      researchLead: target.researchLead,
-      participantCount: target.participantCount,
-      docNumber: target.docNumber,
-    };
-  }
-
-  function buildAttachments(cat: "ANNUAL" | "SETTLEMENT"): AttachmentRow[] {
-    // previewHtml은 PDF 뷰어 유무와 상관없이 화면에서 바로 확인할 수 있도록, PDF와 같은 내용을
-    // html2canvas 없이 즉시(동기) 렌더링해둔 것 — 모달을 열자마자 "생성 중" 대기 없이 보여준다.
-    const invoiceAttachment = {
-      name: `청구서_${target.projectNumber}_${termLabel}.pdf`,
-      checked: true,
-      previewHtml: buildFeeInvoiceHtml(buildFeeInvoiceTargetData(cat), resolveInvoiceTemplateContent(cat), companyInfo),
-    };
-    // 사업자등록증·통장사본 등 공통 첨부파일(/notice-templates/invoices에서 관리) — 이 유형(카테고리)
-    // 기준으로 꺼져 있는 항목은(파일이 등록돼 있어도) 발송 목록에서 아예 빼서, 그 유형엔 필요 없는
-    // 서류를 매번 체크 해제하지 않아도 되게 한다.
-    const templateCategory = resolveTemplateCategory(cat);
-    const standardAttachmentRows = standardAttachments
-      .filter((a) => (a.enabledByCategory?.[templateCategory] ?? true))
-      .map((a) => ({ name: a.name, checked: true, dataUrl: a.fileDataUrl }));
-    // 공문 양식 관리 > 수수료 청구서 양식(/notice-templates/invoices)에서 이 카테고리(대표양식)에
-    // 등록해둔 기본 첨부 파일 — 위탁정산내역서처럼 카테고리마다 다를 수 있는 서류를 거기서 관리한다.
-    const defaultAttachmentRows = (resolveInvoiceTemplateEntry(cat)?.defaultAttachments ?? []).map((a) => ({
-      name: a.name,
-      checked: true,
-      dataUrl: a.fileDataUrl,
-    }));
-    return [invoiceAttachment, ...standardAttachmentRows, ...defaultAttachmentRows];
-  }
-
-  const [feeCategory,  setFeeCategory]  = useState(target.feeCategory);
-  const [toEmailRaw,   setToEmailRaw]   = useState(target.recipientEmail);
-  const [subject,      setSubject]      = useState(() => isOther ? "" : buildSubject(target.feeCategory));
-  const [body,         setBody]         = useState(() => isOther ? "" : buildBody(target.feeCategory));
-  const [attachments,  setAttachments]  = useState<AttachmentRow[]>(() => buildAttachments(target.feeCategory));
-  const [sending,      setSending]      = useState(false);
-  const [sent,         setSent]         = useState(false);
-  const [sendError,    setSendError]    = useState("");
-  const [showStandardPanel, setShowStandardPanel] = useState(false);
-  const [invoiceGenerating, setInvoiceGenerating] = useState(false);
-  const [previewAttachment, setPreviewAttachment] = useState<AttachmentRow | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const replaceIndexRef = useRef<number | null>(null);
-
-  const invoiceFileName = `청구서_${target.projectNumber}_${termLabel}.pdf`;
-  const activeInvoiceTemplateEntry = resolveInvoiceTemplateEntry(feeCategory);
-
-  // 청구서(위탁정산/연차상시/역발행/기타) PDF는 반출용 파일이라 모달을 열 때, 그리고 구분(위탁정산↔
-  // 연차상시)을 바꿀 때마다 값에 맞춰 새로 생성해 첨부에 자동으로 끼워 넣는다. (화면 미리보기는
-  // previewHtml로 이미 즉시 보이므로, 여기서는 메일 발송용 실제 PDF 파일만 비동기로 준비한다.)
-  useEffect(() => {
-    let cancelled = false;
-    setInvoiceGenerating(true);
-    generateFeeInvoicePdfDataUrl(buildFeeInvoiceTargetData(feeCategory), resolveInvoiceTemplateContent(feeCategory), companyInfo)
-      .then((dataUrl) => {
-        if (cancelled) return;
-        setAttachments((prev) => prev.map((a) => (a.name === invoiceFileName ? { ...a, dataUrl } : a)));
-      })
-      .catch((err) => {
-        console.error("청구서 PDF 생성 실패", err);
-      })
-      .finally(() => {
-        if (!cancelled) setInvoiceGenerating(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [feeCategory, activeInvoiceTemplateEntry?.id]);
-
-  // 역발행 공문은 과제가 연차상시/위탁정산 중 어느 쪽인지 자동으로 구분할 수 있는 필드가
-  // 없어(발행 시 매번 사람이 고르는 구조) 모달에서 직접 선택하게 하고, 고르면 제목/본문/
-  // 첨부를 그 구분에 맞춰 다시 만든다.
-  function handleCategoryChange(next: "ANNUAL" | "SETTLEMENT") {
-    setFeeCategory(next);
-    setSubject(buildSubject(next));
-    setBody(buildBody(next));
-    setAttachments(buildAttachments(next));
-  }
-
-  const emails = parseEmails(toEmailRaw);
-  const invalidEmails = emails.filter((e) => !EMAIL_RE.test(e));
-  const canSend = emails.length > 0 && invalidEmails.length === 0 && !sending && canSendMail;
-
-  function toggleAttach(i: number) {
-    setAttachments((prev) => prev.map((a, idx) => idx === i ? { ...a, checked: !a.checked } : a));
-  }
-
-  function removeAttach(i: number) {
-    setAttachments((prev) => prev.filter((_, idx) => idx !== i));
-  }
-
-  async function handleFilesPicked(files: FileList | null) {
-    if (!files || files.length === 0) return;
-    const idx = replaceIndexRef.current;
-    replaceIndexRef.current = null;
-    const picked = await Promise.all(
-      Array.from(files).map(async (f) => ({ name: f.name, checked: true, dataUrl: await fileToDataUrl(f) }))
-    );
-    setAttachments((prev) => {
-      if (idx !== null) {
-        // 개별 수정 — 이 발송 건에서만 해당 행의 파일을 교체 (기본 첨부서류는 그대로 둠)
-        return prev.map((a, i) => i === idx ? picked[0] : a);
-      }
-      return [...prev, ...picked];
-    });
-  }
-
-  async function handleSend() {
-    if (!canSend || !senderUser?.hiworksEmail || !senderUser?.hiworksMailPassword) return;
-    setSending(true);
-    setSendError("");
-
-    const checkedAttachments = attachments.filter((a) => a.checked);
-    const mailAttachments = checkedAttachments
-      .filter((a): a is AttachmentRow & { dataUrl: string } => !!a.dataUrl)
-      .map((a) => ({ filename: a.name, dataUrl: a.dataUrl }));
-
-    let status: "SUCCESS" | "FAILED" = "SUCCESS";
-    try {
-      const res = await fetch("/api/notices/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          senderEmail: senderUser.hiworksEmail,
-          senderPassword: senderUser.hiworksMailPassword,
-          senderName: senderUser.name,
-          to: emails,
-          subject,
-          text: body,
-          attachments: mailAttachments,
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.ok) {
-        status = "FAILED";
-        setSendError(json.error || "메일 발송에 실패했습니다.");
-      }
-    } catch {
-      status = "FAILED";
-      setSendError("메일 발송 중 네트워크 오류가 발생했습니다.");
-    }
-
-    addEmailDispatch({
-      batchId: generateBatchId(),
-      sentAt:               new Date().toISOString().replace("T", " ").slice(0, 16),
-      senderName:           senderUser.name,
-      recipientInstitution: target.leadInstitutionName,
-      recipientEmail:       emails.join(", "),
-      subject,
-      emailType:            isOther ? "OTHER" : "TAX_INVOICE",
-      feeCategory:          isOther ? undefined : feeCategory,
-      isReverseRequest:     target.kind === "REVERSE" ? true : undefined,
-      attachments:          checkedAttachments.map((a) => a.name),
-      status,
-      body,
-    });
-    setSending(false);
-    if (status === "SUCCESS") setSent(true);
-  }
-
-  if (sent) {
-    return (
-      <div className="p-8 flex flex-col items-center gap-4">
-        <div className="w-14 h-14 rounded-full bg-green-100 flex items-center justify-center">
-          <FiMail size={28} className="text-green-600" />
-        </div>
-        <div className="text-center">
-          <p className="text-sm font-semibold text-slate-800">발송 완료</p>
-          <p className="text-xs text-slate-500 mt-1">{emails.join(", ")}</p>
-        </div>
-        <button onClick={onClose} className="mt-2 px-6 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
-          닫기
-        </button>
-      </div>
-    );
-  }
-
-  const categoryLabelCompact = feeCategory === "ANNUAL" ? "연차상시점검수수료" : "위탁정산수수료";
-  const badgeLabel = isOther ? "기타 공문" : `${categoryLabelCompact} ${target.kind === "REVERSE" ? "역발행 " : ""}공문`;
-
-  return (
-    <div className="p-6 space-y-4">
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple={replaceIndexRef.current === null}
-        className="hidden"
-        onChange={(e) => { handleFilesPicked(e.target.files); e.target.value = ""; }}
-      />
-
-      {/* 공문 유형 배지 */}
-      <div className="flex items-center gap-2">
-        <span className="text-[11px] font-bold px-2 py-1 rounded bg-teal-100 text-teal-700">
-          {badgeLabel}
-        </span>
-        {!isOther && (
-          <span className="text-xs text-slate-500">
-            {target.projectNumber} · {termLabel}
-          </span>
-        )}
-      </div>
-
-      {/* 역발행 — 연차상시/위탁정산 자동 구분이 안 되어 직접 선택 */}
-      {target.kind === "REVERSE" && (
-        <div className="space-y-1.5">
-          <label className="text-xs font-medium text-slate-600">수수료 구분</label>
-          <div className="flex gap-2">
-            {(["ANNUAL", "SETTLEMENT"] as const).map((cat) => (
-              <button
-                key={cat}
-                type="button"
-                onClick={() => handleCategoryChange(cat)}
-                className={`flex-1 px-3 py-2 text-xs font-medium rounded-lg border transition-colors ${
-                  feeCategory === cat ? "bg-teal-50 border-teal-300 text-teal-700" : "border-slate-200 text-slate-500 hover:border-slate-300"
-                }`}
-              >
-                {cat === "ANNUAL" ? "연차상시점검 수수료" : "위탁정산 수수료"}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* 수신 이메일 */}
-      <div className="space-y-1.5">
-        <label className="text-xs font-medium text-slate-600">
-          수신자 이메일 <span className="text-slate-400 font-normal">(여러 명은 쉼표로 구분)</span>
-        </label>
-        <input
-          type="text"
-          value={toEmailRaw}
-          onChange={(e) => setToEmailRaw(e.target.value)}
-          className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-          placeholder="example@domain.com, second@domain.com"
-        />
-        {target.recipientName && (
-          <p className="text-[11px] text-slate-400">수신자: {target.recipientName}</p>
-        )}
-        {invalidEmails.length > 0 && (
-          <p className="text-[11px] text-red-500">올바르지 않은 이메일 주소: {invalidEmails.join(", ")}</p>
-        )}
-        {emails.length > 1 && invalidEmails.length === 0 && (
-          <p className="text-[11px] text-slate-400">{emails.length}명에게 발송됩니다</p>
-        )}
-      </div>
-
-      {/* 제목 */}
-      <div className="space-y-1.5">
-        <label className="text-xs font-medium text-slate-600">메일 제목</label>
-        <input
-          type="text"
-          value={subject}
-          onChange={(e) => setSubject(e.target.value)}
-          placeholder={isOther ? "메일 제목을 입력하세요" : undefined}
-          className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-        />
-      </div>
-
-      {/* 첨부파일 */}
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between">
-          <label className="text-xs font-medium text-slate-600">첨부파일</label>
-          <div className="flex items-center gap-3">
-            <button type="button" onClick={() => setShowStandardPanel((v) => !v)} className="text-[11px] text-slate-400 hover:text-teal-600 transition-colors">
-              기본파일 일괄 수정
-            </button>
-            <button
-              type="button"
-              onClick={() => { replaceIndexRef.current = null; fileInputRef.current?.click(); }}
-              className="text-[11px] font-medium text-teal-600 hover:text-teal-700 transition-colors"
-            >
-              + 파일 추가
-            </button>
-          </div>
-        </div>
-        {showStandardPanel && <StandardAttachmentsPanel />}
-        {attachments.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-slate-200 px-3 py-4 text-center text-xs text-slate-400">
-            첨부된 파일이 없습니다
-          </div>
-        ) : (
-          <div className="rounded-lg border border-slate-200 divide-y divide-slate-100 overflow-hidden">
-            {attachments.map((a, i) => (
-              <div key={`${a.name}-${i}`} className="flex items-center gap-3 px-3 py-2 hover:bg-slate-50 transition-colors">
-                <input
-                  type="checkbox"
-                  checked={a.checked}
-                  onChange={() => toggleAttach(i)}
-                  className="rounded"
-                />
-                {a.dataUrl || a.previewHtml ? (
-                  <button
-                    type="button"
-                    onClick={() => setPreviewAttachment(a)}
-                    title="미리보기"
-                    className={`flex-1 text-left text-xs truncate hover:underline ${a.checked ? "text-teal-700" : "text-slate-300 line-through"}`}
-                  >
-                    {a.name}
-                  </button>
-                ) : (
-                  <span className={`flex-1 text-xs truncate ${a.checked ? "text-slate-700" : "text-slate-300 line-through"}`}>
-                    {a.name}
-                  </span>
-                )}
-                {!a.dataUrl && a.name === invoiceFileName && invoiceGenerating ? (
-                  <span className="text-[10px] text-slate-400 whitespace-nowrap">생성 중…</span>
-                ) : !a.dataUrl ? (
-                  <span className="text-[10px] text-amber-500 whitespace-nowrap" title="실제 파일이 등록되지 않아 발송 시 첨부되지 않습니다">
-                    파일 없음
-                  </span>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => { replaceIndexRef.current = i; fileInputRef.current?.click(); }}
-                  className="text-[10px] text-slate-400 hover:text-teal-600 transition-colors whitespace-nowrap"
-                >
-                  교체
-                </button>
-                <button
-                  type="button"
-                  onClick={() => removeAttach(i)}
-                  className="text-slate-300 hover:text-red-500 transition-colors"
-                  title="삭제"
-                >
-                  <FiX size={12} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* 본문 */}
-      <div className="space-y-1.5">
-        <label className="text-xs font-medium text-slate-600">메일 본문</label>
-        <textarea
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          rows={isOther ? 8 : 13}
-          placeholder={isOther ? "메일 본문을 입력하세요" : undefined}
-          className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 text-slate-700 resize-y focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 font-mono leading-relaxed"
-        />
-      </div>
-
-      <p className="text-[11px] text-slate-400">
-        발신 계정: {canSendMail ? senderUser!.hiworksEmail : <span className="text-red-500">등록된 하이웍스 계정이 없습니다 (관리자 &gt; 사용자 관리에서 등록)</span>}
-      </p>
-      {sendError && <p className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{sendError}</p>}
-
-      {/* 버튼 */}
-      <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-        <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
-          취소
-        </button>
-        <button
-          onClick={handleSend}
-          disabled={!canSend}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <FiMail size={14} />
-          {sending ? "발송 중..." : "발송"}
-        </button>
-      </div>
-
-      {previewAttachment && (previewAttachment.previewHtml || previewAttachment.dataUrl) && (
-        <Modal title={previewAttachment.name} onClose={() => setPreviewAttachment(null)} size="xl">
-          {previewAttachment.previewHtml ? (
-            // 브라우저의 내장 PDF 뷰어 유무와 무관하게 항상 보이도록, PDF와 동일한 내용을 HTML로 직접
-            // 렌더링한다 (실제 발송되는 PDF는 별도로 html2canvas가 이 HTML을 캡처해서 만든 것이라 내용은 같다).
-            <div className="bg-slate-100 p-4">
-              <div dangerouslySetInnerHTML={{ __html: previewAttachment.previewHtml }} />
-            </div>
-          ) : (
-            <iframe src={previewAttachment.dataUrl} title={previewAttachment.name} className="w-full h-[80vh]" />
-          )}
-        </Modal>
-      )}
-    </div>
-  );
-}
 
 // ── CollectionModal ───────────────────────────────────────────
 function CollectionModal({ target, onClose }: { target: CollectionTarget; onClose: () => void }) {
@@ -1359,19 +721,23 @@ function CollectionModal({ target, onClose }: { target: CollectionTarget; onClos
   );
 }
 
-// ── InfoEditModal (서류요청·서류회신·수신자·삼화담당자 수정) ────
+// ── InfoEditModal (서류요청·서류회신·실무자·과제담당자 수정) ────
 function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: () => void }) {
   const { projectMembers } = useStore();
   const [docRequestDate, setDocRequestDate]   = useState(target.docRequestDate);
   const [docReplyDate, setDocReplyDate]       = useState(target.docReplyDate);
   const [recipientName, setRecipientName]     = useState(target.recipientName);
   const [recipientEmail, setRecipientEmail]   = useState(target.recipientEmail);
+  const [researchLeadEmail, setResearchLeadEmail] = useState(target.researchLeadEmail);
   const [assignedManager, setAssignedManager] = useState(target.assignedManager);
+  const [assignedManagerPrimary, setAssignedManagerPrimary] = useState(target.assignedManagerPrimary);
   const [registeredAt, setRegisteredAt]       = useState(target.registeredAt);
 
   function handleSave() {
     updateProject(target.projectId, {
       assignedManager: assignedManager || undefined,
+      assignedManagerPrimary: assignedManagerPrimary || undefined,
+      researchLeadEmail: researchLeadEmail || undefined,
       registeredAt:   registeredAt || undefined,
     });
     if (target.docFeeId) {
@@ -1380,8 +746,8 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
         docReplyDate:   docReplyDate || undefined,
       });
     }
-    // 수신자는 과제 단위 기본값(contactName/contactEmail)이 아니라 이 연차(termNumber)에만 적용되는
-    // recipientOverrides로 저장한다 — 기본값을 직접 덮어쓰면 연차별로 다른 수신자를 쓰는 다른 연차들의
+    // 실무자는 과제 단위 기본값(contactName/contactEmail)이 아니라 이 연차(termNumber)에만 적용되는
+    // recipientOverrides로 저장한다 — 기본값을 직접 덮어쓰면 연차별로 다른 실무자를 쓰는 다른 연차들의
     // 화면(연차별로 override가 없으면 기본값을 그대로 보여줌)까지 함께 바뀌어버린다.
     const member = target.leadMemberId ? projectMembers.find((m) => m.id === target.leadMemberId) : undefined;
     if (member) {
@@ -1421,7 +787,7 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">수신자</label>
+          <label className="block text-xs font-medium text-slate-600 mb-1">실무자</label>
           <input
             value={recipientName}
             onChange={(e) => setRecipientName(e.target.value)}
@@ -1430,11 +796,11 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
           />
         </div>
         <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">수신자 이메일</label>
+          <label className="block text-xs font-medium text-slate-600 mb-1">실무자이메일</label>
           <input
             value={recipientEmail}
             onChange={(e) => setRecipientEmail(e.target.value)}
-            placeholder="email@example.com"
+            placeholder="email@example.com (여러 명이면 콤마로 구분)"
             className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
           />
         </div>
@@ -1442,13 +808,26 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
 
       {!target.leadMemberId && (
         <p className="text-[11px] text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
-          이 과제에는 등록된 주관기관 담당자 정보가 없어 수신자 항목은 저장되지 않습니다.
+          이 과제에는 등록된 주관기관 담당자 정보가 없어 실무자 항목은 저장되지 않습니다.
         </p>
       )}
 
+      <div>
+        <label className="block text-xs font-medium text-slate-600 mb-1">
+          책임자이메일
+          <span className="ml-1 text-slate-400 font-normal">· 정산절차 안내 공문만 실무자와 함께 수신</span>
+        </label>
+        <input
+          value={researchLeadEmail}
+          onChange={(e) => setResearchLeadEmail(e.target.value)}
+          placeholder="email@example.com (여러 명이면 콤마로 구분)"
+          className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+        />
+      </div>
+
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">삼화담당자</label>
+          <label className="block text-xs font-medium text-slate-600 mb-1">과제담당자(부)</label>
           <input
             value={assignedManager}
             onChange={(e) => setAssignedManager(e.target.value)}
@@ -1456,6 +835,17 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
             className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
           />
         </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">과제담당자(정)</label>
+          <input
+            value={assignedManagerPrimary}
+            onChange={(e) => setAssignedManagerPrimary(e.target.value)}
+            placeholder="담당자명"
+            className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+          />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">등록일 (배정일)</label>
           <DateInput value={registeredAt} onChange={setRegisteredAt} className="w-full" />
@@ -1493,6 +883,7 @@ type NewProjectDraft = {
   programType: "GENERAL" | "ICT_FUND";
   researchLead: string;
   assignedManager: string;
+  assignedManagerPrimary: string;
   projectDivision: "" | "위탁" | "공동";
   agreementType: "BATCH" | "STAGED";
   stages: Stage[] | undefined;
@@ -1515,6 +906,7 @@ const EMPTY_NEW_PROJECT: NewProjectDraft = {
   programType: "GENERAL",
   researchLead: "",
   assignedManager: "",
+  assignedManagerPrimary: "",
   projectDivision: "",
   agreementType: "BATCH",
   stages: undefined,
@@ -1562,6 +954,7 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
       programType: resolvedAgencyId === "fa-003" ? form.programType : undefined,
       researchLead: form.researchLead || undefined,
       assignedManager: form.assignedManager || undefined,
+      assignedManagerPrimary: form.assignedManagerPrimary || undefined,
       projectDivision: form.projectDivision || undefined,
       agreementType: form.agreementType,
       stages: form.agreementType === "STAGED" ? form.stages : undefined,
@@ -1665,11 +1058,15 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
           <input className={inputCls} value={form.researchLead} onChange={(e) => s("researchLead", e.target.value)} placeholder="담당자명" />
         </div>
         <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">삼화담당자</label>
+          <label className="block text-xs font-medium text-slate-600 mb-1">과제담당자(부)</label>
           <input className={inputCls} value={form.assignedManager} onChange={(e) => s("assignedManager", e.target.value)} placeholder="담당자명" />
         </div>
       </div>
       <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">과제담당자(정)</label>
+          <input className={inputCls} value={form.assignedManagerPrimary} onChange={(e) => s("assignedManagerPrimary", e.target.value)} placeholder="담당자명" />
+        </div>
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">자율성트랙 여부</label>
           <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-medium">
@@ -1817,6 +1214,7 @@ function useFeeRows(): FeeRow[] {
           billedInstitutionName,
           isSplitRow:          isSplit,
           researchLead:        project?.researchLead ?? "",
+          researchLeadEmail:   project?.researchLeadEmail ?? "",
           projectCategory,
           startDate:           explicitTermStart ?? termRange?.start ?? project?.startDate ?? "",
           endDate:             explicitTermEnd ?? termRange?.end ?? project?.endDate ?? "",
@@ -1846,6 +1244,7 @@ function useFeeRows(): FeeRow[] {
           recipientEmail:      recipient.recipientEmail,
           projectDivision:     project?.projectDivision ?? "",
           assignedManager:     project?.assignedManager ?? "",
+          assignedManagerPrimary: project?.assignedManagerPrimary ?? "",
           registeredAt:        project?.registeredAt ?? "",
           taxInvoiceId:        invoice?.id ?? "",
           taxInvoiceStatus:    invoice?.status ?? "",
@@ -1863,25 +1262,24 @@ function useFeeRows(): FeeRow[] {
           leadMemberId:        recipientMember?.id ?? "",
           issues,
           noFeeRecord: false,
+          currentTermFeeMissing: false,
           hasDateMismatch,
         };
       });
     });
 
-    // 연차별 수수료(TermFee) 기록이 하나도 없는 과제는 위 루프에서 아예 안 잡힌다 — 대시보드
-    // "과제 파이프라인"(진행중/완료/중단)에서 그런 과제를 클릭해 들어오면 리스트가 통째로 비어 보여서
-    // "왜 아무것도 안 보이지?"가 되므로, 과제 자체는 자리표시 행으로 보여주고 수수료 관련 칸만 비운다.
-    const projectNumbersWithFees = new Set(termFees.map((tf) => tf.projectNumber));
-    for (const project of projects) {
-      if (projectNumbersWithFees.has(project.projectNumber)) continue;
+    // 수수료 칸이 비어 있는 자리표시 행을 만든다 — noFeeRecord(과제 전체에 TermFee가 하나도 없음)와
+    // currentTermFeeMissing(과거 연차는 정상 청구됐지만 진행 중인 현재연차엔 참여기관 사업비가 하나도
+    // 없어 그 연차만 TermFee가 안 생긴 경우) 두 케이스가 나머지 필드는 전부 동일해서 공통으로 뽑았다.
+    function buildPlaceholderRow(project: Project, keyPrefix: string, flags: { noFeeRecord: boolean; currentTermFeeMissing: boolean }): FeeRow {
       const agency = fundingAgencies.find((a) => a.id === project.agencyId);
       const leadMember = projectMembers.find((pm) => pm.projectNumber === project.projectNumber && pm.role === "LEAD");
       const issues = projectIssues
         .filter((i) => i.projectNumber === project.projectNumber)
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
       const termRange = resolveTermDateRange(project, project.currentTerm);
-      rows.push({
-        key: `no-fee|${project.projectNumber}`,
+      return {
+        key: `${keyPrefix}|${project.projectNumber}`,
         projectId: project.id,
         leadInstitutionId: project.leadInstitutionId ?? "",
         agencyShortName: agency?.shortName ?? "",
@@ -1892,6 +1290,7 @@ function useFeeRows(): FeeRow[] {
         billedInstitutionName: project.leadInstitutionName ?? "",
         isSplitRow: false,
         researchLead: project.researchLead ?? "",
+        researchLeadEmail: project.researchLeadEmail ?? "",
         projectCategory: isSettlementTerm(project, project.currentTerm) ? "정산" : "연차상시",
         startDate: termRange?.start ?? project.startDate ?? "",
         endDate: termRange?.end ?? project.endDate ?? "",
@@ -1918,6 +1317,7 @@ function useFeeRows(): FeeRow[] {
         recipientEmail: leadMember ? resolveMemberRecipientForTerm(leadMember, project.currentTerm).recipientEmail : "",
         projectDivision: project.projectDivision ?? "",
         assignedManager: project.assignedManager ?? "",
+        assignedManagerPrimary: project.assignedManagerPrimary ?? "",
         registeredAt: project.registeredAt ?? "",
         taxInvoiceId: "",
         taxInvoiceStatus: "",
@@ -1934,9 +1334,33 @@ function useFeeRows(): FeeRow[] {
         otherFirmHandled: false,
         otherFirmUnclaimedTotal: 0,
         auditFirm: "",
-        noFeeRecord: true,
         hasDateMismatch: false,
-      });
+        ...flags,
+      };
+    }
+
+    // 연차별 수수료(TermFee) 기록이 하나도 없는 과제는 위 루프에서 아예 안 잡힌다 — 대시보드
+    // "과제 파이프라인"(진행중/완료/중단)에서 그런 과제를 클릭해 들어오면 리스트가 통째로 비어 보여서
+    // "왜 아무것도 안 보이지?"가 되므로, 과제 자체는 자리표시 행으로 보여주고 수수료 관련 칸만 비운다.
+    const projectNumbersWithFees = new Set(termFees.map((tf) => tf.projectNumber));
+    for (const project of projects) {
+      if (projectNumbersWithFees.has(project.projectNumber)) continue;
+      rows.push(buildPlaceholderRow(project, "no-fee", { noFeeRecord: true, currentTermFeeMissing: false }));
+    }
+
+    // 과제 자체엔 과거 연차 수수료 기록이 있어 위 두 루프 어디에도 안 잡히지만, 진행 중인 현재연차엔
+    // 참여기관 전원이 사업비 미입력이라 autoGenerateTermFees가 그 연차를 통째로 건너뛴(TermFee 자체가
+    // 없는) 과제 — noFeeRecord와 달리 과거 연차 행은 이미 정상적으로 보이고 있으니, 현재연차 자리만
+    // 자리표시 행으로 채워 "이번 연차는 왜 안 보이지?"를 화면에서 바로 알 수 있게 한다. 완료/중단
+    // 과제는 더 이상 새 연차가 진행되지 않으므로 대상에서 뺀다.
+    for (const project of projects) {
+      if (project.status !== "ACTIVE") continue;
+      if (!projectNumbersWithFees.has(project.projectNumber)) continue; // 위 루프에서 이미 처리됨
+      const hasCurrentTermFee = termFees.some(
+        (tf) => tf.projectNumber === project.projectNumber && tf.termNumber === project.currentTerm
+      );
+      if (hasCurrentTermFee) continue;
+      rows.push(buildPlaceholderRow(project, "current-term-missing", { noFeeRecord: false, currentTermFeeMissing: true }));
     }
 
     rows.sort((a, b) => {
@@ -2026,10 +1450,12 @@ const COLUMNS = [
   { key: "agencyAssignedAt",   label: "전담기관배정일",width: "w-24", align: "text-center" },
   { key: "docRequestDate",     label: "서류요청",    width: "w-24",  align: "text-center" },
   { key: "docReplyDate",       label: "서류회신",    width: "w-24",  align: "text-center" },
-  { key: "recipientName",      label: "수신자",      width: "w-20",  align: "text-center" },
-  { key: "recipientEmail",     label: "수신자이메일",width: "w-44",  align: "text-left"   },
+  { key: "recipientName",      label: "실무자",      width: "w-20",  align: "text-center" },
+  { key: "recipientEmail",     label: "실무자이메일",width: "w-44",  align: "text-left"   },
+  { key: "researchLeadEmail",  label: "책임자이메일",width: "w-44",  align: "text-left"   },
   { key: "projectDivision",    label: "구분",        width: "w-16",  align: "text-center" },
-  { key: "assignedManager",    label: "삼화담당자",  width: "w-20",  align: "text-center" },
+  { key: "assignedManager",    label: "과제담당자(부)", width: "w-20", align: "text-center" },
+  { key: "assignedManagerPrimary", label: "과제담당자(정)", width: "w-20", align: "text-center" },
 ] as const;
 
 // ── 좌측 고정(freeze) 열 — 체크박스/펼치기 버튼 + 약칭~연구책임자는 가로로 스크롤해도 계속 보이게 고정한다.
@@ -2141,6 +1567,10 @@ interface BulkNoticeTarget {
   statusRows: NoticeStatusRow[];
   feeRows: NoticeStatusRow[];
   templates: AgencyNoticeTemplateEntry[];
+  // 문의사항 연락처의 "과제담당(정)/(부)" 행을 이 과제의 실제 담당자로 바꿔치기하기 위한 값
+  // (applyManagerContactRows) — Project.assignedManagerPrimary/assignedManager를 그대로 옮긴다.
+  assignedManagerPrimary: string;
+  assignedManager: string;
 }
 
 function BulkSettlementNoticeModal({
@@ -2154,7 +1584,7 @@ function BulkSettlementNoticeModal({
   senderUser: SystemUser | null;
   onClose: () => void;
 }) {
-  const { companyInfo } = useStore();
+  const { companyInfo, managerContacts } = useStore();
   // 공문 양식이 없는 전담기관 과제는 보낼 방법이 없어 건너뛰고, 수신 이메일이 없는 과제도 자동 제외한다
   // (참여기관 목록에 담당자 이메일이 등록돼 있어야 함 — 과제 상세에서 확인 가능).
   const noTemplate = targets.filter((t) => t.templates.length === 0);
@@ -2203,7 +1633,9 @@ function BulkSettlementNoticeModal({
 
     for (const t of toSend) {
       const templateId = templateChoices[t.agencyShortName] ?? t.templates[0]?.id;
-      const template = t.templates.find((x) => x.id === templateId)?.content ?? t.templates[0]?.content ?? EMPTY_NOTICE_TEMPLATE;
+      const rawTemplate = t.templates.find((x) => x.id === templateId)?.content ?? t.templates[0]?.content ?? EMPTY_NOTICE_TEMPLATE;
+      // 문의사항 연락처의 "과제담당(정)/(부)" 행을 이 과제의 실제 담당자로 바꿔치기한다.
+      const template = { ...rawTemplate, contactRows: applyManagerContactRows(rawTemplate.contactRows, t, managerContacts) };
       const docNumber = `${companyInfo.docNumberPrefix} ${now.getFullYear()}-${String(seq).padStart(4, "0")}`;
       seq++;
       const subject = `[${t.projectNumber}] ${template.title || "정산절차 안내 및 수수료 청구"}`;
@@ -2324,7 +1756,8 @@ function BulkSettlementNoticeModal({
               </div>
               {previewAgency === agency && (() => {
                 const templateId = templateChoices[agency] ?? items[0].templates[0]?.id;
-                const template = items[0].templates.find((t) => t.id === templateId)?.content ?? items[0].templates[0]?.content ?? EMPTY_NOTICE_TEMPLATE;
+                const rawTemplate = items[0].templates.find((t) => t.id === templateId)?.content ?? items[0].templates[0]?.content ?? EMPTY_NOTICE_TEMPLATE;
+                const template = { ...rawTemplate, contactRows: applyManagerContactRows(rawTemplate.contactRows, items[0], managerContacts) };
                 return (
                   <div className="max-h-[40vh] overflow-y-auto border-b border-slate-200 p-4 bg-slate-50/50">
                     <p className="text-[10px] text-slate-400 mb-2">&quot;{items[0].projectName}&quot; 기준 미리보기 — 과제별로 아래 내용만 자동으로 바뀌어 발송됩니다.</p>
@@ -2615,6 +2048,7 @@ export default function FeesPage() {
   const [filterLeadInstitution, setFilterLeadInstitution] = useState("");
   const [filterResearchLead,    setFilterResearchLead]    = useState("");
   const [filterAssignedManager, setFilterAssignedManager] = useState("");
+  const [filterAssignedManagerPrimary, setFilterAssignedManagerPrimary] = useState("");
   // 완료/종료된 과제는 더 이상 확인할 필요가 없어 기본값은 '진행중'
   const [filterProjectStatus,   setFilterProjectStatus]   = useState(() => searchParams.get("status") ?? "ACTIVE");
   const [filterAgency,          setFilterAgency]          = useState("ALL");
@@ -2702,6 +2136,7 @@ export default function FeesPage() {
         const matchLeadInstitution  = filterLeadInstitution  === "" || r.leadInstitutionName.includes(filterLeadInstitution);
         const matchResearchLead     = filterResearchLead     === "" || r.researchLead.includes(filterResearchLead);
         const matchAssignedManager  = filterAssignedManager  === "" || r.assignedManager.includes(filterAssignedManager);
+        const matchAssignedManagerPrimary = filterAssignedManagerPrimary === "" || r.assignedManagerPrimary.includes(filterAssignedManagerPrimary);
         const matchStatus           = filterProjectStatus    === "ALL" || r.projectStatus === filterProjectStatus;
         const matchAgency           = filterAgency           === "ALL" || r.agencyShortName === filterAgency;
         const matchBillingType      = filterBillingType      === "ALL" || r.billingType === filterBillingType;
@@ -2722,13 +2157,13 @@ export default function FeesPage() {
         const matchAssignedTo   = agencyAssignedTo   === "" || (assignedDt !== "" && assignedDt <= agencyAssignedTo);
 
         return matchProjectNumber && matchProjectName && matchLeadInstitution && matchResearchLead
-          && matchAssignedManager
+          && matchAssignedManager && matchAssignedManagerPrimary
           && matchStatus && matchAgency && matchBillingType && matchCollectionStatus
           && matchOnlyReceivable && matchFrom && matchTo && matchEndFrom && matchEndTo
           && matchAssignedFrom && matchAssignedTo;
       }),
     [allRows, filterProjectNumber, filterProjectName, filterLeadInstitution, filterResearchLead,
-     filterAssignedManager,
+     filterAssignedManager, filterAssignedManagerPrimary,
      filterProjectStatus, filterAgency, filterBillingType, filterCollectionStatus, filterOnlyReceivable,
      invoiceDateFrom, invoiceDateTo, termEndDateFrom, termEndDateTo, agencyAssignedFrom, agencyAssignedTo]
   );
@@ -2834,7 +2269,7 @@ export default function FeesPage() {
       const currentStageStartDate = currentStage?.stageStartDate ?? project.stageStartDate ?? project.startDate;
       const currentStageEndDate = currentStage?.stageEndDate ?? project.stageEndDate ?? project.endDate;
       const statusRows: NoticeStatusRow[] = [
-        { label: "과제번호 (RCMS)", value: project.projectCode || project.projectNumber },
+        { label: "과제번호 (RCMS)", value: resolveProjectCodeForTerm(project, project.currentTerm) || project.projectNumber },
         { label: "과제명", value: project.projectName },
         { label: "단계연구개발기간", value: `${fmtDate(currentStageStartDate)} ~ ${fmtDate(currentStageEndDate)}` },
         { label: "대상기간", value: `${fmtDate(project.firstStartDate ?? project.startDate)} ~ ${fmtDate(project.finalEndDate ?? project.endDate)}` },
@@ -2854,10 +2289,12 @@ export default function FeesPage() {
         projectName: project.projectName,
         agencyShortName: agency?.shortName ?? "",
         leadInstitutionName: project.leadInstitutionName,
-        recipientEmail: leadMember?.contactEmail ?? "",
+        recipientEmail: combineEmails(project.researchLeadEmail, leadMember?.contactEmail),
         statusRows,
         feeRows,
         templates,
+        assignedManagerPrimary: project.assignedManagerPrimary ?? "",
+        assignedManager: project.assignedManager ?? "",
       };
     });
   }, [showBulkNotice, filtered, selectedKeys, projects, fundingAgencies, agencyNoticeTemplates, projectMembers, termFees]);
@@ -2918,6 +2355,14 @@ export default function FeesPage() {
                   title="이 과제는 아직 연차별 수수료(TermFee)가 등록되지 않아 발행·수금 관련 칸이 비어 있습니다"
                 >
                   수수료 미등록
+                </span>
+              )}
+              {row.currentTermFeeMissing && (
+                <span
+                  className="inline-block mt-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-red-100 text-red-700 whitespace-nowrap"
+                  title={`${row.termNumber}연차(진행중)에 참여기관 사업비가 하나도 입력되지 않아 수수료가 산정되지 않았습니다 — 참여기관 목록에서 이 연차 사업비를 입력해주세요`}
+                >
+                  ⚠ 현재연차 사업비 미입력
                 </span>
               )}
               {row.hasDateMismatch && (
@@ -3065,6 +2510,13 @@ export default function FeesPage() {
           </a>
         ) : <span className="text-slate-300">—</span>;
 
+      case "researchLeadEmail":
+        return row.researchLeadEmail ? (
+          <a href={`mailto:${row.researchLeadEmail}`} className="text-xs text-blue-500 hover:underline">
+            {row.researchLeadEmail}
+          </a>
+        ) : <span className="text-slate-300">—</span>;
+
       case "projectDivision":
         return row.projectDivision ? (
           <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded whitespace-nowrap ${
@@ -3092,6 +2544,26 @@ export default function FeesPage() {
           );
         }
         return <span className="text-xs text-slate-700">{row.assignedManager}</span>;
+      }
+
+      case "assignedManagerPrimary": {
+        if (!row.assignedManagerPrimary) return <span className="text-slate-300">—</span>;
+        const matches = users.filter((u) => u.name === row.assignedManagerPrimary);
+        if (matches.length === 1) {
+          return (
+            <Link href={`/admin/users/${matches[0].id}`} className="block truncate text-xs text-slate-700 hover:text-blue-600 hover:underline transition-colors" title={row.assignedManagerPrimary}>
+              {row.assignedManagerPrimary}
+            </Link>
+          );
+        }
+        if (matches.length > 1) {
+          return (
+            <span className="text-xs text-amber-600" title="동명이인이 등록되어 있어 담당자 상세페이지로 연결할 수 없습니다">
+              {row.assignedManagerPrimary} ⚠
+            </span>
+          );
+        }
+        return <span className="text-xs text-slate-700">{row.assignedManagerPrimary}</span>;
       }
 
       default:
@@ -3125,10 +2597,12 @@ export default function FeesPage() {
       "전담기관배정일": r.agencyAssignedAt,
       "서류요청일": r.docRequestDate,
       "서류회신일": r.docReplyDate,
-      "수신자": r.recipientName,
-      "수신자이메일": r.recipientEmail,
+      "실무자": r.recipientName,
+      "실무자이메일": r.recipientEmail,
+      "책임자이메일": r.researchLeadEmail,
       "구분": r.projectDivision,
-      "삼화담당자": r.assignedManager,
+      "과제담당자(부)": r.assignedManager,
+      "과제담당자(정)": r.assignedManagerPrimary,
       "회계법인": r.auditFirm,
     }));
     const ws = XLSX.utils.json_to_sheet(data);
@@ -3204,16 +2678,18 @@ export default function FeesPage() {
           <span className="text-xs font-semibold text-slate-500 tracking-wide">검색 필터</span>
         </div>
 
-        {/* 텍스트 필터 */}
-        <div className="px-5 py-4 grid grid-cols-3 gap-x-4 gap-y-3.5">
+        {/* 텍스트 필터 — 값이 짧은 필터(과제번호/연구책임자/과제담당자)는 좁게, 과제명은 넉넉하게 —
+            한 줄에 더 많은 필터가 들어가야 아래 과제 목록(약 45행)이 스크롤 없이 더 많이 보인다. */}
+        <div className="px-5 py-4 flex flex-wrap gap-x-4 gap-y-3.5">
           {[
-            { label: "과제번호",   value: filterProjectNumber,   onChange: setFilterProjectNumber   },
-            { label: "과제명",     value: filterProjectName,     onChange: setFilterProjectName     },
-            { label: "주관기관",   value: filterLeadInstitution, onChange: setFilterLeadInstitution },
-            { label: "연구책임자", value: filterResearchLead,    onChange: setFilterResearchLead    },
-            { label: "삼화 담당자", value: filterAssignedManager, onChange: setFilterAssignedManager },
-          ].map(({ label, value, onChange }) => (
-            <div key={label}>
+            { label: "과제번호",   value: filterProjectNumber,   onChange: setFilterProjectNumber,   width: "w-28" },
+            { label: "과제명",     value: filterProjectName,     onChange: setFilterProjectName,     width: "flex-1 min-w-[180px]" },
+            { label: "주관기관",   value: filterLeadInstitution, onChange: setFilterLeadInstitution, width: "w-44" },
+            { label: "연구책임자", value: filterResearchLead,    onChange: setFilterResearchLead,    width: "w-28" },
+            { label: "과제담당자(부)", value: filterAssignedManager, onChange: setFilterAssignedManager, width: "w-28" },
+            { label: "과제담당자(정)", value: filterAssignedManagerPrimary, onChange: setFilterAssignedManagerPrimary, width: "w-28" },
+          ].map(({ label, value, onChange, width }) => (
+            <div key={label} className={width}>
               <p className="text-xs font-medium text-slate-500 mb-1.5">{label}</p>
               <div className="relative">
                 <FiSearch size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-300" />
@@ -3448,13 +2924,14 @@ export default function FeesPage() {
 
       {/* 메인 테이블 */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-        {/* 세로 스크롤은 이 div가 아니라 레이아웃의 <main>(overflow-y-auto)에 맡긴다 — 여기서 자체
-            높이 제한(overflow-y-auto)까지 걸면 페이지 스크롤과 테이블 내부 스크롤이 이중으로 생긴다.
-            sticky top-0 헤더는 <main>이 이미 유효한 스크롤 컨테이너라 그쪽 기준으로 그대로 고정된다.
-            가로 스크롤(overflow-x-auto)만 이 div가 맡는다 — 표가 넓어서 좌우로만 별도로 밀린다. */}
+        {/* max-h + overflow-y-auto: 이 div 자체가 세로 스크롤 컨테이너가 되어야 안의 sticky top-0
+            헤더가 실제로 고정된다 — 바깥 래퍼가 모서리를 둥글게 하려고 overflow-hidden을 걸어두고
+            있는데, sticky는 <main>이 아니라 overflow가 visible이 아닌 가장 가까운 조상(바로 이
+            overflow-hidden 래퍼)을 기준으로 고정된다. 그 래퍼는 내용에 맞춰 늘어나기만 하고 자체
+            스크롤이 없으므로, 이 div에 직접 세로 스크롤을 걸지 않으면 sticky가 무효화된다. */}
         <div
           ref={tableScrollRef}
-          className="overflow-x-auto cursor-grab"
+          className="overflow-x-auto overflow-y-auto max-h-[70vh] cursor-grab"
           onMouseDown={handleTableDragStart}
           onMouseMove={handleTableDragMove}
           onMouseUp={handleTableDragEnd}
@@ -3768,7 +3245,9 @@ export default function FeesPage() {
                                   docReplyDate:    row.docReplyDate,
                                   recipientName:   row.recipientName,
                                   recipientEmail:  row.recipientEmail,
+                                  researchLeadEmail: row.researchLeadEmail,
                                   assignedManager: row.assignedManager,
+                                  assignedManagerPrimary: row.assignedManagerPrimary,
                                   registeredAt:    row.registeredAt,
                                 },
                               })

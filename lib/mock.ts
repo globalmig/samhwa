@@ -536,7 +536,20 @@ export interface Project {
   internalAssignedAt?: string;   // 내부 배정일
   projectCategory?: string;      // 과제 구분
   researchLead?: string;         // 연구책임자
-  projectCode?: string;          // 과제코드 (SH+6자리 일련번호, 등록 순서대로 시스템이 자동 생성)
+  // 책임자 이메일 — 연구책임자(researchLead)의 연락처. 공문 발송 시 실무자와 구분해서 쓴다:
+  // 정산절차 안내 공문만 책임자+실무자 모두에게 보내고, 그 외 공문은 실무자에게만 보낸다.
+  // 여러 명이면 콤마(,)로 구분해서 한 문자열에 담는다.
+  researchLeadEmail?: string;
+  // 과제코드(SH+6자리 일련번호) — 과제 등록 시(=1연차) 발급된 값. 과제 전체가 공유하던 예전 방식과
+  // 달리, 연차마다 서로 다른 코드가 필요해(termCodes) 이 값은 이제 "1연차 코드"의 의미로만 남는다.
+  // termCodes 마이그레이션 이전에 등록된 과제는 termCodes가 비어 있을 수 있어, 그 경우 1연차 조회 시
+  // 이 값을 그대로 폴백으로 쓴다 — resolveProjectCodeForTerm 참고.
+  projectCode?: string;
+  // 연차별 과제코드 — 연차(진행 중이거나 이미 진행된 연차)가 새로 생기면 그때마다 시스템이 새
+  // SH 일련번호를 발급해 여기 쌓는다(autoGenerateTermFees). 과제 하나에 여러 연차가 있어도 연차마다
+  // 코드가 전부 다르다 — 회사 전체 등록 순서 기준 하나의 일련번호 체계를 공유할 뿐, 같은 과제 안에서
+  // 재사용되지 않는다.
+  termCodes?: { termNumber: number; code: string }[];
   projectDivision?: "위탁" | "공동"; // 과제 구분 (위탁/공동)
   billingType?: "정발행" | "역발행요청" | "역발행" | "대상아님" | "면제"; // 발행구분 (없으면 계산서 유무로 자동 판별)
   // 협약 구조
@@ -551,7 +564,11 @@ export interface Project {
   programType?: "GENERAL" | "ICT_FUND";        // 일반 R&D과제 | ICT 기금사업 (IITP 전용 별도 수수료체계)
   // 서류요청일/회신일(공문발송일)은 기관별로 다를 수 있어(RDA2 등 기관별 개별청구 과제) TermFee.docRequestDate/
   // docReplyDate로 관리한다 — 과제 레벨엔 두지 않는다.
-  assignedManager?: string; // 삼화 담당자(현재 진행연차 기준) — 담당자 배정은 인사이동 등으로 연차마다 바뀔 수 있어, 연차별 이력은 assignedManagerHistory에 따로 쌓는다
+  // 과제담당자(정) — 부담당자와 달리 연차별 이력을 따로 쌓지 않는다(엑셀 업로드 시점 값을 그대로 유지).
+  assignedManagerPrimary?: string;
+  // 과제담당자(부) — 예전엔 "삼화담당자"라 불렸다. 현재 진행연차 기준 값이며, 담당자 배정은 인사이동
+  // 등으로 연차마다 바뀔 수 있어 연차별 이력은 assignedManagerHistory에 따로 쌓는다.
+  assignedManager?: string;
   assignedManagerHistory?: { termNumber: number; assignedManager: string }[];
   registeredAt?: string;    // 과제 등록일 — 연도별 대시보드 집계 기준(배정일). 과거 데이터는 미입력일 수 있음
 }
@@ -1001,11 +1018,13 @@ export interface ProjectMember {
   // 연차별 등급 — 등급평가는 연차마다 갱신될 수 있어(정산면제리스트 재업로드 등) 특정 연차부터
   // 등급이 바뀐 경우 이걸로 그 연차 이후만 다르게 기록한다. 없는 연차는 institutionGrade를 그대로 쓴다.
   gradeOverrides?: GradeOverride[];
+  // 실무자(구 "수신자") — 공문을 실제로 받는 담당자. 정산절차 안내 공문 외 모든 공문의 기본
+  // 수신자다. contactEmail은 여러 명이면 콤마(,)로 구분해서 한 문자열에 담는다.
   contactName?: string;
   contactEmail?: string;
   contactPhone?: string;
-  // 연차별 공문 수신자 — 담당자가 연차 중간에 바뀌는 경우가 많아(특히 RDA2처럼 기관별로 공문을
-  // 따로 보내는 과제) 특정 연차만 다르게 기록한다. 없는 연차는 contactName/Email/Phone을 그대로 쓴다.
+  // 연차별 공문 수신자(실무자) — 담당자가 연차 중간에 바뀌는 경우가 많아(특히 RDA2처럼 기관별로
+  // 공문을 따로 보내는 과제) 특정 연차만 다르게 기록한다. 없는 연차는 contactName/Email/Phone을 그대로 쓴다.
   recipientOverrides?: RecipientOverride[];
   // 수수료 산정 필드
   cashBudget?: number;         // 총 현금사업비
@@ -1248,6 +1267,12 @@ export interface FeePolicy {
   hasAutonomyTrack: boolean;           // 자율성트랙 과제 존재 여부
   annualBillingRate: number;           // 연차상시 청구 비율 (0.85=KEIT/KETEP, 1.0=KOFPI 등 미청구 없는 기관)
   minimumFee?: number;                 // 연차별 산정수수료 최소 하한액 — 미만이면 이 금액을 기준으로 하고 차액은 이월 (RDA1/RDA2: 100,000원)
+  // 공동기관별로 사업비 비율 배분한 개별 산정수수료의 최소 하한액 — 배분액이 미만이면 이 금액을
+  // 기준으로 올려 잡고 차액은 그 기관 앞으로 이월한다. minimumFee(과제 전체 표준수수료 하한)와는
+  // 별개다: RDA2만 해당하고 RDA1은 해당 없음 — 기관별 개별 세금계산서 발행을 하는 RDA2는 각
+  // 기관이 실제로 청구서를 받는 금액 자체가 10만원 미만이면 안 되지만, 주관기관 앞으로 하나로
+  // 합산 청구하는 RDA1은 배분 단계가 화면 표시용일 뿐이라 이 하한이 필요 없다.
+  perInstitutionMinimumFee?: number;
   excludeLeadFromCalc?: boolean;       // 주관기관을 산정기준액에서 완전 제외 + 공동기관수 -1 보정 (RDA2: 주관기관이 농진청/소속기관인 경우)
   calcMode?: "AGGREGATE" | "PER_INSTITUTION"; // AGGREGATE(기본): 과제 전체 사업비로 표준수수료 산정 후 배분 / PER_INSTITUTION: 기관별 사업비를 각각 구간표에 대입해 개별 산정 (IITP ICT기금사업)
   programType?: "GENERAL" | "ICT_FUND"; // 정책이 적용되는 사업 유형 — 동일 전담기관에 유형별로 별도 정책을 둘 수 있음 (미지정 시 GENERAL)
@@ -1572,6 +1597,7 @@ export const feePolicies: FeePolicy[] = [
     hasAutonomyTrack: false,
     annualBillingRate: 0.85,
     minimumFee: 100_000,
+    perInstitutionMinimumFee: 100_000,
     excludeLeadFromCalc: true,
   },
 ];
@@ -3261,6 +3287,25 @@ export interface StandardAttachment {
   enabledByCategory?: Partial<Record<"ANNUAL" | "SETTLEMENT" | "REVERSE" | "OTHER", boolean>>;
 }
 
+// ─── 과제담당자 연락처(정/부) ───────────────────────────────────
+// Project.assignedManagerPrimary(과제담당자 정)·assignedManager(과제담당자 부)는 엑셀 업로드로
+// 들어오는 "이름"만 들고 있어 연락처·이메일이 없다 — 정산절차 안내 공문의 "문의사항 연락처" 표
+// (NoticeContactRow의 "과제담당(정)"·"과제담당(부)" 행)에 쓸 실제 연락처는 이 이름을 키로 여기서
+// 찾아 채운다(lib/notice-contacts.ts의 applyManagerContactRows). 같은 사람이 여러 과제를 담당해도
+// 여기 한 번만 등록해두면 모든 과제 공문에 그대로 반영된다 — 이름이 이 목록에 없으면 템플릿에
+// 등록된 기본값을 그대로 쓴다.
+export interface ManagerContact {
+  id: string;
+  name: string;
+  phone: string;
+  email: string;
+}
+
+export const managerContacts: ManagerContact[] = [
+  { id: "mgr-001", name: "김철진", phone: "070-4347-7505", email: "luffy1.5@shcpa.co.kr" },
+  { id: "mgr-002", name: "이청아", phone: "070-4347-7511", email: "cayi@shcpa.co.kr" },
+];
+
 export const standardAttachments: StandardAttachment[] = [
   { id: "sa-biz-reg",   name: "사업자등록증.pdf", updatedAt: "2024-01-02" },
   { id: "sa-bankbook",  name: "통장사본.pdf",     updatedAt: "2024-01-02" },
@@ -3284,6 +3329,8 @@ export interface AgencyNoticeTemplate {
   feeRequiredDocs: string[];
   feeNotes: string[];
   attachments: NoticeAttachment[];
+  // "■ 수수료" 섹션 전체 노출 여부 — 미지정(undefined)이면 기존 템플릿과 동일하게 항상 노출(true)한다.
+  feeSectionEnabled?: boolean;
 }
 // 전담기관 하나에 여러 개의 템플릿을 등록해두고 발송 시 선택할 수 있도록 리스트로 관리한다.
 // (수수료 청구서 양식은 FeeInvoiceTemplateEntry로 별도 관리한다 — 전담기관 스코프도, 표 구조도 달라 여기 섞지 않는다.)

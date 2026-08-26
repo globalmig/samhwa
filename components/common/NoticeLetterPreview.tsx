@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { FiPlus, FiX } from "react-icons/fi";
 import { type AgencyNoticeTemplate } from "@/lib/mock";
 import { useStore, updateCompanyInfo } from "@/lib/store";
+import { sanitizeRichText } from "@/lib/notice-email-html";
 
 export interface NoticeStatusRow {
   label: string;
@@ -79,6 +80,13 @@ function InlineTextarea({
   );
 }
 
+// 문구 안에 <b>, <span style="color:red">처럼 직접 타이핑한 서식 태그를 그대로 굵게/빨간색으로
+// 보여준다 — 발송 메일(notice-email-html.ts)과 똑같은 sanitizeRichText를 써서, 여기 미리보기에서
+// 본 서식이 실제 발송 메일에도 그대로 나간다.
+function Rich({ text, className }: { text: string; className?: string }) {
+  return <span className={className} dangerouslySetInnerHTML={{ __html: sanitizeRichText(text) }} />;
+}
+
 function RemoveDot({ onClick, title = "삭제" }: { onClick: () => void; title?: string }) {
   return (
     <button
@@ -150,8 +158,18 @@ export default function NoticeLetterPreview({
     onFieldChange?.(key, value);
   }
 
+  // 미지정(undefined)이면 기존 템플릿과 동일하게 항상 노출한다.
+  const feeSectionEnabled = template.feeSectionEnabled ?? true;
+
   return (
     <div className="text-base text-slate-800 bg-white">
+      {editable && (
+        <p className="mb-3 text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+          문구 안에 <code className="font-mono bg-white border border-slate-200 rounded px-1">&lt;b&gt;굵게&lt;/b&gt;</code>,{" "}
+          <code className="font-mono bg-white border border-slate-200 rounded px-1">&lt;span style=&quot;color:red&quot;&gt;빨간색&lt;/span&gt;</code>
+          {" "}처럼 태그를 직접 입력하면 굵게·빨간색으로 표시됩니다.
+        </p>
+      )}
       {/* 레터헤드 */}
       <div className="pb-3 border-b-4 border-double border-slate-800">
         <h1 className="text-3xl font-extrabold tracking-[0.3em] text-slate-900">{spaced(companyInfo.name)}</h1>
@@ -199,15 +217,16 @@ export default function NoticeLetterPreview({
           <li key={i}>
             {editable ? (
               <div className="flex items-start gap-1.5">
-                <InlineInput
+                <textarea
                   value={line}
-                  onChange={(v) => setField("bodyIntro", template.bodyIntro.map((l, j) => (j === i ? v : l)))}
-                  className="flex-1"
+                  onChange={(e) => setField("bodyIntro", template.bodyIntro.map((l, j) => (j === i ? e.target.value : l)))}
+                  rows={Math.max(1, line.split("\n").length)}
+                  className={`${editableCls} flex-1 resize-y`}
                 />
                 <RemoveDot onClick={() => setField("bodyIntro", template.bodyIntro.filter((_, j) => j !== i))} />
               </div>
             ) : (
-              line
+              <Rich text={line} />
             )}
             {line === "관련근거" &&
               (editable ? (
@@ -216,7 +235,7 @@ export default function NoticeLetterPreview({
                   <InlineInput value={template.legalBasis} onChange={(v) => setField("legalBasis", v)} className="flex-1" />
                 </div>
               ) : (
-                template.legalBasis && <p className="pl-4 mt-0.5 text-slate-600">: {template.legalBasis}</p>
+                template.legalBasis && <p className="pl-4 mt-0.5 text-slate-600">: <Rich text={template.legalBasis} /></p>
               ))}
           </li>
         ))}
@@ -387,77 +406,94 @@ export default function NoticeLetterPreview({
         )}
       </div>
 
-      {/* 수수료 안내 */}
-      <div className="mb-5">
-        <div className="flex items-center justify-between mb-1.5">
-          <p className="font-bold">■ 수수료</p>
-          {previewMode && <span className="text-xs text-slate-400">해당 과제·연차 산정 내역이 자동으로 추가됩니다</span>}
-        </div>
-        {/* 해당 과제·해당 연차 산정 내역 — 과제별로 자동 치환되는 영역(템플릿 값이 아니므로 항상 읽기 전용) */}
-        {feeRows && feeRows.length > 0 && (
-          <div className={`mb-2 border border-slate-400 ${previewMode ? "bg-slate-100" : ""}`}>
-            {feeRows.map((row, i) => (
-              <div key={row.label} className={`flex ${i > 0 ? "border-t border-dashed border-slate-400" : ""}`}>
-                <div className={`w-48 shrink-0 px-2 py-3 text-sm font-medium text-slate-700 border-r border-dashed border-slate-400 ${previewMode ? "" : "bg-slate-50"}`}>
-                  <span className="block" style={{ textAlign: "justify", textAlignLast: "justify" }}>
-                    {spacedLabel(row.label)}
-                  </span>
-                </div>
-                <div className="flex-1 px-3 py-3 text-slate-800 text-center flex items-center justify-center">{row.value}</div>
-              </div>
-            ))}
+      {/* 수수료 안내 — 섹션 전체를 켜고 끌 수 있다(전담기관에 따라 수수료 안내 없이 절차만 보내는
+          공문이 필요할 수 있어서). 꺼두면(feeSectionEnabled === false) 미리보기·발송 메일 모두에서
+          섹션 자체가 통째로 빠진다. */}
+      {feeSectionEnabled ? (
+        <div className="mb-5">
+          <div className="flex items-center justify-between mb-1.5">
+            <p className="font-bold">■ 수수료</p>
+            <div className="flex items-center gap-2">
+              {previewMode && <span className="text-xs text-slate-400">해당 과제·연차 산정 내역이 자동으로 추가됩니다</span>}
+              {editable && (
+                <button
+                  type="button"
+                  onClick={() => setField("feeSectionEnabled", false)}
+                  className="flex items-center gap-1 text-xs font-medium text-red-500 hover:text-red-600 transition-colors"
+                >
+                  <FiX size={12} /> 섹션 삭제
+                </button>
+              )}
+            </div>
           </div>
-        )}
-        <div className="bg-slate-100 px-3 py-3 space-y-2">
-          {editable ? (
-            <InlineInput value={template.feeIntro} onChange={(v) => setField("feeIntro", v)} className="font-medium" />
-          ) : (
-            <p className="font-medium">{template.feeIntro}</p>
+          {/* 해당 과제·해당 연차 산정 내역 — 과제별로 자동 치환되는 영역(템플릿 값이 아니므로 항상 읽기 전용) */}
+          {feeRows && feeRows.length > 0 && (
+            <div className={`mb-2 border border-slate-400 ${previewMode ? "bg-slate-100" : ""}`}>
+              {feeRows.map((row, i) => (
+                <div key={row.label} className={`flex ${i > 0 ? "border-t border-dashed border-slate-400" : ""}`}>
+                  <div className={`w-48 shrink-0 px-2 py-3 text-sm font-medium text-slate-700 border-r border-dashed border-slate-400 ${previewMode ? "" : "bg-slate-50"}`}>
+                    <span className="block" style={{ textAlign: "justify", textAlignLast: "justify" }}>
+                      {spacedLabel(row.label)}
+                    </span>
+                  </div>
+                  <div className="flex-1 px-3 py-3 text-slate-800 text-center flex items-center justify-center">{row.value}</div>
+                </div>
+              ))}
+            </div>
           )}
-          <ol className="space-y-1 text-blue-700">
-            {template.feeRequiredDocs.map((d, i) => (
-              <li key={i} className="flex items-start gap-1.5">
-                <span className="shrink-0">({i + 1})</span>
+          <div className="bg-slate-100 px-3 py-3 space-y-2">
+            {editable ? (
+              <InlineInput value={template.feeIntro} onChange={(v) => setField("feeIntro", v)} className="font-medium" />
+            ) : (
+              <p className="font-medium"><Rich text={template.feeIntro} /></p>
+            )}
+            <ol className="space-y-1 text-blue-700">
+              {template.feeRequiredDocs.map((d, i) => (
+                <li key={i} className="flex items-start gap-1.5">
+                  <span className="shrink-0">({i + 1})</span>
+                  {editable ? (
+                    <>
+                      <InlineInput
+                        value={d}
+                        onChange={(v) => setField("feeRequiredDocs", template.feeRequiredDocs.map((it, j) => (j === i ? v : it)))}
+                        className="flex-1"
+                      />
+                      <RemoveDot onClick={() => setField("feeRequiredDocs", template.feeRequiredDocs.filter((_, j) => j !== i))} />
+                    </>
+                  ) : (
+                    <Rich text={d} />
+                  )}
+                </li>
+              ))}
+            </ol>
+            {editable && (
+              <AddRow onClick={() => setField("feeRequiredDocs", [...template.feeRequiredDocs, ""])} label="필요서류 추가" />
+            )}
+          </div>
+          <div className="mt-2 space-y-1 text-slate-700">
+            {template.feeNotes.map((n, i) => (
+              <div key={i} className={`flex items-start gap-1.5 ${i === 0 ? "" : "pl-3"}`}>
+                {i > 0 && <span className="shrink-0">-</span>}
                 {editable ? (
                   <>
                     <InlineInput
-                      value={d}
-                      onChange={(v) => setField("feeRequiredDocs", template.feeRequiredDocs.map((it, j) => (j === i ? v : it)))}
+                      value={n}
+                      onChange={(v) => setField("feeNotes", template.feeNotes.map((it, j) => (j === i ? v : it)))}
                       className="flex-1"
                     />
-                    <RemoveDot onClick={() => setField("feeRequiredDocs", template.feeRequiredDocs.filter((_, j) => j !== i))} />
+                    <RemoveDot onClick={() => setField("feeNotes", template.feeNotes.filter((_, j) => j !== i))} />
                   </>
                 ) : (
-                  <span>{d}</span>
+                  <p><Rich text={n} /></p>
                 )}
-              </li>
+              </div>
             ))}
-          </ol>
-          {editable && (
-            <AddRow onClick={() => setField("feeRequiredDocs", [...template.feeRequiredDocs, ""])} label="필요서류 추가" />
-          )}
+            {editable && <AddRow onClick={() => setField("feeNotes", [...template.feeNotes, ""])} label="안내 문구 추가" />}
+          </div>
         </div>
-        <div className="mt-2 space-y-1 text-slate-700">
-          {template.feeNotes.map((n, i) => (
-            <div key={i} className={`flex items-start gap-1.5 ${i === 0 ? "" : "pl-3"}`}>
-              {i > 0 && <span className="shrink-0">-</span>}
-              {editable ? (
-                <>
-                  <InlineInput
-                    value={n}
-                    onChange={(v) => setField("feeNotes", template.feeNotes.map((it, j) => (j === i ? v : it)))}
-                    className="flex-1"
-                  />
-                  <RemoveDot onClick={() => setField("feeNotes", template.feeNotes.filter((_, j) => j !== i))} />
-                </>
-              ) : (
-                <p>{n}</p>
-              )}
-            </div>
-          ))}
-          {editable && <AddRow onClick={() => setField("feeNotes", [...template.feeNotes, ""])} label="안내 문구 추가" />}
-        </div>
-      </div>
+      ) : (
+        editable && <AddRow onClick={() => setField("feeSectionEnabled", true)} label="■ 수수료 섹션 추가" />
+      )}
 
       {/* 붙임 */}
       <div className="mb-6">

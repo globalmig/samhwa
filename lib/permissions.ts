@@ -45,6 +45,9 @@ const WRITE_ACCESS: Record<string, Role[]> = {
   // 단순 요청/독촉 메일이라 전담기관 담당자·조회전용도 (개별/일괄) 발송할 수 있다.
   "simple-notices": ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
   projects:            ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  // 과제 전체 삭제(연쇄적으로 참여기관·수수료·세금계산서 등 전부 삭제됨)는 되돌릴 수 없어 시스템관리자만 가능 —
+  // 연차 단위 삭제는 훨씬 국지적이라 일반 수수료 편집 권한(projects)만으로 충분하다.
+  "projects-delete":   ["ADMIN"],
   "funding-agencies":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   "notice-templates":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   // 사업자등록증·통장사본(공통 첨부 파일): 회계담당자·시스템관리자만 등록/교체 가능 — 전담기관 담당자는 조회만

@@ -26,7 +26,7 @@ import {
   recalcProjectTotalBudget,
   setTermOtherFirmHandled,
 } from "@/lib/store";
-import type { Project, ProjectMember, AnnualBudget, AnnualFinancials } from "@/lib/mock";
+import type { Project, ProjectMember, AnnualBudget, AnnualFinancials, Institution } from "@/lib/mock";
 import { getCurrentUser } from "@/lib/auth";
 import { isSettlementTerm, resolveAutoDetectedAgencyId } from "@/lib/fee-calculator";
 
@@ -135,6 +135,9 @@ interface MemberAggregate {
   // 어쩔 수 없이 우수(A)로 기본 처리한 건지, 애초에 "우수(B)"처럼 구체적으로 적힌 건지 구분해
   // 기존에 더 구체적인 등급(B/C)이 있는 기관을 실수로 A로 깎아내리지 않는 데 쓴다.
   institutionGradeRaw?: string;
+  // 실무자(구 "수신자") 이메일 — "실무자 메일주소" 컬럼에서 읽는다. 여러 개면 셀에 콤마(,)로
+  // 구분해 적힌 그대로 문자열로 보존한다(발송 시점에 파싱).
+  contactEmail?: string;
   // "연차별기관별"(현재 진행중인 연차 실적) 시트에서 이미 값을 받았는지 — "단계기관별" 시트는
   // 단계 전체의 정산 시점 스냅샷이라 지난 단계의 오래된 역할·정산형태·등급을 담고 있을 수 있어서,
   // 연차별 시트에 값이 있으면 그걸 우선하고 단계기관별 값으론 덮어쓰지 않는다.
@@ -144,6 +147,17 @@ interface MemberAggregate {
   budgetsByTerm: Map<number, AggregatedBudget>;
   totalCashBudgetFallback: number;
   totalInKindBudgetFallback: number;
+}
+
+// 이 참여기관 집계가 이번 파일만으로 사업비를 하나라도 가지고 있는지 — 수수료 산정(calcTermFee)이
+// 실제로 참조하는 값(연차별 cashBudget/inKindBudget)뿐 아니라, "단계기관별" 시트에만 있는 경우를
+// 위한 총액 폴백(totalCashBudgetFallback/totalInKindBudgetFallback)도 함께 본다.
+function memberAggregateHasAnyBudget(agg: MemberAggregate): boolean {
+  if (agg.totalCashBudgetFallback > 0 || agg.totalInKindBudgetFallback > 0) return true;
+  for (const b of agg.budgetsByTerm.values()) {
+    if (b.cashBudget > 0 || b.inKindBudget > 0) return true;
+  }
+  return false;
 }
 
 // "최우수(S)" / "우수(A~C)" / "일반" 텍스트, 또는 "연차별기관별" 시트의 "등급" 컬럼처럼
@@ -272,13 +286,24 @@ function toDateStr(raw: string): string {
 // 항상 과제 전체 기준 절대연차로 그대로 신뢰한다("단계" 컬럼이 있어도 오프셋을 더하지 않음).
 // "단계기관별" 시트는 과제 전체 계획(단계 구조·총연차)을 나타낼 뿐, 이 절대연차 해석에는 관여하지 않는다.
 function buildMemberAggregates(
-  sheets: ParsedSheet[]
+  sheets: ParsedSheet[],
+  institutions: readonly Pick<Institution, "bizNumber" | "referenceGrade">[]
 ): {
   members: MemberAggregate[];
   projectMaxTerm: Map<string, number>;
 } {
   const memberMap = new Map<string, MemberAggregate>();
   const projectMaxTerm = new Map<string, number>();
+  // bizNumber → referenceGrade — [수행기관 관리]의 정산면제리스트 업로드로 등록해둔 "연구지원체계
+  // 등급". RCMS 셀엔 "우수"라고만 적혀 있어(A/B/C 미지정) parseGrade가 임의로 우수(A)를 확정하는
+  // 경우, 이 값이 구체적(우수 A/B/C)이면 그걸로 상세 등급을 채운다. RCMS 자체에 A/B/C가 명시돼
+  // 있으면(모호하지 않으면) RCMS 값을 그대로 신뢰하고 이 값은 참고하지 않는다.
+  const referenceGradeByBiz = new Map<string, InstitutionGrade>();
+  for (const inst of institutions) {
+    if (inst.referenceGrade === "우수(A)" || inst.referenceGrade === "우수(B)" || inst.referenceGrade === "우수(C)") {
+      referenceGradeByBiz.set(normBiz(inst.bizNumber), inst.referenceGrade);
+    }
+  }
 
   for (const sheet of sheets) {
     const get = (field: string, row: Record<string, string>) => {
@@ -318,6 +343,19 @@ function buildMemberAggregates(
       const settlementStr = get("settlementType", row);
       const gradeStr = get("institutionGrade", row);
       const parsedGrade = parseGrade(gradeStr);
+      // RCMS 셀이 "우수"라고만 적혀 있어(A/B/C 미지정) parseGrade가 우수(A)로 임의 확정한 경우엔,
+      // 정산면제리스트에 등록된 구체적 등급(referenceGrade)이 있으면 그걸로 바꿔치기한다. 이때
+      // institutionGradeRaw도 해석된 등급 문자열로 남겨서, 더 이상 "모호한 값"으로 취급되지 않게
+      // 한다(아래 isAmbiguousGoodGrade 보호 로직이 이 값을 다시 A로 깎지 않도록).
+      let resolvedGrade = parsedGrade;
+      let resolvedGradeRaw = gradeStr;
+      if (parsedGrade && isAmbiguousGoodGrade(gradeStr)) {
+        const refGrade = referenceGradeByBiz.get(normBizNum);
+        if (refGrade) {
+          resolvedGrade = refGrade;
+          resolvedGradeRaw = refGrade;
+        }
+      }
 
       if (sheet.def.key === "annual") {
         if (roleStr.includes("주관")) agg.role = "LEAD";
@@ -329,11 +367,13 @@ function buildMemberAggregates(
           agg.settlementFromAnnual = true;
         }
 
-        if (parsedGrade) {
-          agg.institutionGrade = parsedGrade;
-          agg.institutionGradeRaw = gradeStr;
+        if (resolvedGrade) {
+          agg.institutionGrade = resolvedGrade;
+          agg.institutionGradeRaw = resolvedGradeRaw;
           agg.gradeFromAnnual = true;
         }
+        const contactEmailStr = get("contactEmail", row);
+        if (contactEmailStr) agg.contactEmail = contactEmailStr;
       } else {
         // "단계기관별"은 정산 시점 스냅샷이라 지난 단계의 값을 담고 있을 수 있음 — 연차별 시트가
         // 이미 채워둔 필드는 그대로 두고, 비어 있는 필드만 이걸로 보충한다.
@@ -344,9 +384,9 @@ function buildMemberAggregates(
         if (!agg.settlementFromAnnual && settlementStr) {
           agg.settlementType = settlementStr.includes("자체") ? "자체정산" : "위탁정산";
         }
-        if (!agg.gradeFromAnnual && parsedGrade) {
-          agg.institutionGrade = parsedGrade;
-          agg.institutionGradeRaw = gradeStr;
+        if (!agg.gradeFromAnnual && resolvedGrade) {
+          agg.institutionGrade = resolvedGrade;
+          agg.institutionGradeRaw = resolvedGradeRaw;
         }
       }
 
@@ -379,7 +419,7 @@ function buildMemberAggregates(
         agg.budgetsByTerm.set(termNumber, {
           termYear: supportYear, termNumber, cashBudget, inKindBudget, govGrant, privateCash, privateInKind, termStartDate, termEndDate, auditFirm,
           settlementType: settlementStr ? (settlementStr.includes("자체") ? "자체정산" : "위탁정산") : undefined,
-          institutionGrade: parsedGrade,
+          institutionGrade: resolvedGrade,
         });
         projectMaxTerm.set(normNum, Math.max(projectMaxTerm.get(normNum) ?? 0, termNumber));
       } else {
@@ -404,7 +444,11 @@ export interface ProjectScalarInfo {
   // 하나로 통일돼야 하는 다른 스칼라 값들과 달리 연차별로 따로 모은다. "연차별기관별" 시트에만
   // 연차 값이 있어(termNumber 있는 행만) 채워진다.
   assignedManagersByTerm: Map<number, string>;
+  // 과제담당자(정)는 부담당자와 달리 연차별 이력을 쌓지 않는 단순 스칼라값이다 — 다른 값들과 같은
+  // 규칙으로, 같은 과제의 여러 행에서 값이 갈리면 자동 반영하지 않고 이슈로 남긴다.
+  assignedManagersPrimary: Set<string>;
   researchLeads: Set<string>;     // 주관기관 기관책임자
+  researchLeadEmails: Set<string>; // 주관기관 "책임자 메일주소"
   isAutonomyTrack: boolean;
   projectCategories: Set<string>;    // 과제구분(연차상시/정산)
   agencyAssignedAts: Set<string>;    // 전문기관배정일
@@ -421,7 +465,8 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
     let info = map.get(normNum);
     if (!info) {
       info = {
-        projectNames: new Set(), assignedManagers: new Set(), assignedManagersByTerm: new Map(), researchLeads: new Set(),
+        projectNames: new Set(), assignedManagers: new Set(), assignedManagersByTerm: new Map(), assignedManagersPrimary: new Set(), researchLeads: new Set(),
+        researchLeadEmails: new Set(),
         isAutonomyTrack: false, projectCategories: new Set(), agencyAssignedAts: new Set(), internalAssignedAts: new Set(),
         startDates: new Set(),
       };
@@ -456,6 +501,9 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
         }
       }
 
+      const managerPrimary = get("assignedManagerPrimary", row);
+      if (managerPrimary) info.assignedManagersPrimary.add(managerPrimary);
+
       if (get("autonomyTrack", row) === "자율성트랙") info.isAutonomyTrack = true;
 
       // 연구책임자는 "주관"기관 행의 기관책임자만 채택 — 공동기관 책임자는 과제 전체의
@@ -463,6 +511,8 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
       const roleStr = get("institutionRole", row);
       const lead = get("institutionLead", row);
       if (lead && roleStr.includes("주관")) info.researchLeads.add(lead);
+      const leadEmail = get("researchLeadEmail", row);
+      if (leadEmail && roleStr.includes("주관")) info.researchLeadEmails.add(leadEmail);
 
       const category = get("projectCategory", row);
       if (category) info.projectCategories.add(category.includes("정산") && !category.includes("연차") ? "정산" : "연차상시");
@@ -1176,6 +1226,7 @@ function PreviewStep({
   onToggleUpdate,
   calendarMismatches,
   stageSkipWarnings,
+  memberDataWarnings,
   onConfirm,
   onBack,
   loading,
@@ -1187,6 +1238,7 @@ function PreviewStep({
   onToggleUpdate: (normNum: string, next: boolean) => void;
   calendarMismatches: TermCalendarMismatch[];
   stageSkipWarnings: { normNum: string; projectNumber: string; projectName: string; reasons: string[] }[];
+  memberDataWarnings: { key: string; projectNumber: string; projectName: string; institutionName: string; missing: string[] }[];
   onConfirm: () => void;
   onBack: () => void;
   loading: boolean;
@@ -1233,7 +1285,7 @@ function PreviewStep({
   const approvedUpdateCount = projectUpdates.filter(
     (u) => updateChoices[u.normNum] ?? defaultChoiceForStatus(u.status)
   ).length;
-  const reviewCount = dupRows.length + stageSkipWarnings.length + projectUpdates.length + calendarMismatches.length;
+  const reviewCount = dupRows.length + stageSkipWarnings.length + projectUpdates.length + calendarMismatches.length + memberDataWarnings.length;
 
   const totalToRegister = newAgency + newProject + newInst + newMemberCount + approvedUpdateCount;
 
@@ -1344,6 +1396,36 @@ function PreviewStep({
             {activeTab === "review" && (
               reviewCount === 0 ? <EmptyTabNote>확인이 필요한 항목이 없습니다.</EmptyTabNote> : (
                 <div className="divide-y divide-slate-200">
+                  {/* 사업비·연락처 미입력 참여기관 — 이 두 값이 없으면 수수료 계산·공문 발송이라는
+                      핵심 기능이 그 기관에서 아예 안 돌아가므로, 이 탭에서 가장 먼저·가장 강하게 보여준다. */}
+                  {memberDataWarnings.length > 0 && (
+                    <div>
+                      <div className="px-4 py-2 bg-red-50 flex items-center gap-1.5">
+                        <FiAlertOctagon size={13} className="text-red-500 shrink-0" />
+                        <p className="text-xs font-semibold text-red-700">사업비·연락처 미입력 참여기관 ({memberDataWarnings.length}건) — 수수료 계산·공문 발송이 안 됩니다</p>
+                      </div>
+                      <div className="divide-y divide-slate-100">
+                        {memberDataWarnings.map((w) => (
+                          <div key={w.key} className="flex items-center gap-3 px-4 py-2.5">
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-medium text-red-700 truncate">{w.projectName} <span className="font-mono text-[10px] text-red-500">({w.projectNumber})</span></p>
+                              <p className="text-[11px] text-slate-600 truncate">{w.institutionName}</p>
+                            </div>
+                            <div className="flex gap-1 shrink-0">
+                              {w.missing.map((m) => (
+                                <span key={m} className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-red-100 text-red-700 whitespace-nowrap">{m} 없음</span>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-red-600 px-4 py-2 bg-red-50/60">
+                        그대로 등록해도 막지는 않지만, 이 기관은 사업비가 없으면 수수료가 0으로 산정되고 연락처가 없으면 공문을 보낼 수 없습니다.
+                        엑셀에서 값을 채워 다시 올리거나, 등록 후 과제 상세 화면의 참여기관 목록에서 바로 입력해주세요. 등록 후 담당자·회계담당자에게 확인 이슈로도 남습니다.
+                      </p>
+                    </div>
+                  )}
+
                   {/* 기존 과제 갱신 — 재제출 등 확인이 특히 중요해 이 탭 안에서도 맨 위에 보여준다 */}
                   {projectUpdates.length > 0 && (
                     <div>
@@ -1575,7 +1657,7 @@ function DoneStep({ result, onClose }: { result: DoneResult; onClose: () => void
 export async function downloadExcelTemplate() {
   const notes = [
     "※필수", "※필수", "※필수",
-    "선택", "선택 (\"자율성트랙\"만 인식)",
+    "선택", "선택", "선택 (\"자율성트랙\"만 인식)",
     "※필수 (YYYY-MM-DD)", "※필수 (YYYY-MM-DD)",
     "선택", "※필수 (이 행의 사업비가 몇 연차 것인지 — 비면 1연차로 잘못 등록됨)", "선택",
     "※필수", "※필수 (000-00-00000)",
@@ -1583,6 +1665,8 @@ export async function downloadExcelTemplate() {
     "선택 (삼화가 아니면 이 연차를 타회계법인 진행으로 자동 표시)",
     "선택 (연차상시/정산, 미입력시 협약구조로 자동판정 — \"정산형태\"와는 다른 값)",
     "선택 (주관기관 행에만, 없으면 단계기관별 시트의 값을 사용)",
+    "선택 (주관기관 행에만 — 여러 명이면 콤마(,)로 구분, 정산절차 안내 공문에 실무자와 함께 수신)",
+    "선택 (이 행 기관의 담당자 — 여러 명이면 콤마(,)로 구분, 정산절차 안내 공문 외 모든 공문 수신)",
     "선택 (YYYY-MM-DD)", "선택 (YYYY-MM-DD)",
     "선택 (YYYY-MM-DD, 이 연차의 실제 시작일 — 있으면 자동계산 대신 사용)",
     "선택 (YYYY-MM-DD, 이 연차의 실제 종료일 — 있으면 자동계산 대신 사용)",
@@ -1596,12 +1680,13 @@ export async function downloadExcelTemplate() {
   ];
   const headers = [
     "전문기관명", "과제번호", "과제명",
-    "과제담당자", "자율성트랙",
+    "과제담당자(정)", "과제담당자(부)", "자율성트랙",
     "총개발시작일자", "총개발종료일자",
     "단계", "연차", "지원연도",
     "연구개발기관명", "기관사업자등록번호",
     "기관역할구분", "등급", "정산형태", "회계법인",
     "과제구분", "연구책임자",
+    "책임자 메일주소", "실무자 메일주소",
     "전문기관배정일", "내부배정일",
     "연차시작일자", "연차종료일자",
     "단계시작일자", "단계종료일자",
@@ -1612,11 +1697,12 @@ export async function downloadExcelTemplate() {
   const rows = [
     [
       "한국산업기술기획평가원", "RS-2024-00000001", "스마트 제조 AI 시스템 개발",
-      "홍길동", "",
+      "정담당", "홍길동", "",
       "2024-03-01", "2027-02-28", "1", "1", "2024",
       "삼화기술경영(주)", "123-45-67890",
       "주관", "우수(A)", "위탁정산", "",
       "연차상시", "박연구",
+      "park.lead@samhwa-tech.co.kr", "kim.staff@samhwa-tech.co.kr,lee.staff@samhwa-tech.co.kr",
       "2024-01-15", "2024-02-01",
       "2024-03-01", "2025-02-28",
       "2024-03-01", "2027-02-28",
@@ -1626,11 +1712,12 @@ export async function downloadExcelTemplate() {
     ],
     [
       "한국산업기술기획평가원", "RS-2024-00000001", "스마트 제조 AI 시스템 개발",
-      "홍길동", "",
+      "정담당", "홍길동", "",
       "2024-03-01", "2027-02-28", "1", "1", "2024",
       "참여기업(주)", "234-56-78901",
       "공동", "", "위탁정산", "",
       "연차상시", "",
+      "", "staff@participant.co.kr",
       "", "",
       "2024-03-01", "2025-02-28",
       "2024-03-01", "2027-02-28",
@@ -1640,11 +1727,12 @@ export async function downloadExcelTemplate() {
     ],
     [
       "한국에너지기술평가원", "RS-2024-00000002", "신재생에너지 효율화 연구",
-      "김담당", "자율성트랙",
+      "박정담", "김담당", "자율성트랙",
       "2024-06-01", "2026-05-31", "0", "1", "2024",
       "에너지연구소", "345-67-89012",
       "주관", "최우수", "자체정산", "",
       "연차상시", "이연구",
+      "lee.lead@energylab.re.kr", "jung.staff@energylab.re.kr",
       "2024-04-20", "2024-05-10",
       "2024-06-01", "2025-05-31",
       "", "",
@@ -1765,8 +1853,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
 
   // "연차별기관별" + "단계기관별" 시트를 과제+기관 단위로 합산 — 참여기관(ProjectMember) 등록에 사용
   const { members: memberAggregates, projectMaxTerm } = useMemo(
-    () => buildMemberAggregates(parsedSheets),
-    [parsedSheets]
+    () => buildMemberAggregates(parsedSheets, institutions),
+    [parsedSheets, institutions]
   );
 
   // 과제담당자·자율성트랙·과제코드·연구책임자 등 과제 레벨 단일값 — 여러 행에 값이 갈리면 등록하지 않고 이슈로 남긴다
@@ -1802,6 +1890,42 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
     }
     return warnings;
   }, [projects, scalarAggregates, stageAggregates]);
+
+  // 사업비(수수료 산정용)나 연락처(공문 발송용)가 하나도 없는 채로 등록·갱신될 참여기관 — 이 두 값이
+  // 없으면 이 시스템의 핵심 기능(1. 수수료 계산 2. 공문 발송)이 그 기관에서 조용히 안 돌아가므로,
+  // 등록 자체를 막진 않되(뒤늦게 다른 경로로 채워질 수도 있어서) "확인필요" 탭 맨 위에서 가장 강하게
+  // 경고한다. 이미 기존 참여기관에 그 값이 있고 이번 파일이 그걸 지우는 게 아니라면(단순 갱신) 대상에서
+  // 뺀다 — 매번 같은 값을 반복 경고하면 정작 새로 비게 된 경우를 놓치기 쉬워진다.
+  const memberDataWarnings = useMemo(() => {
+    const warnings: { key: string; projectNumber: string; projectName: string; institutionName: string; missing: string[] }[] = [];
+    for (const agg of memberAggregates) {
+      const normNum = normProjectNum(agg.projectNumber);
+      const existingProject = projects.find((p) => normProjectNum(p.projectNumber) === normNum);
+      const existingInst = institutions.find((i) => normBiz(i.bizNumber) === normBiz(agg.bizNumber));
+      const existingMember = existingProject && existingInst
+        ? projectMembers.find((pm) => pm.projectId === existingProject.id && pm.institutionId === existingInst.id)
+        : undefined;
+
+      const hasContact = !!agg.contactEmail || !!existingMember?.contactEmail;
+      const hasBudget = memberAggregateHasAnyBudget(agg)
+        || (existingMember?.annualBudgets ?? []).some((b) => b.cashBudget > 0 || b.inKindBudget > 0);
+
+      const missing: string[] = [];
+      if (!hasBudget) missing.push("사업비");
+      if (!hasContact) missing.push("연락처(실무자 메일)");
+      if (missing.length === 0) continue;
+
+      const scalarInfo = scalarAggregates.get(normNum);
+      warnings.push({
+        key: agg.key,
+        projectNumber: existingProject?.projectNumber ?? agg.projectNumber,
+        projectName: existingProject?.projectName ?? (scalarInfo && scalarInfo.projectNames.size >= 1 ? [...scalarInfo.projectNames][0] : ""),
+        institutionName: agg.institutionName,
+        missing,
+      });
+    }
+    return warnings;
+  }, [memberAggregates, projects, institutions, projectMembers, scalarAggregates]);
 
   function toggleProjectUpdate(normNum: string, next: boolean) {
     setProjectUpdateChoices((prev) => ({ ...prev, [normNum]: next }));
@@ -2021,6 +2145,11 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
     let agencyCount = 0, projectCount = 0, instCount = 0, memberCount = 0, renamedCount = 0;
     // 과제코드/이름+기간으로는 기존 과제 후보가 2개 이상 나와 자동으로 판단할 수 없는 경우 — 등록하지 않고 이슈로 남긴다.
     const renameAmbiguities: { normNum: string; rawProjectNumber: string; projectName: string; candidates: Project[] }[] = [];
+    // "단계기관별" 시트가 과제번호+정산대상단계·연차만 채워진 행으로 완전히 새 과제를 만들게 되는 경우 —
+    // 과제명·총개발시작일자가 비어 있으면 "미입력"/오늘 날짜 같은 임시값으로 조용히 등록되는데, 아무 표시도
+    // 없으면 이렇게 등록된 걸 아무도 못 알아챈다. 등록 자체는 막지 않고(단계 정보는 그대로 반영하고)
+    // 이슈로 남겨서 담당자가 반드시 확인·정정하게 한다.
+    const newProjectMissingInfo: { projectId: string; projectNumber: string; missingFields: string[] }[] = [];
 
     // 기존 전담기관·과제·기관 미리 채워두기 (참여기관 연결에 필요)
     for (const a of fundingAgencies) registeredAgencies.set(a.name, a.id);
@@ -2082,7 +2211,9 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         // 값이 갈리면 여기서 비워두고, 아래에서 이슈로 남겨 확인을 요청한다.
         const scalarInfo = scalarAggregates.get(normNum);
         const assignedManager = scalarInfo?.assignedManagers.size === 1 ? [...scalarInfo.assignedManagers][0] : undefined;
+        const assignedManagerPrimary = scalarInfo?.assignedManagersPrimary.size === 1 ? [...scalarInfo.assignedManagersPrimary][0] : undefined;
         const researchLead = scalarInfo?.researchLeads.size === 1 ? [...scalarInfo.researchLeads][0] : undefined;
+        const researchLeadEmail = scalarInfo?.researchLeadEmails.size === 1 ? [...scalarInfo.researchLeadEmails][0] : undefined;
         const agencyAssignedAt = scalarInfo?.agencyAssignedAts.size === 1 ? [...scalarInfo.agencyAssignedAts][0] : undefined;
         const internalAssignedAt = scalarInfo?.internalAssignedAts.size === 1 ? [...scalarInfo.internalAssignedAts][0] : undefined;
         const explicitProjectCategory = scalarInfo?.projectCategories.size === 1 ? [...scalarInfo.projectCategories][0] : undefined;
@@ -2164,7 +2295,9 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             finalEndDate: overallEndDate ?? renamedFrom.finalEndDate,
             assignedManager: resolvedAssignedManager ?? renamedFrom.assignedManager,
             assignedManagerHistory: mergeAssignedManagerHistory(renamedFrom.assignedManagerHistory, assignedManagerHistory),
+            assignedManagerPrimary: assignedManagerPrimary ?? renamedFrom.assignedManagerPrimary,
             researchLead: researchLead ?? renamedFrom.researchLead,
+            researchLeadEmail: researchLeadEmail ?? renamedFrom.researchLeadEmail,
             agencyAssignedAt: agencyAssignedAt ?? renamedFrom.agencyAssignedAt,
             internalAssignedAt: internalAssignedAt ?? renamedFrom.internalAssignedAt,
           });
@@ -2201,7 +2334,9 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             finalEndDate: overallEndDate,
             assignedManager: resolvedAssignedManager,
             assignedManagerHistory: assignedManagerHistory.length > 0 ? assignedManagerHistory : undefined,
+            assignedManagerPrimary,
             researchLead,
+            researchLeadEmail,
             agencyAssignedAt,
             internalAssignedAt,
           });
@@ -2209,6 +2344,15 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           newProjectAgencyId.set(normNum, agencyId);
           newProjectStartDate.set(normNum, startDateStr);
           projectCount++;
+
+          // 과제명·총개발시작일자가 비어 있어 임시값("미입력"/오늘 날짜)으로 채워진 채 새로 등록됐다면,
+          // 아무 표시 없이 조용히 넘어가지 않도록 이슈로 남긴다(아래에서 addProjectIssue로 변환).
+          const missingFields: string[] = [];
+          if (!row.projectName) missingFields.push("과제명");
+          if (!row.startDate) missingFields.push("총개발시작일자");
+          if (missingFields.length > 0) {
+            newProjectMissingInfo.push({ projectId: created.id, projectNumber: row.projectNumber, missingFields });
+          }
         }
       }
     }
@@ -2277,10 +2421,10 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           cashBudget: totalCash,
           inKindBudget: totalInKind,
           annualBudgets: annualBudgets.length > 0 ? annualBudgets : undefined,
-          // 엑셀엔 담당자 연락처가 없으므로, 이미 등록된 기관이면 그 기관의 대표 연락처를 기본값으로 채운다
-          // — 그래야 참여기관마다 연락처를 일일이 다시 입력할 필요가 없다.
+          // "실무자 메일주소" 컬럼 값을 우선 쓰고, 없으면 이미 등록된 기관의 대표 연락처를 기본값으로
+          // 채운다 — 그래야 참여기관마다 연락처를 일일이 다시 입력할 필요가 없다.
           contactName: institution?.contactName || undefined,
-          contactEmail: institution?.contactEmail || undefined,
+          contactEmail: agg.contactEmail || institution?.contactEmail || undefined,
           contactPhone: institution?.contactPhone || undefined,
         });
         memberCount++;
@@ -2325,6 +2469,11 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             updates.institutionGrade = agg.institutionGrade;
           }
         }
+        // "실무자 메일주소" 컬럼에 값이 있을 때만 덮어쓴다 — 비어 있으면 화면에서 직접 입력해둔
+        // 기존 실무자 이메일을 그대로 보존한다.
+        if (agg.contactEmail) {
+          updates.contactEmail = agg.contactEmail;
+        }
 
         // 실제로 달라진 게 있을 때만 갱신 — 동일한 파일을 다시 올려도 변경이력에 빈 UPDATE가 쌓이지 않게 한다.
         const changed =
@@ -2335,7 +2484,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             : updates.settlementType !== existingMember.settlementType) ||
           (hasPerTermGrade
             ? JSON.stringify(updates.gradeOverrides ?? []) !== JSON.stringify(existingMember.gradeOverrides ?? [])
-            : (updates.institutionGrade !== undefined && updates.institutionGrade !== existingMember.institutionGrade));
+            : (updates.institutionGrade !== undefined && updates.institutionGrade !== existingMember.institutionGrade)) ||
+          (updates.contactEmail !== undefined && updates.contactEmail !== existingMember.contactEmail);
 
         if (changed) {
           updateProjectMember(existingMember.id, updates);
@@ -2406,7 +2556,9 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         // scalarInfo가 이번 파일에서 값을 하나로 특정하지 못하면(비어 있거나 여전히 갈리면) 기존 값을 유지한다.
         const scalarInfo = scalarAggregates.get(info.normNum);
         const assignedManager = scalarInfo?.assignedManagers.size === 1 ? [...scalarInfo.assignedManagers][0] : undefined;
+        const assignedManagerPrimary = scalarInfo?.assignedManagersPrimary.size === 1 ? [...scalarInfo.assignedManagersPrimary][0] : undefined;
         const researchLead = scalarInfo?.researchLeads.size === 1 ? [...scalarInfo.researchLeads][0] : undefined;
+        const researchLeadEmail = scalarInfo?.researchLeadEmails.size === 1 ? [...scalarInfo.researchLeadEmails][0] : undefined;
         const agencyAssignedAt = scalarInfo?.agencyAssignedAts.size === 1 ? [...scalarInfo.agencyAssignedAts][0] : undefined;
         const internalAssignedAt = scalarInfo?.internalAssignedAts.size === 1 ? [...scalarInfo.internalAssignedAts][0] : undefined;
         // 담당자는 연차별 이력이 있으면(연차마다 다른 사람) 이번에 반영되는 연차 값을 우선 채택한다.
@@ -2422,7 +2574,9 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           annualFinancials: mergeAnnualFinancials(existingProject.annualFinancials, allTermFinancials),
           assignedManager: resolvedAssignedManager ?? existingProject.assignedManager,
           assignedManagerHistory: mergeAssignedManagerHistory(existingProject.assignedManagerHistory, assignedManagerHistory),
+          assignedManagerPrimary: assignedManagerPrimary ?? existingProject.assignedManagerPrimary,
           researchLead: researchLead ?? existingProject.researchLead,
+          researchLeadEmail: researchLeadEmail ?? existingProject.researchLeadEmail,
           agencyAssignedAt: agencyAssignedAt ?? existingProject.agencyAssignedAt,
           internalAssignedAt: internalAssignedAt ?? existingProject.internalAssignedAt,
         });
@@ -2517,10 +2671,17 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         if (scalarInfo.projectNames.size > 1) {
           reasons.push(`같은 과제번호인데 과제명이 서로 다릅니다: ${[...scalarInfo.projectNames].join(" / ")}`);
         }
-        // 과제담당자는 연차마다 바뀔 수 있어(인사이동 등) assignedManagersByTerm으로 연차별 이력을
-        // 그대로 반영하므로, 값이 여러 개라고 해서 확인 이슈로 남기지 않는다.
+        // 과제담당자(부)는 연차마다 바뀔 수 있어(인사이동 등) assignedManagersByTerm으로 연차별 이력을
+        // 그대로 반영하므로, 값이 여러 개라고 해서 확인 이슈로 남기지 않는다. 과제담당자(정)은 연차별
+        // 이력을 두지 않는 단순값이라 다른 스칼라값과 동일하게 갈리면 이슈로 남긴다.
+        if (scalarInfo.assignedManagersPrimary.size > 1) {
+          reasons.push(`같은 과제번호인데 과제담당자(정)가 서로 달라 등록하지 않았습니다: ${[...scalarInfo.assignedManagersPrimary].join(" / ")}`);
+        }
         if (scalarInfo.researchLeads.size > 1) {
           reasons.push(`주관기관 기관책임자(연구책임자)가 서로 달라 등록하지 않았습니다: ${[...scalarInfo.researchLeads].join(" / ")}`);
+        }
+        if (scalarInfo.researchLeadEmails.size > 1) {
+          reasons.push(`주관기관 책임자 메일주소가 서로 달라 등록하지 않았습니다: ${[...scalarInfo.researchLeadEmails].join(" / ")}`);
         }
       }
       if (reasons.length === 0) continue;
@@ -2549,6 +2710,22 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         projectId: anchor.id,
         projectNumber: anchor.projectNumber,
         content: `RCMS 엑셀 업로드 — 과제번호 "${amb.rawProjectNumber}"(과제명: ${amb.projectName})가 기존 과제 중 어느 것과 같은 과제인지 자동으로 판단할 수 없어 등록하지 않았습니다.\n후보: ${candidateList}\n과제코드 또는 과제명·시작일·종료일을 확인해 직접 연결해주세요.`,
+        author: authorName,
+        createdAt: now,
+        priority: "HIGH",
+        status: "OPEN",
+        recipientGroups: ["MANAGER", "ACCOUNTANT"],
+        noInstitution: true,
+      });
+      stageAlertCount++;
+    }
+
+    // 새 과제가 과제명/총개발시작일자 없이 임시값으로 등록된 경우 — 실제 값으로 정정하도록 알린다.
+    for (const info of newProjectMissingInfo) {
+      addProjectIssue({
+        projectId: info.projectId,
+        projectNumber: info.projectNumber,
+        content: `RCMS 엑셀 업로드 — 이 과제가 새로 등록될 때 ${info.missingFields.join("·")} 정보가 파일에 없어 임시값으로 채워졌습니다(과제명 "미입력" 및/또는 시작일 "오늘 날짜").\n과제 상세 페이지에서 실제 값으로 정정해주세요.`,
         author: authorName,
         createdAt: now,
         priority: "HIGH",
@@ -2597,6 +2774,32 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         author: authorName,
         createdAt: now,
         priority: "MEDIUM",
+        status: "OPEN",
+        recipientGroups: ["MANAGER", "ACCOUNTANT"],
+        noInstitution: true,
+      });
+      stageAlertCount++;
+    }
+
+    // 사업비·연락처 미입력 참여기관 — 등록/갱신 자체는 막지 않았지만, 수수료 계산·공문 발송이라는
+    // 핵심 기능이 그 기관에서 안 돌아가는 상태로 남으므로 과제별로 묶어 이슈를 남긴다(이번에 실제로
+    // 등록/갱신된 과제만 — 이미 등록된 다른 과제까지 매번 다시 이슈로 남기지 않기 위함).
+    const memberWarningsByProject = new Map<string, typeof memberDataWarnings>();
+    for (const w of memberDataWarnings) {
+      const projectId = registeredProjects.get(normProjectNum(w.projectNumber));
+      if (!projectId || !touchedProjectIds.has(projectId)) continue;
+      if (!memberWarningsByProject.has(projectId)) memberWarningsByProject.set(projectId, []);
+      memberWarningsByProject.get(projectId)!.push(w);
+    }
+    for (const [projectId, ws] of memberWarningsByProject) {
+      const project = projects.find((p) => p.id === projectId);
+      addProjectIssue({
+        projectId,
+        projectNumber: project?.projectNumber ?? ws[0].projectNumber,
+        content: `RCMS 엑셀 업로드 — 아래 참여기관은 사업비 또는 연락처(실무자 메일)가 없어 수수료 계산·공문 발송이 되지 않습니다.\n${ws.map((w) => `· ${w.institutionName}: ${w.missing.join(", ")} 없음`).join("\n")}\n과제 상세 페이지 참여기관 목록에서 값을 채워주세요.`,
+        author: authorName,
+        createdAt: now,
+        priority: "HIGH",
         status: "OPEN",
         recipientGroups: ["MANAGER", "ACCOUNTANT"],
         noInstitution: true,
@@ -2696,6 +2899,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             onToggleUpdate={toggleProjectUpdate}
             calendarMismatches={calendarMismatches}
             stageSkipWarnings={stageSkipWarnings}
+            memberDataWarnings={memberDataWarnings}
             onConfirm={doRegister}
             onBack={() => setStep(previewBackStep)}
             loading={loading}
