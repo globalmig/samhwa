@@ -567,19 +567,22 @@ export interface Project {
   // docReplyDate로 관리한다 — 과제 레벨엔 두지 않는다.
   // 과제담당자(정) — 부담당자와 마찬가지로 인사이동 등으로 연차마다 바뀔 수 있어 연차별 이력을
   // assignedManagerPrimaryHistory에 따로 쌓는다. 이 필드 자체는 "현재 진행 연차" 값만 담는다.
+  // 연락처·이메일은 여기 저장하지 않는다 — 공문 발송 시 이 이름으로 [권한관리](SystemUser) 목록을
+  // 찾아 그 사용자의 phone/email을 그대로 쓴다(lib/notice-contacts.ts). 과제 건별로 반복 입력할
+  // 필요 없이 권한관리에 한 번만 등록해두면 모든 과제에 그대로 적용된다.
   assignedManagerPrimary?: string;
-  assignedManagerPrimaryPhone?: string;
-  assignedManagerPrimaryEmail?: string;
-  assignedManagerPrimaryHistory?: { termNumber: number; assignedManagerPrimary: string; assignedManagerPrimaryPhone?: string; assignedManagerPrimaryEmail?: string }[];
+  assignedManagerPrimaryHistory?: { termNumber: number; assignedManagerPrimary: string }[];
+  // [권한관리]에 동명이인이 등록돼 있으면 이름만으로는 어느 계정인지 구분할 수 없다 — 과제상세의
+  // 담당자 선택 모달이나 엑셀 업로드 시 동명이인 해소 모달에서 특정 계정을 골랐을 때만 채워지며,
+  // 있으면 이름 대신 이 id로 [권한관리] 계정을 찾는다(lib/notice-contacts.ts). 이름이 유일하면
+  // 비워둬도 이름 매칭만으로 충분하다.
+  assignedManagerPrimaryUserId?: string;
   // 과제담당자(부) — 예전엔 "삼화담당자"라 불렸다. 현재 진행연차 기준 값이며, 담당자 배정은 인사이동
-  // 등으로 연차마다 바뀔 수 있어 연차별 이력은 assignedManagerHistory에 따로 쌓는다.
+  // 등으로 연차마다 바뀔 수 있어 연차별 이력은 assignedManagerHistory에 따로 쌓는다. 연락처·이메일은
+  // (정)과 동일하게 여기 저장하지 않고 공문 발송 시 [권한관리]에서 이름으로 찾아 쓴다.
   assignedManager?: string;
-  // 이름과 마찬가지로 연락처·이메일도 인사이동에 따라 그때그때 달라질 수 있어(이전 담당자의 연락처를
-  // 나중에 그 연차를 다시 볼 때도 그대로 보여줘야 함) 이력 배열에 함께 쌓는다.
-  assignedManagerHistory?: { termNumber: number; assignedManager: string; assignedManagerPhone?: string; assignedManagerEmail?: string }[];
-  // 과제담당자(부)의 "현재 진행 연차" 연락처·이메일 — 과거 연차 값은 assignedManagerHistory에서 찾는다.
-  assignedManagerPhone?: string;
-  assignedManagerEmail?: string;
+  assignedManagerHistory?: { termNumber: number; assignedManager: string }[];
+  assignedManagerUserId?: string; // 동명이인 해소용 — assignedManagerPrimaryUserId와 동일한 용도(부담당자)
   registeredAt?: string;    // 과제 등록일 — 연도별 대시보드 집계 기준(배정일). 과거 데이터는 미입력일 수 있음
 }
 
@@ -3000,6 +3003,9 @@ export interface SystemUser {
   hiworksEmail?: string;
   /** 하이웍스 메일 전용 비밀번호 (로그인 비밀번호 아님, SMTP 발송용) */
   hiworksMailPassword?: string;
+  /** 연락처(전화번호) — 과제담당자(정)/(부)로 지정됐을 때 공문 발송 시 이 사용자 이름으로 찾아
+   *  문의사항 연락처 표에 자동으로 채워 넣는 데 쓰인다(lib/notice-contacts.ts). */
+  phone?: string;
 }
 
 export const systemUsers: SystemUser[] = [

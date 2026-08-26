@@ -23,6 +23,7 @@ type ModalState = { mode: "add" } | { mode: "edit"; target: SystemUser };
 const EMPTY: Omit<SystemUser, "id"> = {
   name: "",
   email: "",
+  phone: "",
   role: "VIEWER",
   status: "ACTIVE",
   lastLoginAt: null,
@@ -56,17 +57,21 @@ function UserForm({ initial, existingUsers, excludeId, onSubmit, onClose }: {
     : [];
   return (
     <div className="p-6 space-y-4">
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-3 gap-4">
         <div>
           <Field label="이름"><input className={inputCls} value={form.name} onChange={(e) => s("name", e.target.value)} placeholder="홍길동" /></Field>
           {duplicateUsers.length > 0 && (
             <p className="mt-1 text-[11px] text-amber-600 leading-snug">
               ⚠ 동명이인 — 이미 등록된 &quot;{nameTrimmed}&quot;님({duplicateUsers.map((u) => u.email).join(", ")})과 이름이 같습니다.
-              수수료 청구관리의 삼화담당자는 이름으로 연결되어, 동명이인이 있으면 상세페이지로 자동 연결되지 않습니다.
+              수수료청구관리의 과제담당자(정)/(부)와 공문 발송 시 연락처·이메일이 모두 이름으로 연결되어,
+              동명이인이 있으면 어느 쪽 연락처가 쓰일지 알 수 없습니다.
             </p>
           )}
         </div>
         <Field label="이메일"><input className={inputCls} type="email" value={form.email} onChange={(e) => s("email", e.target.value)} placeholder="user@samhwa.co.kr" /></Field>
+        <Field label="연락처">
+          <input className={inputCls} value={form.phone ?? ""} onChange={(e) => s("phone", e.target.value)} placeholder="070-0000-0000" />
+        </Field>
       </div>
       <div className="grid grid-cols-2 gap-4">
         <Field label="역할">
@@ -204,6 +209,7 @@ export default function AdminUsersPage() {
             <tr className="border-b border-slate-100 bg-slate-50">
               <th className="text-left px-5 py-3 text-xs font-medium text-slate-500">이름</th>
               <th className="text-left px-5 py-3 text-xs font-medium text-slate-500">이메일</th>
+              <th className="text-left px-5 py-3 text-xs font-medium text-slate-500">연락처</th>
               <th className="text-center px-5 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">역할</th>
               <th className="text-center px-5 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">상태</th>
               <th className="text-center px-5 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">최근 로그인</th>
@@ -213,7 +219,7 @@ export default function AdminUsersPage() {
           </thead>
           <tbody>
             {filtered.length === 0 ? (
-              <tr><td colSpan={7} className="px-4 py-10 text-center text-sm text-slate-400">검색 결과가 없습니다</td></tr>
+              <tr><td colSpan={8} className="px-4 py-10 text-center text-sm text-slate-400">검색 결과가 없습니다</td></tr>
             ) : (
               filtered.map((u) => (
                 <tr key={u.id} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
@@ -224,6 +230,7 @@ export default function AdminUsersPage() {
                     </Link>
                   </td>
                   <td className="px-5 py-4 text-sm text-slate-600">{u.email}</td>
+                  <td className="px-5 py-4 text-sm text-slate-600">{u.phone || "-"}</td>
                   <td className="px-5 py-4 text-center"><StatusBadge label={ROLE_MAP[u.role].label} color={ROLE_MAP[u.role].color} /></td>
                   <td className="px-5 py-4 text-center">
                     <StatusBadge label={u.status === "ACTIVE" ? "활성" : "비활성"} color={u.status === "ACTIVE" ? "green" : "slate"} />

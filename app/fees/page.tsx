@@ -1567,14 +1567,10 @@ interface BulkNoticeTarget {
   statusRows: NoticeStatusRow[];
   feeRows: NoticeStatusRow[];
   templates: AgencyNoticeTemplateEntry[];
-  // 문의사항 연락처의 "과제담당(정)/(부)" 행을 이 과제의 실제 담당자로 바꿔치기하기 위한 값
-  // (applyManagerContactRows) — Project의 해당 필드를 그대로 옮긴다.
+  // 문의사항 연락처의 "과제담당(정)/(부)" 행을 이 과제의 실제 담당자로 바꿔치기하기 위한 이름
+  // (applyManagerContactRows) — 연락처·이메일은 이 이름으로 [권한관리](users)에서 찾는다.
   assignedManagerPrimary: string;
-  assignedManagerPrimaryPhone: string;
-  assignedManagerPrimaryEmail: string;
   assignedManager: string;
-  assignedManagerPhone: string;
-  assignedManagerEmail: string;
 }
 
 function BulkSettlementNoticeModal({
@@ -1588,7 +1584,7 @@ function BulkSettlementNoticeModal({
   senderUser: SystemUser | null;
   onClose: () => void;
 }) {
-  const { companyInfo } = useStore();
+  const { companyInfo, users } = useStore();
   // 공문 양식이 없는 전담기관 과제는 보낼 방법이 없어 건너뛰고, 수신 이메일이 없는 과제도 자동 제외한다
   // (참여기관 목록에 담당자 이메일이 등록돼 있어야 함 — 과제 상세에서 확인 가능).
   const noTemplate = targets.filter((t) => t.templates.length === 0);
@@ -1639,7 +1635,7 @@ function BulkSettlementNoticeModal({
       const templateId = templateChoices[t.agencyShortName] ?? t.templates[0]?.id;
       const rawTemplate = t.templates.find((x) => x.id === templateId)?.content ?? t.templates[0]?.content ?? EMPTY_NOTICE_TEMPLATE;
       // 문의사항 연락처의 "과제담당(정)/(부)" 행을 이 과제의 실제 담당자로 바꿔치기한다.
-      const template = { ...rawTemplate, contactRows: applyManagerContactRows(rawTemplate.contactRows, t) };
+      const template = { ...rawTemplate, contactRows: applyManagerContactRows(rawTemplate.contactRows, t, users) };
       const docNumber = `${companyInfo.docNumberPrefix} ${now.getFullYear()}-${String(seq).padStart(4, "0")}`;
       seq++;
       const subject = `[${t.projectNumber}] ${template.title || "정산절차 안내 및 수수료 청구"}`;
@@ -1761,7 +1757,7 @@ function BulkSettlementNoticeModal({
               {previewAgency === agency && (() => {
                 const templateId = templateChoices[agency] ?? items[0].templates[0]?.id;
                 const rawTemplate = items[0].templates.find((t) => t.id === templateId)?.content ?? items[0].templates[0]?.content ?? EMPTY_NOTICE_TEMPLATE;
-                const template = { ...rawTemplate, contactRows: applyManagerContactRows(rawTemplate.contactRows, items[0]) };
+                const template = { ...rawTemplate, contactRows: applyManagerContactRows(rawTemplate.contactRows, items[0], users) };
                 return (
                   <div className="max-h-[40vh] overflow-y-auto border-b border-slate-200 p-4 bg-slate-50/50">
                     <p className="text-[10px] text-slate-400 mb-2">&quot;{items[0].projectName}&quot; 기준 미리보기 — 과제별로 아래 내용만 자동으로 바뀌어 발송됩니다.</p>
@@ -2306,11 +2302,7 @@ export default function FeesPage() {
         feeRows,
         templates,
         assignedManagerPrimary: project.assignedManagerPrimary ?? "",
-        assignedManagerPrimaryPhone: project.assignedManagerPrimaryPhone ?? "",
-        assignedManagerPrimaryEmail: project.assignedManagerPrimaryEmail ?? "",
         assignedManager: project.assignedManager ?? "",
-        assignedManagerPhone: project.assignedManagerPhone ?? "",
-        assignedManagerEmail: project.assignedManagerEmail ?? "",
       };
     });
   }, [showBulkNotice, filtered, selectedKeys, projects, fundingAgencies, agencyNoticeTemplates, projectMembers, termFees]);
