@@ -622,8 +622,21 @@ export function deleteProjectTerms(projectId: string, termNumbers: number[]): vo
   );
   if (actuallyDeleted.size === 0) return;
 
+  // 진행 연차(currentTerm)의 데이터가 삭제 대상에 포함되면, 그 포인터를 그대로 두면 수수료 관리 목록의
+  // "현재연차 사업비 미입력" 자리표시 행이 곧바로 다시 나타나 실질적으로 삭제되지 않은 것처럼 보인다
+  // (currentTerm이 아닌 다른 연차는 그 연차를 가리키는 포인터가 따로 없어 이 문제가 없다 — 그냥 사라진다).
+  // 남아있는 연차 중 가장 큰 번호로 되돌려 삭제가 실제로 반영되게 한다. 총연차(totalTerms)는 계약
+  // 기간 자체를 나타내는 값이라 손대지 않는다 — 나중에 그 연차 사업비를 다시 입력하면 그대로 되살아난다.
+  const remainingTermNumbers = _state.termFees
+    .filter((f) => f.projectNumber === num && !actuallyDeleted.has(f.termNumber))
+    .map((f) => f.termNumber);
+  const nextCurrentTerm = actuallyDeleted.has(project.currentTerm)
+    ? (remainingTermNumbers.length > 0 ? Math.max(...remainingTermNumbers) : 1)
+    : project.currentTerm;
+
   _state = {
     ..._state,
+    projects: _state.projects.map((p) => (p.id === projectId ? { ...p, currentTerm: nextCurrentTerm } : p)),
     termFees: _state.termFees.filter((f) => !(f.projectNumber === num && actuallyDeleted.has(f.termNumber))),
     termFeeCalcs: _state.termFeeCalcs.filter((c) => !(c.projectNumber === num && actuallyDeleted.has(c.termNumber))),
     unclaimedFees: _state.unclaimedFees.filter((u) => !(u.projectNumber === num && actuallyDeleted.has(u.termNumber))),
