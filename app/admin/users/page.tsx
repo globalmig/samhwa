@@ -86,6 +86,7 @@ function UserForm({ initial, existingUsers, excludeId, onSubmit, onClose }: {
           <select className={selectCls} value={form.status} onChange={(e) => s("status", e.target.value as SystemUser["status"])}>
             <option value="ACTIVE">활성</option>
             <option value="INACTIVE">비활성</option>
+            <option value="PENDING">승인대기</option>
           </select>
         </Field>
       </div>
@@ -131,6 +132,18 @@ export default function AdminUsersPage() {
     }
   }
 
+  function handleApprove(id: string) {
+    updateUser(id, { status: "ACTIVE" });
+  }
+
+  function handleReject(id: string, name: string) {
+    if (confirm(`"${name}"님의 가입 신청을 거부하시겠습니까? 신청 내역이 삭제됩니다.`)) {
+      deleteUser(id);
+    }
+  }
+
+  const pendingUsers = users.filter((u) => u.status === "PENDING");
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -143,22 +156,46 @@ export default function AdminUsersPage() {
         )}
       </div>
 
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-5 gap-3">
         {[
           { label: "전체 사용자", value: `${users.length}명` },
           { label: "활성", value: `${users.filter((u) => u.status === "ACTIVE").length}명` },
+          { label: "승인 대기", value: `${pendingUsers.length}명`, highlight: pendingUsers.length > 0 },
           { label: "관리자", value: `${users.filter((u) => u.role === "ADMIN").length}명` },
           { label: "회계/정산", value: `${users.filter((u) => u.role === "ACCOUNTANT" || u.role === "SETTLEMENT").length}명` },
         ].map((s) => (
-          <div key={s.label} className="bg-white rounded-xl border border-slate-200 px-4 py-3">
-            <p className="text-xs text-slate-500">{s.label}</p>
-            <p className="text-sm font-bold mt-0.5 text-slate-800">{s.value}</p>
+          <div key={s.label} className={`rounded-xl border px-4 py-3 ${s.highlight ? "bg-amber-50 border-amber-200" : "bg-white border-slate-200"}`}>
+            <p className={`text-xs ${s.highlight ? "text-amber-700" : "text-slate-500"}`}>{s.label}</p>
+            <p className={`text-sm font-bold mt-0.5 ${s.highlight ? "text-amber-700" : "text-slate-800"}`}>{s.value}</p>
           </div>
         ))}
       </div>
 
+      {canEdit && pendingUsers.length > 0 && (
+        <div className="bg-amber-50 rounded-xl border border-amber-200 p-4">
+          <p className="text-xs font-medium text-amber-800 mb-3">가입 승인 대기 · {pendingUsers.length}건</p>
+          <div className="space-y-2">
+            {pendingUsers.map((u) => (
+              <div key={u.id} className="flex items-center justify-between bg-white rounded-lg border border-amber-100 px-4 py-2.5">
+                <div>
+                  <p className="text-sm font-medium text-slate-800">{u.name} <span className="text-xs font-normal text-slate-400">{u.email}</span></p>
+                  <p className="text-xs text-slate-400 mt-0.5">{u.phone || "-"} · 신청일 {fmtDate(u.registeredAt)}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => handleApprove(u.id)} className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">승인</button>
+                  <button onClick={() => handleReject(u.id, u.name)} className="px-3 py-1.5 text-xs font-medium text-slate-500 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors">거부</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="bg-white rounded-xl border border-slate-200 p-4">
-        <p className="text-xs font-medium text-slate-600 mb-3">역할별 권한 요약</p>
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-xs font-medium text-slate-600">역할별 권한 요약</p>
+          <Link href="/admin/permissions" className="text-xs text-blue-600 hover:underline">페이지·기능별로 세부 조정 →</Link>
+        </div>
         <div className="grid grid-cols-4 gap-3">
           {Object.entries(ROLE_MAP).map(([role, info]) => (
             <div key={role} className="border border-slate-100 rounded-lg p-3">
@@ -199,6 +236,7 @@ export default function AdminUsersPage() {
             <option value="ALL">전체 상태</option>
             <option value="ACTIVE">활성</option>
             <option value="INACTIVE">비활성</option>
+            <option value="PENDING">승인대기</option>
           </select>
         </div>
       </div>
@@ -233,20 +271,30 @@ export default function AdminUsersPage() {
                   <td className="px-5 py-4 text-sm text-slate-600">{u.phone || "-"}</td>
                   <td className="px-5 py-4 text-center"><StatusBadge label={ROLE_MAP[u.role].label} color={ROLE_MAP[u.role].color} /></td>
                   <td className="px-5 py-4 text-center">
-                    <StatusBadge label={u.status === "ACTIVE" ? "활성" : "비활성"} color={u.status === "ACTIVE" ? "green" : "slate"} />
+                    <StatusBadge
+                      label={u.status === "ACTIVE" ? "활성" : u.status === "PENDING" ? "승인대기" : "비활성"}
+                      color={u.status === "ACTIVE" ? "green" : u.status === "PENDING" ? "amber" : "slate"}
+                    />
                   </td>
                   <td className="px-5 py-4 text-center text-xs text-slate-500 whitespace-nowrap">{u.lastLoginAt ?? "-"}</td>
                   <td className="px-5 py-4 text-center text-xs text-slate-500 whitespace-nowrap">{fmtDate(u.registeredAt)}</td>
                   <td className="px-5 py-4 text-center">
                     {canEdit ? (
-                      <div className="flex items-center justify-center gap-0.5">
-                        <button onClick={() => setModal({ mode: "edit", target: u })} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors" title="수정">
-                          <FiEdit2 size={14} />
-                        </button>
-                        <button onClick={() => handleDelete(u.id, u.name)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors" title="삭제">
-                          <FiTrash2 size={14} />
-                        </button>
-                      </div>
+                      u.status === "PENDING" ? (
+                        <div className="flex items-center justify-center gap-1">
+                          <button onClick={() => handleApprove(u.id)} className="px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 rounded transition-colors">승인</button>
+                          <button onClick={() => handleReject(u.id, u.name)} className="px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 rounded transition-colors">거부</button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-center gap-0.5">
+                          <button onClick={() => setModal({ mode: "edit", target: u })} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors" title="수정">
+                            <FiEdit2 size={14} />
+                          </button>
+                          <button onClick={() => handleDelete(u.id, u.name)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors" title="삭제">
+                            <FiTrash2 size={14} />
+                          </button>
+                        </div>
+                      )
                     ) : <span className="text-xs text-slate-300">—</span>}
                   </td>
                 </tr>

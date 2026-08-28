@@ -1,7 +1,8 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
-import { systemUsers, type SystemUser } from "./mock";
+import { type SystemUser } from "./mock";
+import { getUsers } from "./store";
 
 // 역할별 기본 비밀번호 (데모용)
 const DEMO_PASSWORDS: Record<string, string> = {
@@ -24,7 +25,7 @@ function loadInitialUser(): SystemUser | null {
   try {
     const id = localStorage.getItem(STORAGE_KEY);
     if (!id) return null;
-    return systemUsers.find((u) => u.id === id && u.status === "ACTIVE") ?? null;
+    return getUsers().find((u) => u.id === id && u.status === "ACTIVE") ?? null;
   } catch {
     return null;
   }
@@ -48,10 +49,14 @@ export function initAuth() {
 }
 
 export function login(email: string, password: string): { ok: boolean; error?: string } {
-  const user = systemUsers.find((u) => u.email === email);
+  const user = getUsers().find((u) => u.email === email);
   if (!user) return { ok: false, error: "이메일 또는 비밀번호가 올바르지 않습니다." };
+  if (user.status === "PENDING") return { ok: false, error: "가입 승인 대기 중인 계정입니다. 시스템 관리자 승인 후 로그인할 수 있습니다." };
   if (user.status === "INACTIVE") return { ok: false, error: "비활성화된 계정입니다. 관리자에게 문의하세요." };
-  if (DEMO_PASSWORDS[email] !== password) return { ok: false, error: "이메일 또는 비밀번호가 올바르지 않습니다." };
+  // 회원가입/비밀번호 재설정으로 생성·변경된 계정은 password 필드를, 초기 시드 계정은
+  // DEMO_PASSWORDS를 확인한다 (SystemUser.password 주석 참고).
+  const validPassword = user.password !== undefined ? user.password === password : DEMO_PASSWORDS[email] === password;
+  if (!validPassword) return { ok: false, error: "이메일 또는 비밀번호가 올바르지 않습니다." };
 
   try {
     localStorage.setItem(STORAGE_KEY, user.id);

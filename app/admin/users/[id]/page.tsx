@@ -121,8 +121,8 @@ export default function UserDetailPage({ params }: { params: Promise<{ id: strin
               <div className="flex items-center gap-2 mt-1.5">
                 <StatusBadge label={roleInfo.label} color={roleInfo.color} />
                 <StatusBadge
-                  label={user.status === "ACTIVE" ? "활성" : "비활성"}
-                  color={user.status === "ACTIVE" ? "green" : "slate"}
+                  label={user.status === "ACTIVE" ? "활성" : user.status === "PENDING" ? "승인대기" : "비활성"}
+                  color={user.status === "ACTIVE" ? "green" : user.status === "PENDING" ? "amber" : "slate"}
                 />
               </div>
             </div>
@@ -166,6 +166,7 @@ export default function UserDetailPage({ params }: { params: Promise<{ id: strin
                 className={selectCls}>
                 <option value="ACTIVE">활성</option>
                 <option value="INACTIVE">비활성</option>
+                <option value="PENDING">승인대기</option>
               </select>
             </div>
           </div>

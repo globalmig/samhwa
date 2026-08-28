@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { login, useAuth, initAuth, getCurrentUser } from "@/lib/auth";
 import { defaultLandingPath } from "@/lib/permissions";
 
@@ -102,6 +103,14 @@ export default function LoginPage() {
               {submitting ? "로그인 중..." : "로그인"}
             </button>
           </form>
+
+          <div className="flex items-center justify-center gap-3 mt-5 text-xs text-slate-500">
+            <Link href="/find-id" className="hover:text-blue-600 hover:underline transition-colors">아이디 찾기</Link>
+            <span className="text-slate-300">|</span>
+            <Link href="/find-password" className="hover:text-blue-600 hover:underline transition-colors">비밀번호 찾기</Link>
+            <span className="text-slate-300">|</span>
+            <Link href="/signup" className="hover:text-blue-600 hover:underline transition-colors">회원가입</Link>
+          </div>
         </div>
 
         {/* 데모 계정 안내 */}
