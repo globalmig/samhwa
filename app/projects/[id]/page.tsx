@@ -309,6 +309,18 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   const [editingPastFinancials, setEditingPastFinancials] = useState(false);
   const [pastFinancialsDraft, setPastFinancialsDraft] = useState({ govGrant: 0, privateCash: 0, privateInKind: 0 });
   useEffect(() => { setEditingPastFinancials(false); }, [viewTerm]);
+  // 책임자(연구책임자)명·이메일은 연차 탭(viewTerm)을 바꿀 때마다 그 연차에 실제로 적용되는 값으로
+  // draft를 다시 채운다 — 이 필드들은 사업비·담당자와 달리 draft가 마운트 시점에 한 번만 초기화돼서,
+  // 연차 탭을 눌러도 항상 진행 연차 값만 보이고 그 연차 값으로 바뀌지 않는 문제가 있었다(URL의
+  // ?term=으로 진행 연차가 아닌 연차를 바로 열었을 때도 마찬가지). 다른 연차를 보다가 진행 연차
+  // 탭으로 돌아오면 다시 진행 연차의(수정 중이던 값이 아니라 저장된) 값으로 리셋된다 — 사업비 구분
+  // 카드가 연차 탭을 바꾸면 미저장 변경을 잃는 것과 동일한 전제.
+  useEffect(() => {
+    if (!project) return;
+    const resolved = resolveResearchLeadForTerm(project, viewTerm);
+    setDraft((p) => ({ ...p, researchLead: resolved.name || undefined, researchLeadEmail: resolved.email || undefined }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewTerm]);
 
   if (!project) return null;
 
@@ -499,31 +511,41 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
           { termNumber: draft.currentTerm, assignedManagerPrimary: draft.assignedManagerPrimary },
         ].sort((a, b) => a.termNumber - b.termNumber)
       : draft.assignedManagerPrimaryHistory;
-    // 책임자(연구책임자) 이름·이메일을 여기서 고치면 "지금부터" 적용되는 값이어야지, 이미 TermFee가
-    // 만들어져 있는 다른 연차(과거뿐 아니라 — 다년치 사업비를 미리 입력해둬서 진행 연차보다 나중
-    // 연차가 이미 만들어져 있는 경우도 포함)까지 소급으로 바뀌면 안 된다. 그래서 값이 실제로 바뀔
-    // 때만, 진행 연차(draft.currentTerm) 자신을 뺀 나머지 "이미 만들어진" 연차 중 아직 자체
-    // 오버라이드가 없는 연차를 옛 값으로 고정해두고 나서 기본값을 새 값으로 바꾼다(엑셀 재업로드 때
-    // 쓰는 backfillExistingTermOverrides와 동일한 원칙). ??로 undefined일 때만 ""로 채운다 — 그대로
-    // 두면 resolveResearchLeadForTerm의 override?.email ?? researchLeadEmail 폴백이 "값 없음"으로
-    // 착각해 방금 바뀐 새 기본값으로 새어 들어가 버린다.
-    // 기준값은 draft가 아니라 항상 최신 project!.researchLeadOverrides에서 가져온다 — draft는 마운트
-    // 시점에 한 번만 초기화되고 이후 저장 때마다 다시 동기화되지 않아서, draft 기준으로 하면 "저장 →
-    // (다른 변경 없이) 다시 저장"만 해도 방금 백필해둔 오버라이드가 옛(undefined) draft 값으로
-    // 덮어써져 사라지는 버그가 있었다.
-    const leadChanged = (draft.researchLead ?? "") !== (project!.researchLead ?? "") || (draft.researchLeadEmail ?? "") !== (project!.researchLeadEmail ?? "");
-    const researchLeadOverrides = leadChanged
-      ? backfillExistingTermOverrides(
+    // 책임자(연구책임자) 이름·이메일은 지금 보고 있는 연차 탭(viewTerm) 기준으로 저장한다(위 useEffect가
+    // 탭을 바꿀 때마다 draft를 그 연차 값으로 다시 채워두므로, 여기서 그대로 그 연차의 값으로 쓴다).
+    // ??로 undefined일 때만 ""로 채운다 — 그대로 두면 resolveResearchLeadForTerm의 override?.email ??
+    // researchLeadEmail 폴백이 "값 없음"으로 착각해 새 기본값으로 새어 들어가 버린다.
+    const trueBaseLead = { name: project!.researchLead ?? "", email: project!.researchLeadEmail ?? "" };
+    const draftLead = { name: draft.researchLead ?? "", email: draft.researchLeadEmail ?? "" };
+    let nextResearchLead = project!.researchLead;
+    let nextResearchLeadEmail = project!.researchLeadEmail;
+    let researchLeadOverrides = project!.researchLeadOverrides;
+    if (viewTerm === currentTerm) {
+      // 진행 연차 탭에서 고치는 경우 — 이 값은 오버라이드가 없는 다른 연차(특히 아직 안 만들어진
+      // 미래 연차)의 기본값 역할도 겸하므로 "지금부터" 적용되도록 기본값 자체를 바꾼다. 그 전에,
+      // 이미 TermFee가 만들어져 있는 다른 연차(과거·미래 모두)는 옛 값으로 고정해 소급을 막는다
+      // (엑셀 재업로드와 동일한 원칙 — backfillExistingTermOverrides). 기준은 draft가 아니라 항상
+      // 최신 project!를 쓴다 — draft는 저장 후 재동기화되지 않아서, draft 기준으로 하면 "저장 →
+      // (변경 없이) 다시 저장"만 해도 방금 백필해둔 오버라이드가 사라지는 버그가 있었다.
+      const leadChanged = draftLead.name !== trueBaseLead.name || draftLead.email !== trueBaseLead.email;
+      if (leadChanged) {
+        researchLeadOverrides = backfillExistingTermOverrides(
           project!.researchLeadOverrides,
           termFees.filter((f) => f.projectNumber === project!.projectNumber).map((f) => f.termNumber),
-          draft.currentTerm,
-          (termNumber: number) => ({
-            termNumber,
-            name: project!.researchLead ?? "",
-            email: project!.researchLeadEmail ?? "",
-          }),
-        )
-      : project!.researchLeadOverrides;
+          viewTerm,
+          (termNumber: number) => ({ termNumber, name: trueBaseLead.name, email: trueBaseLead.email }),
+        );
+        nextResearchLead = draftLead.name || undefined;
+        nextResearchLeadEmail = draftLead.email || undefined;
+      }
+    } else {
+      // 진행 연차가 아닌 다른 연차 탭에서 고치는 경우 — 기본값은 건드리지 않고 그 연차만의
+      // 오버라이드로 직접 저장한다(연차별 수수료 현황의 BillingBlock.saveLead와 동일한 방식).
+      const isDefault = draftLead.name === trueBaseLead.name && draftLead.email === trueBaseLead.email;
+      const others = (project!.researchLeadOverrides ?? []).filter((o) => o.termNumber !== viewTerm);
+      const next = isDefault ? others : [...others, { termNumber: viewTerm, name: draftLead.name, email: draftLead.email }].sort((a, b) => a.termNumber - b.termNumber);
+      researchLeadOverrides = next.length > 0 ? next : undefined;
+    }
     updateProject(projectId, {
       ...draft,
       agencyId: resolvedAgencyId,
@@ -535,6 +557,8 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       annualFinancials,
       assignedManagerPrimaryHistory,
       assignedManagerHistory,
+      researchLead: nextResearchLead,
+      researchLeadEmail: nextResearchLeadEmail,
       researchLeadOverrides,
     });
     setSavedMsg(true);
@@ -619,14 +643,6 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   const viewAssignedManagerPrimary = isCurrentTermFinancials
     ? (draft.assignedManagerPrimary ?? "")
     : (viewAssignedManagerPrimaryRecord?.assignedManagerPrimary ?? "");
-  // 책임자(연구책임자)도 연차별로 바뀔 수 있어(researchLeadOverrides) — 지금 보고 있는 연차(viewTerm,
-  // 진행 연차 포함)에 개별 오버라이드가 있는지 항상 확인해둔다. 담당자(assignedManager)와 달리 진행
-  // 연차라고 해서 무조건 기본값(draft)과 같은 게 아니다 — 진행 연차 자체에 개별 오버라이드가 있을
-  // 수 있어서, 그 경우 기본값 입력칸만 보면 방금 연차별로 다르게 지정한 게 반영 안 된 것처럼 보인다.
-  // (오버라이드가 없을 때는 project.researchLead가 아직 저장 전 draft와 달라도 그건 그냥 "저장 전"
-  // 상태일 뿐이라 안내 문구를 띄우지 않는다 — 오버라이드 존재 여부로만 판단한다.)
-  const viewResearchLeadOverride = project.researchLeadOverrides?.find((o) => o.termNumber === viewTerm);
-  const viewResearchLead = { name: viewResearchLeadOverride?.name ?? draft.researchLead ?? "", email: viewResearchLeadOverride?.email ?? draft.researchLeadEmail ?? "" };
 
   const totalCashBudget = members.reduce((s, m) => s + getMemberBudgetVal(m, "cashBudget"), 0);
   const totalInKindBudget = members.reduce((s, m) => s + getMemberBudgetVal(m, "inKindBudget"), 0);
@@ -864,7 +880,12 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 onChange={(e) => setDraft((p) => ({ ...p, projectName: e.target.value }))} />
             </div>
 
-            {/* 주관기관 + 연구책임자명 + 책임자이메일 */}
+            {/* 주관기관 + 연구책임자명 + 책임자이메일 — 아래 두 필드는 지금 보고 있는 연차 탭(viewTerm)의
+                값이다. 연차 탭을 바꾸면 그 연차에 실제로 적용되는 값으로 다시 채워지고(위 useEffect),
+                여기서 고쳐 저장하면 그 연차만 바뀐다 — 실무자·연차별 수수료 현황의 "책임자" 항목과
+                동일한 원칙. 다만 진행 연차 탭에서 고치면, 그 값은 오버라이드가 없는 다른 연차의 기본값
+                역할도 겸하므로 "지금부터"(진행 연차 + 아직 안 만들어진 이후 연차) 적용되고, 이미
+                TermFee가 만들어진 다른 연차(과거·미래 모두)는 소급되지 않도록 자동으로 고정된다. */}
             <div className="grid grid-cols-3 gap-4">
               <div>
                 <InstitutionQuickAdd
@@ -875,28 +896,29 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">연구책임자명</label>
+                <label className="block text-xs font-medium text-slate-500 mb-1">
+                  연구책임자명
+                  {viewTerm !== currentTerm && (
+                    <span className="ml-1 text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{viewTerm}연차 값</span>
+                  )}
+                </label>
                 <input className={`${inp} w-full bg-white`} value={draft.researchLead ?? ""}
                   onChange={(e) => setDraft((p) => ({ ...p, researchLead: e.target.value }))} />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">책임자이메일</label>
+                <label className="block text-xs font-medium text-slate-500 mb-1">
+                  책임자이메일
+                  {viewTerm === currentTerm ? (
+                    <span className="ml-1 text-slate-400 font-normal">· 정산절차 안내 공문만 실무자와 함께 수신</span>
+                  ) : (
+                    <span className="ml-1 text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{viewTerm}연차 값</span>
+                  )}
+                </label>
                 <input className={`${inp} w-full bg-white`} value={draft.researchLeadEmail ?? ""}
                   onChange={(e) => setDraft((p) => ({ ...p, researchLeadEmail: e.target.value }))}
                   placeholder="email@example.com (여러 명은 콤마로 구분)" />
               </div>
             </div>
-            {/* 위 입력값을 고치면 진행 연차와 이후 새로 생기는 연차에 적용되고(doSaveEdit의
-                backfillExistingTermOverrides), 이미 TermFee가 만들어진 다른 연차는 소급되지 않는다.
-                다만 연차별 수수료 현황에서 특정 연차(지금 보고 있는 연차 포함)에 개별로 다른 값을 지정해뒀다면 그 값이
-                우선하므로, 위 입력값과 다르면 여기서 실제 적용값을 함께 보여준다. */}
-            {(viewResearchLead.name !== (draft.researchLead ?? "") || viewResearchLead.email !== (draft.researchLeadEmail ?? "")) && (
-              <p className="text-[11px] text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
-                ※ {viewTerm}연차에는 위 입력값과 다른 책임자가 개별 지정되어 있습니다 —
-                실제 적용값: <strong>{viewResearchLead.name || "-"}</strong> · <strong>{viewResearchLead.email || "-"}</strong>
-                {" "}(연차별 수수료 현황의 &quot;책임자&quot; 항목에서 수정)
-              </p>
-            )}
           </div>
 
           {/* 사업비 구분 (총사업비 / 현금사업비 / 현물사업비) */}
