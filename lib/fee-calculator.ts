@@ -62,6 +62,28 @@ export function resolveResearchLeadForTerm(
   };
 }
 
+// ─── 기본값 변경 시 과거 연차 소급 방지 ────────────────────────────────
+// 실무자·책임자 연락처처럼 "오버라이드가 없는 모든 연차의 기본값" 역할을 겸하는 필드는, 기본값 자체를
+// 새 값으로 바꾸면 그 순간부터 오버라이드 없는 모든 연차(과거 포함)가 한꺼번에 새 값으로 바뀌어버린다
+// — 새 값은 "이 시점부터 적용"이어야지 과거까지 소급되면 안 된다. 그래서 기본값을 바꾸기 전에,
+// 지금 이 변경이 적용되는 연차(targetTerm) 이전 연차 중 아직 자체 오버라이드가 없는 연차만 옛
+// 값으로 고정해두고 나서 기본값을 바꾼다 — 과거 연차는 계속 옛 값으로 남고, targetTerm부터(이후
+// 새로 생기는 연차 포함)는 새 기본값이 그대로 적용된다. 엑셀 재업로드(ExcelUploadModal)와
+// 과제 상세의 책임자이메일 직접 수정(projects/[id]/page.tsx) 양쪽에서 동일하게 쓴다.
+export function backfillPriorTermOverrides<O extends { termNumber: number }>(
+  existingOverrides: O[] | undefined,
+  targetTerm: number,
+  makeOverride: (termNumber: number) => O,
+): O[] | undefined {
+  const covered = new Set((existingOverrides ?? []).map((o) => o.termNumber));
+  const backfilled: O[] = [];
+  for (let t = 1; t < targetTerm; t++) {
+    if (!covered.has(t)) backfilled.push(makeOverride(t));
+  }
+  if (backfilled.length === 0) return existingOverrides;
+  return [...(existingOverrides ?? []), ...backfilled].sort((a, b) => a.termNumber - b.termNumber);
+}
+
 // ─── 기관구분 기본값 조회 ────────────────────────────────────────────
 // projectDivision을 명시적으로 지정하지 않은 과제는 전담기관 기준 기본값을 쓴다 — RDA2(fa-006)는
 // 참여기관 여러 곳이 공동으로 진행하는 구조가 기본이라 "공동", 그 외 전담기관은 "주관"이 기본이다.

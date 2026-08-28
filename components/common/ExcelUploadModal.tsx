@@ -28,7 +28,7 @@ import {
 } from "@/lib/store";
 import type { Project, ProjectMember, AnnualBudget, AnnualFinancials, Institution, SystemUser } from "@/lib/mock";
 import { getCurrentUser } from "@/lib/auth";
-import { isSettlementTerm, resolveAutoDetectedAgencyId } from "@/lib/fee-calculator";
+import { isSettlementTerm, resolveAutoDetectedAgencyId, backfillPriorTermOverrides } from "@/lib/fee-calculator";
 import ManagerPickerModal from "@/components/common/ManagerPickerModal";
 
 type InstitutionGrade = NonNullable<ProjectMember["institutionGrade"]>;
@@ -849,27 +849,6 @@ function resolveStageStructure(
     }),
     batchEndTerm,
   };
-}
-
-// 실무자·책임자 연락처는 엑셀에 "몇 연차부터 적용"이라는 개념이 없어(연차별기관별 시트는 항상 그
-// 시점의 최신 값 한 줄만 담는다) 재업로드 때마다 기본값(contactEmail/researchLead 등)을 그대로
-// 덮어썼다. 그 기본값은 "오버라이드가 없는 모든 연차"의 폴백이기도 해서, 예전엔 최신 연차 정보로
-// 재업로드할 때마다 오버라이드가 없던 과거 연차까지 실무자·책임자 정보가 소급으로 바뀌는 버그가
-// 있었다. 그래서 기본값을 새 값으로 덮어쓰기 전에, 지금 이 엑셀이 반영하는 연차(targetTerm) 이전
-// 연차 중 아직 자체 오버라이드가 없는 연차만 옛 값으로 고정해두고 나서 기본값을 바꾼다 — 이러면
-// 과거 연차는 계속 옛 값으로 남고, targetTerm부터는 새 기본값이 적용된다.
-function backfillPriorTermOverrides<O extends { termNumber: number }>(
-  existingOverrides: O[] | undefined,
-  targetTerm: number,
-  makeOverride: (termNumber: number) => O,
-): O[] | undefined {
-  const covered = new Set((existingOverrides ?? []).map((o) => o.termNumber));
-  const backfilled: O[] = [];
-  for (let t = 1; t < targetTerm; t++) {
-    if (!covered.has(t)) backfilled.push(makeOverride(t));
-  }
-  if (backfilled.length === 0) return existingOverrides;
-  return [...(existingOverrides ?? []), ...backfilled].sort((a, b) => a.termNumber - b.termNumber);
 }
 
 // 엑셀에 담긴 과제 중 이미 등록된 과제를, 진행중인 연차(currentTerm)와 비교해
@@ -2535,11 +2514,13 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             assignedManagerPrimaryHistory: mergeTermHistory(renamedFrom.assignedManagerPrimaryHistory, assignedManagerPrimaryHistory),
             researchLead: researchLead ?? renamedFrom.researchLead,
             researchLeadEmail: researchLeadEmail ?? renamedFrom.researchLeadEmail,
+            // ??로 undefined일 때만 ""로 채운다 — 그대로 두면 resolveResearchLeadForTerm의 override?.email ??
+            // researchLeadEmail 폴백이 "값 없음"으로 착각해 방금 바뀐 새 기본값으로 새어 들어가 버린다.
             researchLeadOverrides: leadChanged
               ? backfillPriorTermOverrides(renamedFrom.researchLeadOverrides, currentTerm, (termNumber) => ({
                   termNumber,
-                  name: renamedFrom.researchLead,
-                  email: renamedFrom.researchLeadEmail,
+                  name: renamedFrom.researchLead ?? "",
+                  email: renamedFrom.researchLeadEmail ?? "",
                 }))
               : renamedFrom.researchLeadOverrides,
             agencyAssignedAt: agencyAssignedAt ?? renamedFrom.agencyAssignedAt,
@@ -2725,11 +2706,14 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             updates.recipientOverrides = backfillPriorTermOverrides(
               existingMember.recipientOverrides,
               targetTerm,
+              // ??로 undefined일 때만 ""로 채운다 — 여기서 undefined를 그대로 두면 resolveMemberRecipientForTerm의
+              // override?.recipientEmail ?? member.contactEmail 폴백이 "값 없음"으로 착각해 방금 바뀐
+              // 새 기본값으로 새어 들어가 버린다(과거 연차가 옛 값이 아니라 새 값을 보여주는 버그).
               (termNumber) => ({
                 termNumber,
-                recipientName: existingMember.contactName,
-                recipientEmail: existingMember.contactEmail,
-                recipientPhone: existingMember.contactPhone,
+                recipientName: existingMember.contactName ?? "",
+                recipientEmail: existingMember.contactEmail ?? "",
+                recipientPhone: existingMember.contactPhone ?? "",
               }),
             );
           }
@@ -2850,11 +2834,13 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           assignedManagerPrimaryHistory: mergeTermHistory(existingProject.assignedManagerPrimaryHistory, assignedManagerPrimaryHistory),
           researchLead: researchLead ?? existingProject.researchLead,
           researchLeadEmail: researchLeadEmail ?? existingProject.researchLeadEmail,
+          // ??로 undefined일 때만 ""로 채운다 — 그대로 두면 resolveResearchLeadForTerm의 override?.email ??
+          // researchLeadEmail 폴백이 "값 없음"으로 착각해 방금 바뀐 새 기본값으로 새어 들어가 버린다.
           researchLeadOverrides: leadChanged
             ? backfillPriorTermOverrides(existingProject.researchLeadOverrides, nextCurrentTerm, (termNumber) => ({
                 termNumber,
-                name: existingProject.researchLead,
-                email: existingProject.researchLeadEmail,
+                name: existingProject.researchLead ?? "",
+                email: existingProject.researchLeadEmail ?? "",
               }))
             : existingProject.researchLeadOverrides,
           agencyAssignedAt: agencyAssignedAt ?? existingProject.agencyAssignedAt,
