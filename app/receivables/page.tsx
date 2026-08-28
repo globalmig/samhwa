@@ -20,6 +20,20 @@ const STATUS_MAP: Record<Receivable["status"], { label: string; color: "red" | "
   PAID: { label: "수금완료", color: "green" },
 };
 
+// "연체"는 Receivable.status의 실제 값이 아니라, 만기일이 지난 미납 건(status !== PAID && dueDate 경과)을
+// 가리키는 계산값이다(isOverdueByRule). 예전엔 이 계산값을 상태뱃지에서만 raw status 위에 덧씌워
+// 보여주면서, 필터·요약카드는 여전히 raw status(OVERDUE)만 따로 세고 있었다 — 그래서 화면엔 "연체"로
+// 보이는 건이 "미수" 필터에도 걸리고 "연체" 필터에도 걸리는 모순이 생겼다(둘이 서로 다른 기준이라
+// 배타적이지 않았음). effectiveDisplayStatus 하나로 뱃지·필터·요약카드가 항상 같은 결과를 보게 한다.
+type DisplayStatus = "LATE" | Receivable["status"];
+const DISPLAY_STATUS_MAP: Record<DisplayStatus, { label: string; color: "red" | "amber" | "green" | "blue" }> = {
+  ...STATUS_MAP,
+  LATE: { label: "연체", color: "red" },
+};
+function effectiveDisplayStatus(r: Pick<Receivable, "status" | "dueDate">): DisplayStatus {
+  return isOverdueByRule(r) ? "LATE" : r.status;
+}
+
 type ModalState = { mode: "add" } | { mode: "edit"; target: Receivable };
 
 function makeEmpty(): Omit<Receivable, "id"> {
@@ -56,7 +70,16 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 function ReceivableForm({ initial, onSubmit, onClose }: { initial: Omit<Receivable, "id">; onSubmit: (d: Omit<Receivable, "id">) => void; onClose: () => void }) {
   const { institutions } = useStore();
   const [form, setForm] = useState(initial);
+  const [error, setError] = useState("");
   const s = (k: keyof typeof form, v: unknown) => setForm((p) => ({ ...p, [k]: v }));
+
+  function handleSubmit() {
+    if (!form.invoiceNumber.trim() || !form.projectNumber.trim() || !form.projectName.trim() || !form.leadInstitutionId) {
+      setError("계산서번호·과제번호·과제명·주관기관은 필수입니다.");
+      return;
+    }
+    onSubmit(form);
+  }
 
   // 청구일이 바뀌면 만기일(청구일+3개월)도 함께 갱신한다 — 단, 사용자가 만기일을
   // 자동계산값과 다르게 직접 수정해둔 경우엔 건드리지 않는다.
@@ -79,8 +102,11 @@ function ReceivableForm({ initial, onSubmit, onClose }: { initial: Omit<Receivab
 
   return (
     <div className="p-6 space-y-4">
+      {error && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>
+      )}
       <div className="grid grid-cols-2 gap-4">
-        <Field label="계산서번호"><input className={inputCls} value={form.invoiceNumber} onChange={(e) => s("invoiceNumber", e.target.value)} placeholder="2024-08-00001" /></Field>
+        <Field label="계산서번호 *"><input className={inputCls} value={form.invoiceNumber} onChange={(e) => s("invoiceNumber", e.target.value)} placeholder="2024-08-00001" /></Field>
         <Field label="상태">
           <select className={selectCls} value={form.status} onChange={(e) => s("status", e.target.value as Receivable["status"])}>
             <option value="PENDING">청구중</option>
@@ -91,11 +117,11 @@ function ReceivableForm({ initial, onSubmit, onClose }: { initial: Omit<Receivab
         </Field>
       </div>
       <div className="grid grid-cols-2 gap-4">
-        <Field label="과제번호"><input className={inputCls} value={form.projectNumber} onChange={(e) => s("projectNumber", e.target.value)} /></Field>
-        <Field label="과제명"><input className={inputCls} value={form.projectName} onChange={(e) => s("projectName", e.target.value)} /></Field>
+        <Field label="과제번호 *"><input className={inputCls} value={form.projectNumber} onChange={(e) => s("projectNumber", e.target.value)} /></Field>
+        <Field label="과제명 *"><input className={inputCls} value={form.projectName} onChange={(e) => s("projectName", e.target.value)} /></Field>
       </div>
       <div className="grid grid-cols-3 gap-4">
-        <Field label="주관기관">
+        <Field label="주관기관 *">
           <select className={selectCls} value={form.leadInstitutionId} onChange={(e) => handleLeadChange(e.target.value)}>
             <option value="">선택하세요</option>
             {institutions.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
@@ -115,7 +141,7 @@ function ReceivableForm({ initial, onSubmit, onClose }: { initial: Omit<Receivab
       </div>
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
         <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
-        <button onClick={() => onSubmit(form)} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">저장</button>
+        <button onClick={handleSubmit} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">저장</button>
       </div>
     </div>
   );
@@ -153,7 +179,7 @@ export default function ReceivablesPage() {
     () =>
       enriched.filter(
         (r) =>
-          (statusFilter === "ALL" || (statusFilter === "LATE" ? isOverdueByRule(r) : r.status === statusFilter)) &&
+          (statusFilter === "ALL" || effectiveDisplayStatus(r) === statusFilter) &&
           (filterInvoiceNumber   === "" || r.invoiceNumber.includes(filterInvoiceNumber)) &&
           (filterProjectNumber   === "" || r.projectNumber.includes(filterProjectNumber)) &&
           (filterProjectName     === "" || r.projectName.includes(filterProjectName)) &&
@@ -162,9 +188,13 @@ export default function ReceivablesPage() {
     [enriched, filterInvoiceNumber, filterProjectNumber, filterProjectName, filterLeadInstitution, statusFilter]
   );
 
-  const overdueAmount = receivables.filter((r) => r.status === "OVERDUE").reduce((s, r) => s + r.receivableAmount, 0);
+  // 화면에 실제로 "미수"/"연체"로 표시되는 건과 정확히 같은 기준으로 센다 — 배타적이라 두 카드에
+  // 동시에 잡히는 건이 없다(둘 다 status !== PAID 이지만, 만기 경과 여부로 서로 갈린다).
+  const overdueAmount = receivables.filter((r) => effectiveDisplayStatus(r) === "OVERDUE").reduce((s, r) => s + r.receivableAmount, 0);
   const pendingAmount = receivables.filter((r) => r.status !== "PAID").reduce((s, r) => s + r.receivableAmount, 0);
-  const overdueCount = receivables.filter((r) => r.status === "OVERDUE").length;
+  const overdueCount = receivables.filter((r) => effectiveDisplayStatus(r) === "OVERDUE").length;
+  const lateAmount = receivables.filter((r) => effectiveDisplayStatus(r) === "LATE").reduce((s, r) => s + r.receivableAmount, 0);
+  const lateCount = receivables.filter((r) => effectiveDisplayStatus(r) === "LATE").length;
 
   function handleSubmit(data: Omit<Receivable, "id">) {
     if (modal?.mode === "add") addReceivable(data);
@@ -184,11 +214,12 @@ export default function ReceivablesPage() {
         )}
       </div>
 
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-5 gap-3">
         {[
           { label: "미수금 합계", value: fmtWon(pendingAmount), color: "text-red-600" },
           { label: "미수액", value: fmtWon(overdueAmount), color: "text-red-700" },
           { label: "미수 건수", value: `${overdueCount}건`, color: "text-red-600" },
+          { label: "연체 건수", value: `${lateCount}건 · ${fmtWon(lateAmount)}`, color: "text-red-700" },
           { label: "수금완료", value: `${receivables.filter((r) => r.status === "PAID").length}건`, color: "text-green-600" },
         ].map((s) => (
           <div key={s.label} className="bg-white rounded-xl border border-slate-200 px-4 py-3">
@@ -277,16 +308,14 @@ export default function ReceivablesPage() {
                     <td className="px-4 py-3 text-right text-sm text-green-700 whitespace-nowrap">{fmtWon(r.paidAmount)}</td>
                     <td className="px-4 py-3 text-right font-bold whitespace-nowrap">
                       {r.receivableAmount > 0
-                        ? <span className={r.status === "OVERDUE" || isOverdueByRule(r) ? "text-red-600" : "text-amber-600"}>{fmtWon(r.receivableAmount)}</span>
+                        ? <span className={effectiveDisplayStatus(r) === "OVERDUE" || effectiveDisplayStatus(r) === "LATE" ? "text-red-600" : "text-amber-600"}>{fmtWon(r.receivableAmount)}</span>
                         : <span className="text-slate-400">-</span>}
                     </td>
                     <td className="px-4 py-3 text-center text-xs whitespace-nowrap">
-                      <span className={r.status === "OVERDUE" || isOverdueByRule(r) ? "text-red-600 font-medium" : "text-slate-500"}>{fmtDate(r.dueDate)}</span>
+                      <span className={effectiveDisplayStatus(r) === "OVERDUE" || effectiveDisplayStatus(r) === "LATE" ? "text-red-600 font-medium" : "text-slate-500"}>{fmtDate(r.dueDate)}</span>
                     </td>
                     <td className="px-4 py-3 text-center">
-                      {isOverdueByRule(r)
-                        ? <StatusBadge label="연체" color="red" />
-                        : <StatusBadge label={STATUS_MAP[r.status].label} color={STATUS_MAP[r.status].color} />}
+                      <StatusBadge label={DISPLAY_STATUS_MAP[effectiveDisplayStatus(r)].label} color={DISPLAY_STATUS_MAP[effectiveDisplayStatus(r)].color} />
                     </td>
                     <td className="px-4 py-3 text-center">
                       {canEdit && (
