@@ -46,7 +46,7 @@ export const FIELD_LABELS: Record<string, string> = {
   gradeOverrides:      "연차별 등급",
   settlementTypeOverrides: "연차별 정산구분",
   recipientOverrides:  "연차별 공문 수신자",
-  projectDivision:     "과제구분(위탁/공동)",
+  projectDivision:     "기관구분(주관/공동/위탁)",
   assignedManager:     "과제담당자(부)",
   assignedManagerPrimary: "과제담당자(정)",
   registeredAt:        "등록일",

@@ -62,6 +62,13 @@ export function resolveResearchLeadForTerm(
   };
 }
 
+// ─── 기관구분 기본값 조회 ────────────────────────────────────────────
+// projectDivision을 명시적으로 지정하지 않은 과제는 전담기관 기준 기본값을 쓴다 — RDA2(fa-006)는
+// 참여기관 여러 곳이 공동으로 진행하는 구조가 기본이라 "공동", 그 외 전담기관은 "주관"이 기본이다.
+export function resolveProjectDivision(project: Pick<Project, "projectDivision" | "agencyId">): "주관" | "위탁" | "공동" {
+  return project.projectDivision ?? (project.agencyId === "fa-006" ? "공동" : "주관");
+}
+
 // ─── 연차별 과제코드 조회 ────────────────────────────────────────────
 // 연차마다 서로 다른 SH 코드를 쓴다(termCodes, autoGenerateTermFees가 연차가 새로 생길 때마다 발급).
 // termCodes 마이그레이션 이전에 등록된 과제는 1연차 코드가 projectCode에만 남아 있을 수 있어,

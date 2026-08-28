@@ -15,7 +15,7 @@ import {
   setTermOtherFirmHandled, setTermBillingType, setTermDates,
 } from "@/lib/store";
 import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type SystemUser, type EmailDispatch, type FeePolicy, type AnnualFinancials, EMPTY_NOTICE_TEMPLATE } from "@/lib/mock";
-import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, type CalcMember } from "@/lib/fee-calculator";
+import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, type CalcMember } from "@/lib/fee-calculator";
 import { fmtWonFull, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange } from "@/lib/utils";
 import { fmtValue, fieldLabel, describeOverrideChange } from "@/lib/audit-log-format";
 import StatusBadge from "@/components/common/StatusBadge";
@@ -791,12 +791,12 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">과제구분</label>
-                <select className={`${sel} w-full`} value={draft.projectDivision ?? ""}
-                  onChange={(e) => setDraft((p) => ({ ...p, projectDivision: (e.target.value || undefined) as Project["projectDivision"] }))}>
-                  <option value="">미지정</option>
-                  <option value="위탁">위탁</option>
+                <label className="block text-xs font-medium text-slate-500 mb-1">기관구분</label>
+                <select className={`${sel} w-full`} value={resolveProjectDivision(draft)}
+                  onChange={(e) => setDraft((p) => ({ ...p, projectDivision: e.target.value as Project["projectDivision"] }))}>
+                  <option value="주관">주관</option>
                   <option value="공동">공동</option>
+                  <option value="위탁">위탁</option>
                 </select>
               </div>
             </div>

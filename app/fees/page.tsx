@@ -45,7 +45,7 @@ import { buildNoticeEmailHtml } from "@/lib/notice-email-html";
 import { applyManagerContactRows } from "@/lib/notice-contacts";
 import { useCanWrite } from "@/lib/permissions";
 import { getCurrentUser } from "@/lib/auth";
-import { resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows } from "@/lib/fee-calculator";
+import { resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows } from "@/lib/fee-calculator";
 
 // 여러 이메일 문자열(각각 콤마 구분일 수 있음)을 하나로 합치고 중복을 제거한다 — 정산절차 안내
 // 공문은 책임자(researchLeadEmail)+실무자(recipientEmail) 두 필드를 합쳐서 기본 수신자로 쓴다.
@@ -884,7 +884,7 @@ type NewProjectDraft = {
   researchLead: string;
   assignedManager: string;
   assignedManagerPrimary: string;
-  projectDivision: "" | "위탁" | "공동";
+  projectDivision: "주관" | "위탁" | "공동";
   agreementType: "BATCH" | "STAGED";
   stages: Stage[] | undefined;
 };
@@ -907,7 +907,7 @@ const EMPTY_NEW_PROJECT: NewProjectDraft = {
   researchLead: "",
   assignedManager: "",
   assignedManagerPrimary: "",
-  projectDivision: "",
+  projectDivision: "주관",
   agreementType: "BATCH",
   stages: undefined,
 };
@@ -955,7 +955,7 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
       researchLead: form.researchLead || undefined,
       assignedManager: form.assignedManager || undefined,
       assignedManagerPrimary: form.assignedManagerPrimary || undefined,
-      projectDivision: form.projectDivision || undefined,
+      projectDivision: form.projectDivision,
       agreementType: form.agreementType,
       stages: form.agreementType === "STAGED" ? form.stages : undefined,
     });
@@ -980,7 +980,20 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">전담기관 *</label>
-          <select className={selectCls} value={form.agencyId} onChange={(e) => s("agencyId", e.target.value)}>
+          <select className={selectCls} value={form.agencyId} onChange={(e) => {
+            const nextAgencyId = e.target.value;
+            setForm((p) => {
+              // 기관구분을 아직 직접 고르지 않았으면(이전 전담기관 기준 기본값 그대로면) 새로 고른
+              // 전담기관의 기본값(RDA2는 공동, 그 외는 주관)으로 다시 맞춘다 — 사람이 이미 손대서
+              // 기본값과 달라져 있으면 그 선택은 그대로 둔다.
+              const wasDefault = p.projectDivision === resolveProjectDivision({ agencyId: p.agencyId, projectDivision: undefined });
+              return {
+                ...p,
+                agencyId: nextAgencyId,
+                projectDivision: wasDefault ? resolveProjectDivision({ agencyId: nextAgencyId, projectDivision: undefined }) : p.projectDivision,
+              };
+            });
+          }}>
             <option value="">선택하세요</option>
             {fundingAgencies.map((a) => <option key={a.id} value={a.id}>{a.shortName} · {a.name}</option>)}
           </select>
@@ -1046,11 +1059,11 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
           </select>
         </div>
         <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">과제구분</label>
+          <label className="block text-xs font-medium text-slate-600 mb-1">기관구분</label>
           <select className={selectCls} value={form.projectDivision} onChange={(e) => s("projectDivision", e.target.value as NewProjectDraft["projectDivision"])}>
-            <option value="">미지정</option>
-            <option value="위탁">위탁</option>
+            <option value="주관">주관</option>
             <option value="공동">공동</option>
+            <option value="위탁">위탁</option>
           </select>
         </div>
         <div>
@@ -1242,7 +1255,7 @@ function useFeeRows(): FeeRow[] {
           docReplyDate:        docOwner?.docReplyDate ?? "",
           recipientName:       recipient.recipientName,
           recipientEmail:      recipient.recipientEmail,
-          projectDivision:     project?.projectDivision ?? "",
+          projectDivision:     project ? resolveProjectDivision(project) : "",
           assignedManager:     project?.assignedManager ?? "",
           assignedManagerPrimary: project?.assignedManagerPrimary ?? "",
           registeredAt:        project?.registeredAt ?? "",
@@ -1315,7 +1328,7 @@ function useFeeRows(): FeeRow[] {
         docReplyDate: "",
         recipientName: leadMember ? resolveMemberRecipientForTerm(leadMember, project.currentTerm).recipientName : "",
         recipientEmail: leadMember ? resolveMemberRecipientForTerm(leadMember, project.currentTerm).recipientEmail : "",
-        projectDivision: project.projectDivision ?? "",
+        projectDivision: resolveProjectDivision(project),
         assignedManager: project.assignedManager ?? "",
         assignedManagerPrimary: project.assignedManagerPrimary ?? "",
         registeredAt: project.registeredAt ?? "",
@@ -2531,7 +2544,9 @@ export default function FeesPage() {
       case "projectDivision":
         return row.projectDivision ? (
           <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded whitespace-nowrap ${
-            row.projectDivision === "위탁" ? "bg-sky-100 text-sky-700" : "bg-teal-100 text-teal-700"
+            row.projectDivision === "위탁" ? "bg-sky-100 text-sky-700"
+              : row.projectDivision === "공동" ? "bg-teal-100 text-teal-700"
+              : "bg-violet-100 text-violet-700"
           }`}>
             {row.projectDivision}
           </span>

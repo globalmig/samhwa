@@ -556,7 +556,9 @@ export interface Project {
   // 코드가 전부 다르다 — 회사 전체 등록 순서 기준 하나의 일련번호 체계를 공유할 뿐, 같은 과제 안에서
   // 재사용되지 않는다.
   termCodes?: { termNumber: number; code: string }[];
-  projectDivision?: "위탁" | "공동"; // 과제 구분 (위탁/공동)
+  // 기관구분(화면엔 과제 상세에서 "기관구분", 과제목록에서 "구분"으로 표시) — 값이 없으면 전담기관
+  // 기준 기본값을 쓴다: RDA2(fa-006)는 "공동", 그 외는 "주관"(resolveProjectDivision, fee-calculator.ts).
+  projectDivision?: "주관" | "위탁" | "공동";
   billingType?: "정발행" | "역발행요청" | "역발행" | "대상아님" | "면제"; // 발행구분 (없으면 계산서 유무로 자동 판별)
   // 협약 구조
   agreementType?: "BATCH" | "STAGED"; // 일괄협약(0단계) | 단계협약
