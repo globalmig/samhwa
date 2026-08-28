@@ -593,6 +593,14 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   const viewAssignedManagerPrimary = isCurrentTermFinancials
     ? (draft.assignedManagerPrimary ?? "")
     : (viewAssignedManagerPrimaryRecord?.assignedManagerPrimary ?? "");
+  // 책임자(연구책임자)도 연차별로 바뀔 수 있어(researchLeadOverrides) — 지금 보고 있는 연차(viewTerm,
+  // 진행 연차 포함)에 개별 오버라이드가 있는지 항상 확인해둔다. 담당자(assignedManager)와 달리 진행
+  // 연차라고 해서 무조건 기본값(draft)과 같은 게 아니다 — 진행 연차 자체에 개별 오버라이드가 있을
+  // 수 있어서, 그 경우 기본값 입력칸만 보면 방금 연차별로 다르게 지정한 게 반영 안 된 것처럼 보인다.
+  // (오버라이드가 없을 때는 project.researchLead가 아직 저장 전 draft와 달라도 그건 그냥 "저장 전"
+  // 상태일 뿐이라 안내 문구를 띄우지 않는다 — 오버라이드 존재 여부로만 판단한다.)
+  const viewResearchLeadOverride = project.researchLeadOverrides?.find((o) => o.termNumber === viewTerm);
+  const viewResearchLead = { name: viewResearchLeadOverride?.name ?? draft.researchLead ?? "", email: viewResearchLeadOverride?.email ?? draft.researchLeadEmail ?? "" };
 
   const totalCashBudget = members.reduce((s, m) => s + getMemberBudgetVal(m, "cashBudget"), 0);
   const totalInKindBudget = members.reduce((s, m) => s + getMemberBudgetVal(m, "inKindBudget"), 0);
@@ -841,20 +849,32 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">연구책임자명</label>
+                <label className="block text-xs font-medium text-slate-500 mb-1">연구책임자명 (기본값)</label>
                 <input className={`${inp} w-full bg-white`} value={draft.researchLead ?? ""}
                   onChange={(e) => setDraft((p) => ({ ...p, researchLead: e.target.value }))} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">
                   책임자이메일 (기본값)
-                  <span className="ml-1 text-slate-400 font-normal">· 정산절차 안내 공문만 실무자와 함께 수신 · 연차별로 다르면 연차별 수수료 현황의 &quot;책임자&quot; 항목에서 개별 지정</span>
+                  <span className="ml-1 text-slate-400 font-normal">· 정산절차 안내 공문만 실무자와 함께 수신</span>
                 </label>
                 <input className={`${inp} w-full bg-white`} value={draft.researchLeadEmail ?? ""}
                   onChange={(e) => setDraft((p) => ({ ...p, researchLeadEmail: e.target.value }))}
                   placeholder="email@example.com (여러 명은 콤마로 구분)" />
               </div>
             </div>
+            {/* 이 필드들은 "오버라이드가 없는 모든 연차"의 기본값일 뿐이다 — 지금 보고 있는 연차
+                (viewTerm)에 연차별 수수료 현황에서 따로 지정해둔 값이 있으면 위 기본값을 고쳐도 그
+                연차엔 반영되지 않는다. 예전엔 이 사실이 화면 어디에도 안 보여서, 연차별 수수료
+                현황에서 책임자를 바꿔도 [과제정보]엔 옛 기본값이 그대로 보여 "수정이 안 됐다"고
+                오해하기 쉬웠다 — 그래서 지금 보는 연차에 실제로 적용되는 값을 항상 함께 보여준다. */}
+            {(viewResearchLead.name !== (draft.researchLead ?? "") || viewResearchLead.email !== (draft.researchLeadEmail ?? "")) && (
+              <p className="text-[11px] text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+                ※ {viewTerm}연차에는 위 기본값과 다른 책임자가 개별 지정되어 있습니다 —
+                실제 적용값: <strong>{viewResearchLead.name || "-"}</strong> · <strong>{viewResearchLead.email || "-"}</strong>
+                {" "}(연차별 수수료 현황의 &quot;책임자&quot; 항목에서 수정)
+              </p>
+            )}
           </div>
 
           {/* 사업비 구분 (총사업비 / 현금사업비 / 현물사업비) */}
