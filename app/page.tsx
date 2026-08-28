@@ -22,14 +22,18 @@ export default function DashboardPage() {
 
   // 연도별 대시보드 — 배정일(과제 등록일) 기준. 등록일 미입력 과제는 연도별 집계에서 제외한다.
   // 올해 연도는 등록된 과제가 아직 없어도 항상 선택지에 포함해 — 해가 바뀔 때마다 자동으로 새 연도가
-  // 드롭다운에 나타나고, 그 해 첫 과제가 등록되기 전에도 미리 선택할 수 있다.
+  // 드롭다운에 나타나고, 그 해 첫 과제가 등록되기 전에도 미리 선택할 수 있다. 관측된 연도만 모으면
+  // 특정 해에 등록된 과제가 하나도 없을 때 그 해가 통째로 빠져(예: 2024·2026년만 있고 2025년 없음)
+  // 목록에 구멍이 생기므로, 가장 오래된 연도부터 올해까지 빠짐없이 채운다.
   const availableYears = useMemo(() => {
-    const years = new Set<string>();
-    years.add(String(new Date().getFullYear()));
+    const currentYear = new Date().getFullYear();
+    let minYear = currentYear;
     for (const p of projects) {
-      if (p.registeredAt) years.add(p.registeredAt.slice(0, 4));
+      if (p.registeredAt) minYear = Math.min(minYear, Number(p.registeredAt.slice(0, 4)));
     }
-    return Array.from(years).sort((a, b) => b.localeCompare(a));
+    const years: string[] = [];
+    for (let y = currentYear; y >= minYear; y--) years.push(String(y));
+    return years;
   }, [projects]);
   const [selectedYear, setSelectedYear] = useState<"ALL" | string>("ALL");
 
