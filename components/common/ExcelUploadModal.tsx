@@ -26,9 +26,18 @@ import {
   recalcProjectTotalBudget,
   setTermOtherFirmHandled,
 } from "@/lib/store";
-import type { Project, ProjectMember, AnnualBudget, AnnualFinancials, Institution, SystemUser } from "@/lib/mock";
+import type { Project, ProjectMember, AnnualBudget, AnnualFinancials, Institution, SystemUser, FundingAgency } from "@/lib/mock";
 import { getCurrentUser } from "@/lib/auth";
-import { isSettlementTerm, resolveAutoDetectedAgencyId, backfillExistingTermOverrides } from "@/lib/fee-calculator";
+import {
+  isSettlementTerm,
+  resolveAutoDetectedAgencyId,
+  backfillExistingTermOverrides,
+  resolveMemberGradeForTerm,
+  resolveMemberSettlementTypeForTerm,
+  resolveMemberRecipientForTerm,
+  resolveResearchLeadForTerm,
+} from "@/lib/fee-calculator";
+import { resolveTermDateRange } from "@/lib/utils";
 import ManagerPickerModal from "@/components/common/ManagerPickerModal";
 
 type InstitutionGrade = NonNullable<ProjectMember["institutionGrade"]>;
@@ -91,6 +100,10 @@ interface ProjectUpdateInfo {
   // "동일 연차 재제출"/"과거 연차"로 판정돼 체크박스가 꺼져 있어도(연차·사업비는 미반영),
   // 단계 구조(stages) 변경은 안전한 추가 정보라 예외적으로 항상 반영된다 — 그 사실을 미리보기에서 알려준다.
   stageChanged: boolean;
+  // 연구책임자·과제담당자·배정일(과제 레벨) 또는 실무자 메일주소(참여기관 레벨)처럼 승인 체크박스와
+  // 무관하게 항상 반영되는 "안전한" 값이 실제로 바뀌는 경우 — stageChanged와 동일한 이유로 미리보기의
+  // "N건 등록" 집계·버튼 활성화에 포함시켜야, 체크박스를 꺼도 이 정정만으로 등록할 수 있다.
+  hasSafeFieldChange: boolean;
 }
 
 function defaultChoiceForStatus(status: ProjectUpdateStatus): boolean {
@@ -856,8 +869,11 @@ function resolveStageStructure(
 function computeProjectUpdates(
   projects: Project[],
   memberAggregates: MemberAggregate[],
+  projectMembers: readonly Pick<ProjectMember, "projectId" | "institutionId" | "contactEmail">[],
+  institutions: readonly Pick<Institution, "id" | "bizNumber">[],
   projectMaxTerm: Map<string, number>,
-  stageAggregates: Map<string, ProjectStageInfo>
+  stageAggregates: Map<string, ProjectStageInfo>,
+  scalarAggregates: Map<string, ProjectScalarInfo>
 ): ProjectUpdateInfo[] {
   const normNums = new Set(memberAggregates.map((m) => normProjectNum(m.projectNumber)));
   // 단계기관별 시트만 있고 연차별기관별 시트엔 해당 과제 행이 없는 업로드도 잡아내기 위해,
@@ -885,6 +901,34 @@ function computeProjectUpdates(
       JSON.stringify(nextStages ?? null) !== JSON.stringify(existing.stages ?? null) ||
       (nextAgreementType ?? existing.agreementType) !== existing.agreementType;
 
+    // 연구책임자·과제담당자·배정일(과제 레벨)/실무자 메일주소(참여기관 레벨)는 승인 체크박스와 무관하게
+    // 항상 반영되는 값이라(아래 등록 단계 로직 참고), 그 값이 실제로 바뀌는지 여기서 미리 감지해 둔다.
+    const scalarInfo = scalarAggregates.get(normNum);
+    const researchLead = scalarInfo?.researchLeads.size === 1 ? [...scalarInfo.researchLeads][0] : undefined;
+    const researchLeadEmail = scalarInfo?.researchLeadEmails.size === 1 ? [...scalarInfo.researchLeadEmails][0] : undefined;
+    const assignedManager = scalarInfo?.assignedManagersByTerm.get(excelTerm)
+      ?? (scalarInfo?.assignedManagers.size === 1 ? [...scalarInfo.assignedManagers][0] : undefined);
+    const assignedManagerPrimary = scalarInfo?.assignedManagersPrimaryByTerm.get(excelTerm)
+      ?? (scalarInfo?.assignedManagersPrimary.size === 1 ? [...scalarInfo.assignedManagersPrimary][0] : undefined);
+    const agencyAssignedAt = scalarInfo?.agencyAssignedAts.size === 1 ? [...scalarInfo.agencyAssignedAts][0] : undefined;
+    const internalAssignedAt = scalarInfo?.internalAssignedAts.size === 1 ? [...scalarInfo.internalAssignedAts][0] : undefined;
+    const hasProjectScalarChange =
+      (researchLead !== undefined && researchLead !== existing.researchLead) ||
+      (researchLeadEmail !== undefined && researchLeadEmail !== existing.researchLeadEmail) ||
+      (assignedManager !== undefined && assignedManager !== existing.assignedManager) ||
+      (assignedManagerPrimary !== undefined && assignedManagerPrimary !== existing.assignedManagerPrimary) ||
+      (agencyAssignedAt !== undefined && agencyAssignedAt !== existing.agencyAssignedAt) ||
+      (internalAssignedAt !== undefined && internalAssignedAt !== existing.internalAssignedAt);
+
+    const hasMemberContactChange = memberAggregates.some((agg) => {
+      if (!agg.contactEmail || normProjectNum(agg.projectNumber) !== normNum) return false;
+      const institutionId = institutions.find((i) => normBiz(i.bizNumber) === normBiz(agg.bizNumber))?.id;
+      const existingMember = institutionId
+        ? projectMembers.find((m) => m.projectId === existing.id && m.institutionId === institutionId)
+        : undefined;
+      return agg.contactEmail !== (existingMember?.contactEmail ?? "");
+    });
+
     updates.push({
       normNum,
       projectId: existing.id,
@@ -894,6 +938,7 @@ function computeProjectUpdates(
       excelTerm,
       status,
       stageChanged,
+      hasSafeFieldChange: hasProjectScalarChange || hasMemberContactChange,
     });
   }
   return updates;
@@ -1350,8 +1395,11 @@ function PreviewStep({
     return Array.from(seen.values());
   }, [dupRows]);
   const totalNew = newAgency + newProject + newInst + newMemberCount;
+  // 체크박스가 꺼져 있어도(승인 안 됨) 단계 구조 변경이나 연락처·담당자 등 "안전한" 값 변경은
+  // 등록 단계에서 그대로 반영되므로(위 stageChanged/hasSafeFieldChange 주석 참고), 그런 과제도
+  // "반영될 갱신"으로 집계해야 "N건 등록" 버튼이 실제로 반영할 것이 있을 때 정확히 활성화된다.
   const approvedUpdateCount = projectUpdates.filter(
-    (u) => updateChoices[u.normNum] ?? defaultChoiceForStatus(u.status)
+    (u) => (updateChoices[u.normNum] ?? defaultChoiceForStatus(u.status)) || u.stageChanged || u.hasSafeFieldChange
   ).length;
   const unresolvedManagerAmbiguities = managerAmbiguities.filter((a) => !managerNameResolutions[a.name]);
   const unresolvedManagerNotFound = managerNotFound.filter((name) => !managerNameResolutions[name]);
@@ -1821,46 +1869,295 @@ function DoneStep({ result, onClose }: { result: DoneResult; onClose: () => void
 // 업로드(읽기) 쪽은 계속 xlsx를 쓰고, 여기 "쓰기" 전용으로만 exceljs를 쓴다.
 // ============================================================
 
+// "연차별기관별_연구비 집행" 시트의 안내문구·헤더 — 빈 양식 다운로드와 "현재 데이터로 채운 양식"
+// 다운로드(downloadCurrentDataAsUploadTemplate) 양쪽에서 그대로 공유한다. 둘이 각자 따로 관리하면
+// 필드가 하나 추가/변경될 때 한쪽만 고치고 잊어버려서 두 파일의 컬럼이 어긋나는 사고가 나기 쉽다.
+const ANNUAL_SHEET_NOTES = [
+  "※필수", "※필수", "※필수",
+  "선택", "선택", "선택 (\"자율성트랙\"만 인식)",
+  "※필수 (YYYY-MM-DD)", "※필수 (YYYY-MM-DD)",
+  "선택", "※필수 (이 행의 사업비가 몇 연차 것인지 — 비면 1연차로 잘못 등록됨)", "선택",
+  "※필수", "※필수 (000-00-00000)",
+  "선택 (주관/공동/위탁)", "선택 (최우수/우수(A)/우수(B)/우수(C)/일반, 미입력시 등급 없음)", "선택 (위탁정산/자체정산)",
+  "선택 (삼화가 아니면 이 연차를 타회계법인 진행으로 자동 표시)",
+  "선택 (연차상시/정산, 미입력시 협약구조로 자동판정 — \"정산형태\"와는 다른 값)",
+  "선택 (주관기관 행에만, 없으면 단계기관별 시트의 값을 사용)",
+  "선택 (주관기관 행에만 — 여러 명이면 콤마(,)로 구분, 정산절차 안내 공문에 실무자와 함께 수신)",
+  "선택 (이 행 기관의 담당자 — 여러 명이면 콤마(,)로 구분, 정산절차 안내 공문 외 모든 공문 수신)",
+  "선택 (YYYY-MM-DD)", "선택 (YYYY-MM-DD)",
+  "선택 (YYYY-MM-DD, 이 연차의 실제 시작일 — 있으면 자동계산 대신 사용)",
+  "선택 (YYYY-MM-DD, 이 연차의 실제 종료일 — 있으면 자동계산 대신 사용)",
+  "선택 (YYYY-MM-DD, 단계기관별 시트가 없을 때의 보조 수단)", "선택 (YYYY-MM-DD, 단계기관별 시트가 없을 때의 보조 수단)",
+  "※필수 (이 연차 현금사업비 — 참여기관별·연차별 사업비. 비면 이 연차엔 참여 안 함으로 처리됨)",
+  "선택 (이 연차 현물사업비 — 있으면 아래 \"현물사업비총액\"보다 우선)",
+  "선택 (이 연차 정부출연금 — 과제의 당해 정부출연금 합산에 사용)",
+  "선택 (이 연차 민간현금 — 과제의 당해 민간현금 합산에 사용)",
+  "선택 (이 연차 민간현물 — 과제의 당해 민간현물 합산에 사용)",
+  "선택 (원 단위, 위 \"연차_기관_총사업비(현금)\"이 없을 때만 쓰는 대체값)", "선택 (원 단위, 위 \"연차_기관_총사업비(현물)\" 없을 때만 사용)",
+];
+const ANNUAL_SHEET_HEADERS = [
+  "전문기관명", "과제번호", "과제명",
+  "과제담당자(정)", "과제담당자(부)", "자율성트랙",
+  "총개발시작일자", "총개발종료일자",
+  "단계", "연차", "지원연도",
+  "연구개발기관명", "기관사업자등록번호",
+  "기관역할구분", "등급", "정산형태", "회계법인",
+  "과제구분", "연구책임자",
+  "책임자 메일주소", "실무자 메일주소",
+  "전문기관배정일", "내부배정일",
+  "연차시작일자", "연차종료일자",
+  "단계시작일자", "단계종료일자",
+  "연차_기관_총사업비(현금)", "연차_기관_총사업비(현물)",
+  "연차_기관_정부출연금", "연차_기관_민간부담금(현금)", "연차_기관_민간부담금(현물)",
+  "현금사업비총액", "현물사업비총액",
+];
+
+// 위 헤더 컬럼 순서에 맞춰 워크시트에 스타일(색상·드롭다운)까지 적용한다 — 빈 양식/데이터 채운 양식
+// 양쪽에서 동일하게 쓴다.
+function styleAnnualSheet(ws: ExcelJS.Worksheet) {
+  ANNUAL_SHEET_HEADERS.forEach((_, i) => { ws.getColumn(i + 1).width = 22; });
+  styleTemplateHeader(ws, ANNUAL_SHEET_NOTES, 2);
+  styleTemplateDataRows(ws, 3, 2 + TEMPLATE_BLANK_ROWS, ANNUAL_SHEET_HEADERS.length);
+  applyDropdown(ws, ANNUAL_SHEET_HEADERS.indexOf("자율성트랙") + 1, ["", "자율성트랙"], 3, 2 + TEMPLATE_BLANK_ROWS);
+  applyDropdown(ws, ANNUAL_SHEET_HEADERS.indexOf("기관역할구분") + 1, ["주관", "공동", "위탁"], 3, 2 + TEMPLATE_BLANK_ROWS);
+  applyDropdown(ws, ANNUAL_SHEET_HEADERS.indexOf("등급") + 1, ["최우수", "우수(A)", "우수(B)", "우수(C)", "일반", ""], 3, 2 + TEMPLATE_BLANK_ROWS);
+  applyDropdown(ws, ANNUAL_SHEET_HEADERS.indexOf("정산형태") + 1, ["위탁정산", "자체정산"], 3, 2 + TEMPLATE_BLANK_ROWS);
+  applyDropdown(ws, ANNUAL_SHEET_HEADERS.indexOf("과제구분") + 1, ["", "연차상시", "정산"], 3, 2 + TEMPLATE_BLANK_ROWS);
+}
+
+const STAGE_SHEET_NOTES = [
+  "※필수", "선택", "※필수", "※필수",
+  "※필수 (YYYY-MM-DD)", "※필수 (YYYY-MM-DD)",
+  "선택 (0=일괄협약, 1 이상=단계협약)", "선택 (연차 숫자)", "선택 (시작단계와 동일해야 함)", "선택 (연차 숫자)",
+  "선택 (YYYY-MM-DD, 이 단계의 실제 시작일)", "선택 (YYYY-MM-DD, 이 단계의 실제 종료일)",
+  "선택",
+  "※필수", "※필수 (000-00-00000)", "선택 (주관/공동/위탁)", "선택 (최우수/우수(A)/우수(B)/우수(C)/일반)", "선택 (주관기관 행에만)",
+  "※필수 (원 단위)", "선택 (원 단위)",
+];
+const STAGE_SHEET_HEADERS = [
+  "전문기관명", "RCMS사업명", "과제번호", "과제명",
+  "총개발시작일자", "총개발종료일자",
+  "정산대상시작단계", "정산대상시작연차", "정산대상종료단계", "정산대상종료연차",
+  "단계시작일자", "단계종료일자",
+  "정산형태구분",
+  "연구기관명", "기관사업자등록번호", "기관역할구분", "기관등급", "연구책임자",
+  "기관_총사업비(현금)", "기관_총사업비(현물)",
+];
+
+// 위 헤더 컬럼 순서에 맞춰 워크시트에 스타일(색상·드롭다운)까지 적용한다 — 빈 양식/데이터 채운 양식
+// 양쪽에서 동일하게 쓴다.
+function styleStageSheet(ws: ExcelJS.Worksheet) {
+  STAGE_SHEET_HEADERS.forEach((_, i) => { ws.getColumn(i + 1).width = 22; });
+  styleTemplateHeader(ws, STAGE_SHEET_NOTES, 2);
+  styleTemplateDataRows(ws, 3, 2 + TEMPLATE_BLANK_ROWS, STAGE_SHEET_HEADERS.length);
+  applyDropdown(ws, STAGE_SHEET_HEADERS.indexOf("정산형태구분") + 1, ["위탁정산", "자체정산"], 3, 2 + TEMPLATE_BLANK_ROWS);
+  applyDropdown(ws, STAGE_SHEET_HEADERS.indexOf("기관역할구분") + 1, ["주관", "공동", "위탁"], 3, 2 + TEMPLATE_BLANK_ROWS);
+  applyDropdown(ws, STAGE_SHEET_HEADERS.indexOf("기관등급") + 1, ["최우수", "우수(A)", "우수(B)", "우수(C)", "일반"], 3, 2 + TEMPLATE_BLANK_ROWS);
+}
+
+// 참여기관 소속 여부와 무관하게, 이 과제의 절대 연차(termNumber)가 속한 단계 번호를 구한다 —
+// 일괄협약(BATCH)이면 항상 "0"(연차별기관별 시트에서 단계 없음을 나타내는 관례).
+function resolveStageNumberForTerm(project: Pick<Project, "agreementType" | "stages">, termNumber: number): string {
+  const isBatch = !project.agreementType || project.agreementType === "BATCH";
+  if (isBatch) return "0";
+  const stage = project.stages?.find((s) => termNumber >= s.startTermNumber && termNumber <= s.endTermNumber);
+  return stage ? String(stage.stageNumber) : "";
+}
+
+// ROLE_LABEL: ProjectMember.role → "기관역할구분" 컬럼 값(업로드 파서 buildMemberAggregates가 이미
+// "주관"/"위탁"만 문자열 포함으로 구분하고 나머지는 전부 "공동"(PARTICIPANT)으로 취급하므로 그대로 맞춘다.
+const ROLE_LABEL: Record<ProjectMember["role"], string> = { LEAD: "주관", ENTRUSTED: "위탁", PARTICIPANT: "공동" };
+
+// 현재 등록된 과제·참여기관·연차별 사업비 데이터를 "연차별기관별_연구비 집행" 업로드 양식과 똑같은
+// 컬럼 구조로 채워 넣는다 — 빈 양식(downloadExcelTemplate)과 헤더가 완전히 동일해서 그대로 다시
+// 업로드할 수 있다. "엑셀 다운로드"(수수료청구관리 리포트, 과제 단위 요약)와는 목적이 다르다 — 리포트는
+// 계산서·수금 현황을 보여주는 결과물이고, 이건 참여기관×연차 단위로 사업비·등급·정산형태 등 RCMS가
+// 실제로 입력받는 원본 데이터를 그대로 다시 꺼낸 것이라 재업로드에 필요한 필수값이 전부 채워져 있다.
+function buildAnnualSheetRowsFromData(
+  projects: Project[],
+  projectMembers: ProjectMember[],
+  institutions: Institution[],
+  fundingAgencies: FundingAgency[],
+): string[][] {
+  const rows: string[][] = [];
+  for (const project of projects) {
+    const members = projectMembers.filter((m) => m.projectId === project.id);
+    if (members.length === 0) continue;
+    const agencyName = fundingAgencies.find((a) => a.id === project.agencyId)?.name ?? project.agency ?? "";
+    // 이 과제에서 실제로 사업비가 입력된 연차 전체(참여기관 아무나 하나라도 그 연차 데이터가 있으면 포함).
+    const termNumbers = Array.from(new Set(members.flatMap((m) => (m.annualBudgets ?? []).map((b) => b.termNumber)))).sort((a, b) => a - b);
+    for (const termNumber of termNumbers) {
+      // 그 연차 안에서는 항상 주관기관 행을 먼저 — 과제담당자·연구책임자·전문기관배정일처럼 "주관기관
+      // 행에만 채우는" 컬럼들을 빈 양식 예시와 동일한 방식으로 보여주기 위함(가독성 목적, 파서는
+      // 행 순서를 가리지 않는다).
+      const sortedMembers = [...members].sort((a, b) => (a.role === "LEAD" ? -1 : b.role === "LEAD" ? 1 : 0));
+      for (const member of sortedMembers) {
+        const ab = member.annualBudgets?.find((b) => b.termNumber === termNumber);
+        if (!ab) continue;
+        const isLead = member.role === "LEAD";
+        const institution = institutions.find((i) => i.id === member.institutionId);
+        const grade = resolveMemberGradeForTerm(member, termNumber);
+        const settlementType = resolveMemberSettlementTypeForTerm(member, termNumber, project.autonomySettlementType ?? "자체정산");
+        const recipient = resolveMemberRecipientForTerm(member, termNumber);
+        const lead = isLead ? resolveResearchLeadForTerm(project, termNumber) : { name: "", email: "" };
+        const termRange = resolveTermDateRange(project, termNumber);
+        const stageForTerm = project.stages?.find((s) => termNumber >= s.startTermNumber && termNumber <= s.endTermNumber);
+        const annualFinancialsForTerm = project.annualFinancials?.find((f) => f.termNumber === termNumber);
+        // annualFinancials 이력 배열은 RCMS 업로드를 거쳐야 채워진다 — currentTerm은 이력이 없어도
+        // Project.govGrant 등 "당해" 스칼라 필드에 항상 값이 있으므로 그걸 대체값으로 쓴다.
+        const isCurrentTerm = termNumber === project.currentTerm;
+        const govGrantValue = annualFinancialsForTerm?.govGrant ?? (isCurrentTerm ? project.govGrant : undefined);
+        const privateCashValue = annualFinancialsForTerm?.privateCash ?? (isCurrentTerm ? project.privateCash : undefined);
+        const privateInKindValue = annualFinancialsForTerm?.privateInKind ?? (isCurrentTerm ? project.privateInKind : undefined);
+        rows.push([
+          agencyName,
+          project.projectNumber,
+          project.projectName,
+          project.assignedManagerPrimary ?? "",
+          project.assignedManager ?? "",
+          project.projectType === "AUTONOMY_TRACK" ? "자율성트랙" : "",
+          project.firstStartDate ?? project.startDate ?? "",
+          project.finalEndDate ?? project.endDate ?? "",
+          resolveStageNumberForTerm(project, termNumber),
+          String(termNumber),
+          String(ab.termYear ?? ""),
+          member.institutionName,
+          institution?.bizNumber ?? "",
+          ROLE_LABEL[member.role],
+          grade === "일반" ? "" : grade,
+          settlementType,
+          ab.auditFirm ?? "",
+          isSettlementTerm(project, termNumber) ? "정산" : "연차상시",
+          lead.name,
+          lead.email,
+          recipient.recipientEmail,
+          isLead ? (project.agencyAssignedAt ?? "") : "",
+          isLead ? (project.internalAssignedAt ?? "") : "",
+          ab.termStartDate ?? termRange.start ?? "",
+          ab.termEndDate ?? termRange.end ?? "",
+          stageForTerm?.stageStartDate ?? "",
+          stageForTerm?.stageEndDate ?? "",
+          String(ab.cashBudget ?? 0),
+          String(ab.inKindBudget ?? 0),
+          isLead ? String(govGrantValue ?? "") : "",
+          isLead ? String(privateCashValue ?? "") : "",
+          isLead ? String(privateInKindValue ?? "") : "",
+          "",
+          "",
+        ]);
+      }
+    }
+  }
+  return rows;
+}
+
+// 한 단계(또는 일괄협약이면 전체 기간을 나타내는 "0단계") 안의 참여기관들을 "단계기관별" 시트
+// 한 행씩으로 채운다. repTerm은 정산형태·등급·연구책임자처럼 연차별로 달라질 수 있는 값을 조회할
+// 때 쓸 대표 연차(그 단계의 시작 연차) — 이 시트는 연차별 이력을 담지 않는 스냅샷이라 대표값 하나만 싣는다.
+function buildStageSheetRows(
+  project: Project,
+  sortedMembers: ProjectMember[],
+  institutions: Institution[],
+  agencyName: string,
+  stageNumber: number,
+  relStartTerm: number,
+  relEndTerm: number,
+  stageStartDate: string,
+  stageEndDate: string,
+  repTerm: number,
+): string[][] {
+  return sortedMembers.map((member) => {
+    const isLead = member.role === "LEAD";
+    const institution = institutions.find((i) => i.id === member.institutionId);
+    const grade = resolveMemberGradeForTerm(member, repTerm);
+    const settlementType = resolveMemberSettlementTypeForTerm(member, repTerm, project.autonomySettlementType ?? "자체정산");
+    const lead = isLead ? resolveResearchLeadForTerm(project, repTerm) : { name: "", email: "" };
+    const totalCash = (member.annualBudgets ?? []).reduce((sum, b) => sum + (b.cashBudget ?? 0), 0);
+    const totalInKind = (member.annualBudgets ?? []).reduce((sum, b) => sum + (b.inKindBudget ?? 0), 0);
+    return [
+      agencyName, "", project.projectNumber, project.projectName,
+      project.firstStartDate ?? project.startDate ?? "", project.finalEndDate ?? project.endDate ?? "",
+      String(stageNumber), String(relStartTerm), String(stageNumber), String(relEndTerm),
+      stageStartDate, stageEndDate,
+      settlementType,
+      member.institutionName, institution?.bizNumber ?? "", ROLE_LABEL[member.role],
+      grade === "일반" ? "" : grade,
+      lead.name,
+      String(totalCash), String(totalInKind),
+    ];
+  });
+}
+
+// 현재 등록된 과제·참여기관 데이터를 "단계기관별" 업로드 양식과 동일한 컬럼 구조로 채운다.
+// 정산대상시작/종료연차는 그 단계 안에서 1부터 다시 세는 상대값으로 적어야 재업로드 시
+// resolveStageStructure가 같은 절대연차 범위로 복원한다(컬럼 정의 참고: computeStageOffsets).
+// 단계협약(Project.stages)이 없는 과제(일괄협약)는 "0단계" 행 하나로 전체 연차(1~totalTerms)를 나타낸다.
+function buildStageSheetRowsFromData(
+  projects: Project[],
+  projectMembers: ProjectMember[],
+  institutions: Institution[],
+  fundingAgencies: FundingAgency[],
+): string[][] {
+  const rows: string[][] = [];
+  for (const project of projects) {
+    const members = projectMembers.filter((m) => m.projectId === project.id);
+    if (members.length === 0) continue;
+    const agencyName = fundingAgencies.find((a) => a.id === project.agencyId)?.name ?? project.agency ?? "";
+    const sortedMembers = [...members].sort((a, b) => (a.role === "LEAD" ? -1 : b.role === "LEAD" ? 1 : 0));
+
+    if (project.stages && project.stages.length > 0) {
+      const sortedStages = [...project.stages].sort((a, b) => a.stageNumber - b.stageNumber);
+      let offset = 0;
+      for (const stage of sortedStages) {
+        const relStart = stage.startTermNumber - offset;
+        const relEnd = stage.endTermNumber - offset;
+        offset += stage.endTermNumber - stage.startTermNumber + 1;
+        rows.push(...buildStageSheetRows(
+          project, sortedMembers, institutions, agencyName,
+          stage.stageNumber, relStart, relEnd, stage.stageStartDate ?? "", stage.stageEndDate ?? "", stage.startTermNumber,
+        ));
+      }
+    } else {
+      rows.push(...buildStageSheetRows(
+        project, sortedMembers, institutions, agencyName,
+        0, 1, project.totalTerms, "", "", 1,
+      ));
+    }
+  }
+  return rows;
+}
+
+// [수수료 청구 관리] "엑셀 다운로드" 버튼이 쓰는 함수 — 현재 등록된 참여기관×연차(+단계) 데이터를
+// RCMS 업로드 양식 그대로의 컬럼으로 채워서 내려받는다. 이 파일은 수정 후 그대로(또는 일부만 고쳐서)
+// 다시 "RCMS 엑셀 업로드"에 올릴 수 있다.
+export async function downloadCurrentDataAsUploadTemplate(
+  projects: Project[],
+  projectMembers: ProjectMember[],
+  institutions: Institution[],
+  fundingAgencies: FundingAgency[],
+) {
+  const rows = buildAnnualSheetRowsFromData(projects, projectMembers, institutions, fundingAgencies);
+  const stageRows = buildStageSheetRowsFromData(projects, projectMembers, institutions, fundingAgencies);
+  const wb = new ExcelJS.Workbook();
+
+  const ws = wb.addWorksheet("연차별기관별_연구비 집행", { views: [{ state: "frozen", ySplit: 2 }] });
+  ws.addRow(ANNUAL_SHEET_NOTES);
+  ws.addRow(ANNUAL_SHEET_HEADERS);
+  rows.forEach((r) => ws.addRow(r));
+  styleAnnualSheet(ws);
+
+  const stageWs = wb.addWorksheet("단계기관별", { views: [{ state: "frozen", ySplit: 2 }] });
+  stageWs.addRow(STAGE_SHEET_NOTES);
+  stageWs.addRow(STAGE_SHEET_HEADERS);
+  stageRows.forEach((r) => stageWs.addRow(r));
+  styleStageSheet(stageWs);
+
+  await downloadWorkbook(wb, `RCMS_업로드_양식_현재데이터_${new Date().toISOString().slice(0, 10)}.xlsx`);
+}
+
 export async function downloadExcelTemplate() {
-  const notes = [
-    "※필수", "※필수", "※필수",
-    "선택", "선택", "선택 (\"자율성트랙\"만 인식)",
-    "※필수 (YYYY-MM-DD)", "※필수 (YYYY-MM-DD)",
-    "선택", "※필수 (이 행의 사업비가 몇 연차 것인지 — 비면 1연차로 잘못 등록됨)", "선택",
-    "※필수", "※필수 (000-00-00000)",
-    "선택 (주관/공동/위탁)", "선택 (최우수/우수(A)/우수(B)/우수(C)/일반, 미입력시 등급 없음)", "선택 (위탁정산/자체정산)",
-    "선택 (삼화가 아니면 이 연차를 타회계법인 진행으로 자동 표시)",
-    "선택 (연차상시/정산, 미입력시 협약구조로 자동판정 — \"정산형태\"와는 다른 값)",
-    "선택 (주관기관 행에만, 없으면 단계기관별 시트의 값을 사용)",
-    "선택 (주관기관 행에만 — 여러 명이면 콤마(,)로 구분, 정산절차 안내 공문에 실무자와 함께 수신)",
-    "선택 (이 행 기관의 담당자 — 여러 명이면 콤마(,)로 구분, 정산절차 안내 공문 외 모든 공문 수신)",
-    "선택 (YYYY-MM-DD)", "선택 (YYYY-MM-DD)",
-    "선택 (YYYY-MM-DD, 이 연차의 실제 시작일 — 있으면 자동계산 대신 사용)",
-    "선택 (YYYY-MM-DD, 이 연차의 실제 종료일 — 있으면 자동계산 대신 사용)",
-    "선택 (YYYY-MM-DD, 단계기관별 시트가 없을 때의 보조 수단)", "선택 (YYYY-MM-DD, 단계기관별 시트가 없을 때의 보조 수단)",
-    "※필수 (이 연차 현금사업비 — 참여기관별·연차별 사업비. 비면 이 연차엔 참여 안 함으로 처리됨)",
-    "선택 (이 연차 현물사업비 — 있으면 아래 \"현물사업비총액\"보다 우선)",
-    "선택 (이 연차 정부출연금 — 과제의 당해 정부출연금 합산에 사용)",
-    "선택 (이 연차 민간현금 — 과제의 당해 민간현금 합산에 사용)",
-    "선택 (이 연차 민간현물 — 과제의 당해 민간현물 합산에 사용)",
-    "선택 (원 단위, 위 \"연차_기관_총사업비(현금)\"이 없을 때만 쓰는 대체값)", "선택 (원 단위, 위 \"연차_기관_총사업비(현물)\" 없을 때만 사용)",
-  ];
-  const headers = [
-    "전문기관명", "과제번호", "과제명",
-    "과제담당자(정)", "과제담당자(부)", "자율성트랙",
-    "총개발시작일자", "총개발종료일자",
-    "단계", "연차", "지원연도",
-    "연구개발기관명", "기관사업자등록번호",
-    "기관역할구분", "등급", "정산형태", "회계법인",
-    "과제구분", "연구책임자",
-    "책임자 메일주소", "실무자 메일주소",
-    "전문기관배정일", "내부배정일",
-    "연차시작일자", "연차종료일자",
-    "단계시작일자", "단계종료일자",
-    "연차_기관_총사업비(현금)", "연차_기관_총사업비(현물)",
-    "연차_기관_정부출연금", "연차_기관_민간부담금(현금)", "연차_기관_민간부담금(현물)",
-    "현금사업비총액", "현물사업비총액",
-  ];
+  const notes = ANNUAL_SHEET_NOTES;
+  const headers = ANNUAL_SHEET_HEADERS;
   const rows = [
     [
       "한국산업기술기획평가원", "RS-2024-00000001", "스마트 제조 AI 시스템 개발",
@@ -1915,33 +2212,8 @@ export async function downloadExcelTemplate() {
   ws.addRow(notes);
   ws.addRow(headers);
   rows.forEach((r) => ws.addRow(r));
-  headers.forEach((_, i) => { ws.getColumn(i + 1).width = 22; });
-  styleTemplateHeader(ws, notes, 2);
-  styleTemplateDataRows(ws, 3, 2 + TEMPLATE_BLANK_ROWS, headers.length);
-  applyDropdown(ws, headers.indexOf("자율성트랙") + 1, ["", "자율성트랙"], 3, 2 + TEMPLATE_BLANK_ROWS);
-  applyDropdown(ws, headers.indexOf("기관역할구분") + 1, ["주관", "공동", "위탁"], 3, 2 + TEMPLATE_BLANK_ROWS);
-  applyDropdown(ws, headers.indexOf("등급") + 1, ["최우수", "우수(A)", "우수(B)", "우수(C)", "일반", ""], 3, 2 + TEMPLATE_BLANK_ROWS);
-  applyDropdown(ws, headers.indexOf("정산형태") + 1, ["위탁정산", "자체정산"], 3, 2 + TEMPLATE_BLANK_ROWS);
-  applyDropdown(ws, headers.indexOf("과제구분") + 1, ["", "연차상시", "정산"], 3, 2 + TEMPLATE_BLANK_ROWS);
+  styleAnnualSheet(ws);
 
-  const stageNotes = [
-    "※필수", "선택", "※필수", "※필수",
-    "※필수 (YYYY-MM-DD)", "※필수 (YYYY-MM-DD)",
-    "선택 (0=일괄협약, 1 이상=단계협약)", "선택 (연차 숫자)", "선택 (시작단계와 동일해야 함)", "선택 (연차 숫자)",
-    "선택 (YYYY-MM-DD, 이 단계의 실제 시작일)", "선택 (YYYY-MM-DD, 이 단계의 실제 종료일)",
-    "선택",
-    "※필수", "※필수 (000-00-00000)", "선택 (주관/공동/위탁)", "선택 (최우수/우수(A)/우수(B)/우수(C)/일반)", "선택 (주관기관 행에만)",
-    "※필수 (원 단위)", "선택 (원 단위)",
-  ];
-  const stageHeaders = [
-    "전문기관명", "RCMS사업명", "과제번호", "과제명",
-    "총개발시작일자", "총개발종료일자",
-    "정산대상시작단계", "정산대상시작연차", "정산대상종료단계", "정산대상종료연차",
-    "단계시작일자", "단계종료일자",
-    "정산형태구분",
-    "연구기관명", "기관사업자등록번호", "기관역할구분", "기관등급", "연구책임자",
-    "기관_총사업비(현금)", "기관_총사업비(현물)",
-  ];
   const stageRows = [
     [
       "한국산업기술기획평가원", "스마트제조혁신사업", "RS-2024-00000001", "스마트 제조 AI 시스템 개발",
@@ -1961,15 +2233,10 @@ export async function downloadExcelTemplate() {
   ];
 
   const stageWs = wb.addWorksheet("단계기관별", { views: [{ state: "frozen", ySplit: 2 }] });
-  stageWs.addRow(stageNotes);
-  stageWs.addRow(stageHeaders);
+  stageWs.addRow(STAGE_SHEET_NOTES);
+  stageWs.addRow(STAGE_SHEET_HEADERS);
   stageRows.forEach((r) => stageWs.addRow(r));
-  stageHeaders.forEach((_, i) => { stageWs.getColumn(i + 1).width = 22; });
-  styleTemplateHeader(stageWs, stageNotes, 2);
-  styleTemplateDataRows(stageWs, 3, 2 + TEMPLATE_BLANK_ROWS, stageHeaders.length);
-  applyDropdown(stageWs, stageHeaders.indexOf("정산형태구분") + 1, ["위탁정산", "자체정산"], 3, 2 + TEMPLATE_BLANK_ROWS);
-  applyDropdown(stageWs, stageHeaders.indexOf("기관역할구분") + 1, ["주관", "공동", "위탁"], 3, 2 + TEMPLATE_BLANK_ROWS);
-  applyDropdown(stageWs, stageHeaders.indexOf("기관등급") + 1, ["최우수", "우수(A)", "우수(B)", "우수(C)", "일반"], 3, 2 + TEMPLATE_BLANK_ROWS);
+  styleStageSheet(stageWs);
 
   await downloadWorkbook(wb, "RCMS_업로드_양식.xlsx");
 }
@@ -2061,8 +2328,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
 
   // 이미 등록된 과제 중 이번 엑셀이 다음/동일/과거 연차 중 무엇에 해당하는지 판단
   const projectUpdates = useMemo(
-    () => computeProjectUpdates(projects, memberAggregates, projectMaxTerm, stageAggregates),
-    [projects, memberAggregates, projectMaxTerm, stageAggregates]
+    () => computeProjectUpdates(projects, memberAggregates, projectMembers, institutions, projectMaxTerm, stageAggregates, scalarAggregates),
+    [projects, memberAggregates, projectMembers, institutions, projectMaxTerm, stageAggregates, scalarAggregates]
   );
 
   // 엑셀 연차값과 총개발시작일자 기준 캘린더 계산값이 다른 과제 — 등록 자체는 막지 않고 미리보기에서
@@ -2518,10 +2785,15 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             // researchLeadEmail 폴백이 "값 없음"으로 착각해 방금 바뀐 새 기본값으로 새어 들어가 버린다.
             // "이전 연차"가 아니라 "이미 TermFee가 있는 연차"를 기준으로 고정한다 — 다년치 사업비를
             // 미리 입력해둬서 진행 연차보다 나중 연차가 이미 만들어져 있는 경우도 소급되면 안 된다.
+            // termFees는 이 컴포넌트 마운트 시점 스냅샷이라 이번 업로드가 처음 만드는 연차는 아직 없다 —
+            // 이번 파일이 실제로 값을 담은 연차(참여기관들의 budgetsByTerm)도 함께 합쳐야 빠지지 않는다.
             researchLeadOverrides: leadChanged
               ? backfillExistingTermOverrides(
                   renamedFrom.researchLeadOverrides,
-                  termFees.filter((f) => f.projectNumber === renamedFrom.projectNumber).map((f) => f.termNumber),
+                  new Set([
+                    ...termFees.filter((f) => f.projectNumber === renamedFrom.projectNumber).map((f) => f.termNumber),
+                    ...memberAggregates.filter((a) => normProjectNum(a.projectNumber) === normNum).flatMap((a) => [...a.budgetsByTerm.keys()]),
+                  ]),
                   currentTerm,
                   (termNumber) => ({
                     termNumber,
@@ -2612,11 +2884,13 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       const institutionId = registeredInst.get(normBiz(agg.bizNumber));
       if (!projectId || !institutionId) continue;
 
-      // 이 실행 이전부터 있던(=신규로 만든 게 아닌) 과제인지 — 승인 안 됐으면 통째로 건너뛴다
+      // 이 실행 이전부터 있던(=신규로 만든 게 아닌) 과제인지 — 연차·사업비(annualBudgets/역할/정산형태
+      // ·등급) 반영은 이 승인 여부를 따르지만, 실무자 메일주소처럼 연차 진행과 무관한 정정 값은
+      // 아래에서 승인 여부와 무관하게 항상 반영한다. 그래야 "동일 연차 재제출"(승인 체크박스 기본
+      // 꺼짐)로 다시 올려도 메일주소 등 단순 정정이 묻히지 않는다.
       const isPreexistingProject = projects.some((p) => p.id === projectId);
-      if (isPreexistingProject && !isApprovedUpdate(normNum)) continue;
+      const approved = !isPreexistingProject || isApprovedUpdate(normNum);
 
-      touchedProjectIds.add(projectId);
       const institution = institutions.find((i) => i.id === institutionId);
       // ProjectMember.annualBudgets엔 예산 4개 필드 + 연차 시작/종료일·담당 회계법인(있으면)만 저장 —
       // govGrant/privateCash/privateInKind는 과제 레벨 "당해 사업비" 필드를 채우기 위한
@@ -2629,6 +2903,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       );
 
       if (!existingMember) {
+        if (!approved) continue; // 아직 승인되지 않은 연차의 신규 참여기관은 만들지 않는다
+        touchedProjectIds.add(projectId);
         // 신규 참여기관
         const totalCash = annualBudgets.length > 0
           ? annualBudgets.reduce((s, b) => s + b.cashBudget, 0)
@@ -2663,47 +2939,11 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           contactPhone: institution?.contactPhone || undefined,
         });
         memberCount++;
-      } else if (isPreexistingProject) {
-        // 기존 참여기관 갱신 — 다른 연차 데이터는 보존하고, 이번 엑셀에 담긴 연차만 추가/교체한다.
-        const newTermNumbers = new Set(annualBudgets.map((b) => b.termNumber));
-        const mergedBudgets = [
-          ...(existingMember.annualBudgets ?? []).filter((b) => !newTermNumbers.has(b.termNumber)),
-          ...annualBudgets,
-        ].sort((a, b) => a.termNumber - b.termNumber);
-        const totalCash = mergedBudgets.reduce((s, b) => s + b.cashBudget, 0);
-        const totalInKind = mergedBudgets.reduce((s, b) => s + b.inKindBudget, 0);
+      } else {
+        // 기존 참여기관 갱신. 실무자 메일주소는 연차 진행과 무관한 정정 값이라 승인 여부와 무관하게
+        // 항상 반영하고, 사업비·역할·정산형태·등급처럼 연차 진행에 얽힌 값은 승인된 경우에만 반영한다.
+        const updates: Partial<ProjectMember> = {};
 
-        // "연차별기관별" 시트에 연차마다 값이 있으면(예: 1~2연차 자체정산, 3연차부터 위탁정산)
-        // 연차별 오버라이드로 정확히 반영한다 — 과제×기관당 단일값만 쓰면 마지막으로 읽은 연차의
-        // 값이 통째로 덮어써서 "몇 연차부터 바뀌었는지"가 사라진다. 연차별 값이 아예 없으면(예:
-        // "단계기관별" 시트만 업로드된 경우) 기존처럼 단일값으로 반영한다.
-        const perTermBudgets = Array.from(agg.budgetsByTerm.values());
-        const hasPerTermSettlement = perTermBudgets.some((b) => b.settlementType !== undefined);
-        const hasPerTermGrade = perTermBudgets.some((b) => b.institutionGrade !== undefined);
-
-        const updates: Partial<ProjectMember> = {
-          annualBudgets: mergedBudgets,
-          budget: totalCash + totalInKind,
-          cashBudget: totalCash,
-          inKindBudget: totalInKind,
-          role: agg.role,
-        };
-        if (hasPerTermSettlement) {
-          updates.settlementTypeOverrides = buildSettlementTypeOverridesFromExcel(agg, existingMember.settlementTypeOverrides);
-        } else {
-          updates.settlementType = agg.settlementType;
-        }
-        if (hasPerTermGrade) {
-          updates.gradeOverrides = buildGradeOverridesFromExcel(agg, existingMember.gradeOverrides);
-        } else if (agg.institutionGrade) {
-          // 셀에 "우수"라고만 적혀 있었다면(A/B/C 미지정) parseGrade가 우수(A)로 임의 확정한 값이다 —
-          // 기존에 이미 더 구체적인 등급(우수(B)/우수(C))이 등록돼 있으면 이 모호한 값으로 깎지 않고 보존한다.
-          const ambiguous = agg.institutionGradeRaw !== undefined && isAmbiguousGoodGrade(agg.institutionGradeRaw);
-          const existingIsMoreSpecific = existingMember.institutionGrade === "우수(B)" || existingMember.institutionGrade === "우수(C)";
-          if (!(ambiguous && existingIsMoreSpecific)) {
-            updates.institutionGrade = agg.institutionGrade;
-          }
-        }
         // "실무자 메일주소" 컬럼에 값이 있을 때만 덮어쓴다 — 비어 있으면 화면에서 직접 입력해둔
         // 기존 실무자 이메일을 그대로 보존한다. 값이 실제로 달라지면, 이번 엑셀이 반영하는
         // 연차(targetTerm) 이전 연차는 옛 연락처로 고정해 소급 변경을 막는다.
@@ -2712,9 +2952,17 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             const targetTerm = projectMaxTerm.get(normNum) ?? 1;
             // "이전 연차"가 아니라 "이미 TermFee가 있는 연차"를 기준으로 고정한다 — 다년치 사업비를
             // 미리 입력해둬서 진행 연차보다 나중 연차가 이미 만들어져 있는 경우도 소급되면 안 된다.
+            // termFees는 이 컴포넌트가 마운트될 때 찍힌 스냅샷이라, 이번 업로드가 "처음으로" 만드는
+            // 연차(예: 그동안 2연차까지만 있었는데 이번에 1·2·3연차를 한꺼번에 올림)는 아직 여기 없다 —
+            // 그런 연차를 빠뜨리면 "이미 지난 연차"인데도 방금 바뀐 새 값이 새어 들어간다. 그래서 이번
+            // 엑셀이 실제로 값을 담고 있는 연차(agg.budgetsByTerm의 키)도 함께 합쳐서 대상에 넣는다.
+            const existingTermNumbers = new Set([
+              ...termFees.filter((f) => f.projectNumber === agg.projectNumber).map((f) => f.termNumber),
+              ...agg.budgetsByTerm.keys(),
+            ]);
             updates.recipientOverrides = backfillExistingTermOverrides(
               existingMember.recipientOverrides,
-              termFees.filter((f) => f.projectNumber === agg.projectNumber).map((f) => f.termNumber),
+              existingTermNumbers,
               targetTerm,
               // ??로 undefined일 때만 ""로 채운다 — 여기서 undefined를 그대로 두면 resolveMemberRecipientForTerm의
               // override?.recipientEmail ?? member.contactEmail 폴백이 "값 없음"으로 착각해 방금 바뀐
@@ -2730,19 +2978,56 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           updates.contactEmail = agg.contactEmail;
         }
 
+        if (approved) {
+          // 다른 연차 데이터는 보존하고, 이번 엑셀에 담긴 연차만 추가/교체한다.
+          const newTermNumbers = new Set(annualBudgets.map((b) => b.termNumber));
+          const mergedBudgets = [
+            ...(existingMember.annualBudgets ?? []).filter((b) => !newTermNumbers.has(b.termNumber)),
+            ...annualBudgets,
+          ].sort((a, b) => a.termNumber - b.termNumber);
+          const totalCash = mergedBudgets.reduce((s, b) => s + b.cashBudget, 0);
+          const totalInKind = mergedBudgets.reduce((s, b) => s + b.inKindBudget, 0);
+
+          // "연차별기관별" 시트에 연차마다 값이 있으면(예: 1~2연차 자체정산, 3연차부터 위탁정산)
+          // 연차별 오버라이드로 정확히 반영한다 — 과제×기관당 단일값만 쓰면 마지막으로 읽은 연차의
+          // 값이 통째로 덮어써서 "몇 연차부터 바뀌었는지"가 사라진다. 연차별 값이 아예 없으면(예:
+          // "단계기관별" 시트만 업로드된 경우) 기존처럼 단일값으로 반영한다.
+          const perTermBudgets = Array.from(agg.budgetsByTerm.values());
+          const hasPerTermSettlement = perTermBudgets.some((b) => b.settlementType !== undefined);
+          const hasPerTermGrade = perTermBudgets.some((b) => b.institutionGrade !== undefined);
+
+          Object.assign(updates, {
+            annualBudgets: mergedBudgets,
+            budget: totalCash + totalInKind,
+            cashBudget: totalCash,
+            inKindBudget: totalInKind,
+            role: agg.role,
+          });
+          if (hasPerTermSettlement) {
+            updates.settlementTypeOverrides = buildSettlementTypeOverridesFromExcel(agg, existingMember.settlementTypeOverrides);
+          } else {
+            updates.settlementType = agg.settlementType;
+          }
+          if (hasPerTermGrade) {
+            updates.gradeOverrides = buildGradeOverridesFromExcel(agg, existingMember.gradeOverrides);
+          } else if (agg.institutionGrade) {
+            // 셀에 "우수"라고만 적혀 있었다면(A/B/C 미지정) parseGrade가 우수(A)로 임의 확정한 값이다 —
+            // 기존에 이미 더 구체적인 등급(우수(B)/우수(C))이 등록돼 있으면 이 모호한 값으로 깎지 않고 보존한다.
+            const ambiguous = agg.institutionGradeRaw !== undefined && isAmbiguousGoodGrade(agg.institutionGradeRaw);
+            const existingIsMoreSpecific = existingMember.institutionGrade === "우수(B)" || existingMember.institutionGrade === "우수(C)";
+            if (!(ambiguous && existingIsMoreSpecific)) {
+              updates.institutionGrade = agg.institutionGrade;
+            }
+          }
+        }
+
         // 실제로 달라진 게 있을 때만 갱신 — 동일한 파일을 다시 올려도 변경이력에 빈 UPDATE가 쌓이지 않게 한다.
-        const changed =
-          JSON.stringify(mergedBudgets) !== JSON.stringify(existingMember.annualBudgets ?? []) ||
-          updates.role !== existingMember.role ||
-          (hasPerTermSettlement
-            ? JSON.stringify(updates.settlementTypeOverrides ?? []) !== JSON.stringify(existingMember.settlementTypeOverrides ?? [])
-            : updates.settlementType !== existingMember.settlementType) ||
-          (hasPerTermGrade
-            ? JSON.stringify(updates.gradeOverrides ?? []) !== JSON.stringify(existingMember.gradeOverrides ?? [])
-            : (updates.institutionGrade !== undefined && updates.institutionGrade !== existingMember.institutionGrade)) ||
-          (updates.contactEmail !== undefined && updates.contactEmail !== existingMember.contactEmail);
+        const changed = (Object.keys(updates) as (keyof ProjectMember)[]).some(
+          (k) => JSON.stringify(updates[k] ?? null) !== JSON.stringify(existingMember[k] ?? null)
+        );
 
         if (changed) {
+          touchedProjectIds.add(projectId);
           updateProjectMember(existingMember.id, updates);
           memberUpdatedCount++;
         }
@@ -2773,13 +3058,78 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         nextAgreementType !== existingProject.agreementType;
 
       const approved = isApprovedUpdate(info.normNum);
-      if (!approved && !stageChanged) continue; // 반영할 것이 아무것도 없음
-
-      touchedProjectIds.add(info.projectId);
 
       // 연차 반영이 보류된 경우(승인 안 됨) 단계 날짜·연차상시/정산 재계산은 "현재 등록된 연차" 기준으로 —
       // 승인된 경우에만 엑셀의 새 연차 기준으로 계산한다.
       const effectiveCurrentTerm = approved ? info.excelTerm : existingProject.currentTerm;
+
+      // 책임자·과제담당자 이름/메일주소, 배정일 — 신규/이름변경 과제(위쪽 분기)와 달리 이 "기존 과제
+      // 연차 갱신" 분기는 지금까지 이 필드들을 전혀 건드리지 않아서, 최초 등록 때 값이 갈려(row마다
+      // 값이 달라) 비어 있었으면 이후 아무리 재업로드해도 영영 채워지지 않는 문제가 있었다. 이 값들은
+      // 연차 진행과 무관한 정정 값이라, "동일 연차 재제출/과거 연차"라서 연차·사업비 반영이 보류돼도
+      // (승인 체크박스 기본 꺼짐) 승인 여부와 무관하게 항상 반영한다 — 그래야 담당자가 메일주소 등을
+      // 고치려고 재업로드했는데 체크박스를 놓쳐 정정이 통째로 묻히는 일이 없다.
+      // scalarInfo가 이번 파일에서 값을 하나로 특정하지 못하면(비어 있거나 여전히 갈리면) 기존 값을 유지한다.
+      const scalarInfo = scalarAggregates.get(info.normNum);
+      const assignedManager = scalarInfo?.assignedManagers.size === 1 ? [...scalarInfo.assignedManagers][0] : undefined;
+      const assignedManagerPrimaryFallback = scalarInfo?.assignedManagersPrimary.size === 1 ? [...scalarInfo.assignedManagersPrimary][0] : undefined;
+      const researchLead = scalarInfo?.researchLeads.size === 1 ? [...scalarInfo.researchLeads][0] : undefined;
+      const researchLeadEmail = scalarInfo?.researchLeadEmails.size === 1 ? [...scalarInfo.researchLeadEmails][0] : undefined;
+      const agencyAssignedAt = scalarInfo?.agencyAssignedAts.size === 1 ? [...scalarInfo.agencyAssignedAts][0] : undefined;
+      const internalAssignedAt = scalarInfo?.internalAssignedAts.size === 1 ? [...scalarInfo.internalAssignedAts][0] : undefined;
+      // 담당자는 연차별 이력이 있으면(연차마다 다른 사람) 이번에 반영되는 연차(effectiveCurrentTerm) 값을
+      // 우선 채택한다. 과제담당자(정)/(부) 모두 이름은 동일한 규칙을 따른다(연락처·이메일은 더 이상 여기서 다루지 않음).
+      const assignedManagerHistory = buildAssignedManagerHistory(scalarInfo, managerNameResolutions, users);
+      const resolvedAssignedManager = scalarInfo?.assignedManagersByTerm.get(effectiveCurrentTerm) ?? assignedManager;
+      const assignedManagerPrimaryHistory = buildAssignedManagerPrimaryHistory(scalarInfo, managerNameResolutions, users);
+      const resolvedAssignedManagerPrimary = scalarInfo?.assignedManagersPrimaryByTerm.get(effectiveCurrentTerm) ?? assignedManagerPrimaryFallback;
+
+      // 책임자 이름·이메일이 이번 엑셀 값으로 바뀌는 경우, 그 값이 반영되는 연차(effectiveCurrentTerm)
+      // 이전 연차는 옛 값으로 고정해 소급 변경을 막는다(위 신규/이름변경 과제 분기와 동일한 원칙).
+      const leadChanged =
+        (researchLead !== undefined && researchLead !== existingProject.researchLead) ||
+        (researchLeadEmail !== undefined && researchLeadEmail !== existingProject.researchLeadEmail);
+
+      const safeUpdates: Partial<Project> = {
+        assignedManager: resolvedAssignedManager ? applyManagerNameResolution(resolvedAssignedManager, managerNameResolutions, users) : existingProject.assignedManager,
+        assignedManagerUserId: resolveManagerUserId(resolvedAssignedManager, existingProject.assignedManager, existingProject.assignedManagerUserId, managerNameResolutions),
+        assignedManagerHistory: mergeTermHistory(existingProject.assignedManagerHistory, assignedManagerHistory),
+        assignedManagerPrimary: resolvedAssignedManagerPrimary ? applyManagerNameResolution(resolvedAssignedManagerPrimary, managerNameResolutions, users) : existingProject.assignedManagerPrimary,
+        assignedManagerPrimaryUserId: resolveManagerUserId(resolvedAssignedManagerPrimary, existingProject.assignedManagerPrimary, existingProject.assignedManagerPrimaryUserId, managerNameResolutions),
+        assignedManagerPrimaryHistory: mergeTermHistory(existingProject.assignedManagerPrimaryHistory, assignedManagerPrimaryHistory),
+        researchLead: researchLead ?? existingProject.researchLead,
+        researchLeadEmail: researchLeadEmail ?? existingProject.researchLeadEmail,
+        // ??로 undefined일 때만 ""로 채운다 — 그대로 두면 resolveResearchLeadForTerm의 override?.email ??
+        // researchLeadEmail 폴백이 "값 없음"으로 착각해 방금 바뀐 새 기본값으로 새어 들어가 버린다.
+        // "이전 연차"가 아니라 "이미 TermFee가 있는 연차"를 기준으로 고정한다 — 다년치 사업비를
+        // 미리 입력해둬서 진행 연차보다 나중 연차가 이미 만들어져 있는 경우도 소급되면 안 된다.
+        // termFees는 이 컴포넌트 마운트 시점 스냅샷이라 이번 업로드가 처음 만드는 연차는 아직 없다 —
+        // 이번 파일이 실제로 값을 담은 연차(참여기관들의 budgetsByTerm)도 함께 합쳐야 빠지지 않는다.
+        researchLeadOverrides: leadChanged
+          ? backfillExistingTermOverrides(
+              existingProject.researchLeadOverrides,
+              new Set([
+                ...termFees.filter((f) => f.projectNumber === existingProject.projectNumber).map((f) => f.termNumber),
+                ...memberAggregates.filter((a) => normProjectNum(a.projectNumber) === info.normNum).flatMap((a) => [...a.budgetsByTerm.keys()]),
+              ]),
+              effectiveCurrentTerm,
+              (termNumber) => ({
+              termNumber,
+              name: existingProject.researchLead ?? "",
+              email: existingProject.researchLeadEmail ?? "",
+            }))
+          : existingProject.researchLeadOverrides,
+        agencyAssignedAt: agencyAssignedAt ?? existingProject.agencyAssignedAt,
+        internalAssignedAt: internalAssignedAt ?? existingProject.internalAssignedAt,
+      };
+      const hasSafeFieldChange = (Object.keys(safeUpdates) as (keyof Project)[]).some(
+        (k) => JSON.stringify(safeUpdates[k] ?? null) !== JSON.stringify(existingProject[k] ?? null)
+      );
+
+      if (!approved && !stageChanged && !hasSafeFieldChange) continue; // 반영할 것이 아무것도 없음
+
+      touchedProjectIds.add(info.projectId);
+
       const nextTotalTerms = Math.max(existingProject.totalTerms, approved ? info.excelTerm : 0, maxStageEndTerm);
       const currentStage = nextStages?.find((s) => effectiveCurrentTerm >= s.startTermNumber && effectiveCurrentTerm <= s.endTermNumber);
       const stageDateRange = currentStage ? stageInfo?.dateRanges.get(currentStage.stageNumber) : undefined;
@@ -2790,6 +3140,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         totalTerms: nextTotalTerms,
         stageStartDate: stageDateRange?.start ?? existingProject.stageStartDate,
         stageEndDate: stageDateRange?.end ?? existingProject.stageEndDate,
+        ...safeUpdates,
       };
 
       if (approved) {
@@ -2805,30 +3156,6 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         const { govGrant, privateCash, privateInKind } = sumTermFinancials(memberAggregates, info.normNum, nextCurrentTerm);
         const allTermFinancials = sumAllTermFinancials(memberAggregates, info.normNum);
 
-        // 과제담당자·연구책임자·배정일 — 신규/이름변경 과제(위쪽 분기)와 달리 이 "기존 과제
-        // 연차 갱신" 분기는 지금까지 이 필드들을 전혀 건드리지 않아서, 최초 등록 때 값이 갈려(row마다
-        // 값이 달라) 비어 있었으면 이후 아무리 재업로드해도 영영 채워지지 않는 문제가 있었다.
-        // scalarInfo가 이번 파일에서 값을 하나로 특정하지 못하면(비어 있거나 여전히 갈리면) 기존 값을 유지한다.
-        const scalarInfo = scalarAggregates.get(info.normNum);
-        const assignedManager = scalarInfo?.assignedManagers.size === 1 ? [...scalarInfo.assignedManagers][0] : undefined;
-        const assignedManagerPrimaryFallback = scalarInfo?.assignedManagersPrimary.size === 1 ? [...scalarInfo.assignedManagersPrimary][0] : undefined;
-        const researchLead = scalarInfo?.researchLeads.size === 1 ? [...scalarInfo.researchLeads][0] : undefined;
-        const researchLeadEmail = scalarInfo?.researchLeadEmails.size === 1 ? [...scalarInfo.researchLeadEmails][0] : undefined;
-        const agencyAssignedAt = scalarInfo?.agencyAssignedAts.size === 1 ? [...scalarInfo.agencyAssignedAts][0] : undefined;
-        const internalAssignedAt = scalarInfo?.internalAssignedAts.size === 1 ? [...scalarInfo.internalAssignedAts][0] : undefined;
-        // 담당자는 연차별 이력이 있으면(연차마다 다른 사람) 이번에 반영되는 연차 값을 우선 채택한다.
-        // 과제담당자(정)/(부) 모두 이름은 동일한 규칙을 따른다(연락처·이메일은 더 이상 여기서 다루지 않음).
-        const assignedManagerHistory = buildAssignedManagerHistory(scalarInfo, managerNameResolutions, users);
-        const resolvedAssignedManager = scalarInfo?.assignedManagersByTerm.get(nextCurrentTerm) ?? assignedManager;
-        const assignedManagerPrimaryHistory = buildAssignedManagerPrimaryHistory(scalarInfo, managerNameResolutions, users);
-        const resolvedAssignedManagerPrimary = scalarInfo?.assignedManagersPrimaryByTerm.get(nextCurrentTerm) ?? assignedManagerPrimaryFallback;
-
-        // 책임자 이름·이메일이 이번 엑셀 값으로 바뀌는 경우, 그 값이 반영되는 연차(nextCurrentTerm)
-        // 이전 연차는 옛 값으로 고정해 소급 변경을 막는다(위 신규/이름변경 과제 분기와 동일한 원칙).
-        const leadChanged =
-          (researchLead !== undefined && researchLead !== existingProject.researchLead) ||
-          (researchLeadEmail !== undefined && researchLeadEmail !== existingProject.researchLeadEmail);
-
         Object.assign(updates, {
           currentTerm: nextCurrentTerm,
           projectCategory,
@@ -2836,31 +3163,6 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           privateCash: privateCash > 0 ? privateCash : existingProject.privateCash,
           privateInKind: privateInKind > 0 ? privateInKind : existingProject.privateInKind,
           annualFinancials: mergeAnnualFinancials(existingProject.annualFinancials, allTermFinancials),
-          assignedManager: resolvedAssignedManager ? applyManagerNameResolution(resolvedAssignedManager, managerNameResolutions, users) : existingProject.assignedManager,
-          assignedManagerUserId: resolveManagerUserId(resolvedAssignedManager, existingProject.assignedManager, existingProject.assignedManagerUserId, managerNameResolutions),
-          assignedManagerHistory: mergeTermHistory(existingProject.assignedManagerHistory, assignedManagerHistory),
-          assignedManagerPrimary: resolvedAssignedManagerPrimary ? applyManagerNameResolution(resolvedAssignedManagerPrimary, managerNameResolutions, users) : existingProject.assignedManagerPrimary,
-          assignedManagerPrimaryUserId: resolveManagerUserId(resolvedAssignedManagerPrimary, existingProject.assignedManagerPrimary, existingProject.assignedManagerPrimaryUserId, managerNameResolutions),
-          assignedManagerPrimaryHistory: mergeTermHistory(existingProject.assignedManagerPrimaryHistory, assignedManagerPrimaryHistory),
-          researchLead: researchLead ?? existingProject.researchLead,
-          researchLeadEmail: researchLeadEmail ?? existingProject.researchLeadEmail,
-          // ??로 undefined일 때만 ""로 채운다 — 그대로 두면 resolveResearchLeadForTerm의 override?.email ??
-          // researchLeadEmail 폴백이 "값 없음"으로 착각해 방금 바뀐 새 기본값으로 새어 들어가 버린다.
-          // "이전 연차"가 아니라 "이미 TermFee가 있는 연차"를 기준으로 고정한다 — 다년치 사업비를
-          // 미리 입력해둬서 진행 연차보다 나중 연차가 이미 만들어져 있는 경우도 소급되면 안 된다.
-          researchLeadOverrides: leadChanged
-            ? backfillExistingTermOverrides(
-                existingProject.researchLeadOverrides,
-                termFees.filter((f) => f.projectNumber === existingProject.projectNumber).map((f) => f.termNumber),
-                nextCurrentTerm,
-                (termNumber) => ({
-                termNumber,
-                name: existingProject.researchLead ?? "",
-                email: existingProject.researchLeadEmail ?? "",
-              }))
-            : existingProject.researchLeadOverrides,
-          agencyAssignedAt: agencyAssignedAt ?? existingProject.agencyAssignedAt,
-          internalAssignedAt: internalAssignedAt ?? existingProject.internalAssignedAt,
         });
       }
 

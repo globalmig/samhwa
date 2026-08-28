@@ -3,9 +3,8 @@
 import { useState, useMemo, useRef, useEffect, type CSSProperties } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import * as XLSX from "xlsx";
 import { FiPlus, FiChevronDown, FiChevronUp, FiSend, FiDownload, FiSearch, FiSliders, FiCalendar } from "react-icons/fi";
-import ExcelUploadModal, { downloadExcelTemplate } from "@/components/common/ExcelUploadModal";
+import ExcelUploadModal, { downloadExcelTemplate, downloadCurrentDataAsUploadTemplate } from "@/components/common/ExcelUploadModal";
 import {
   useStore,
   addReceivable,
@@ -1194,6 +1193,10 @@ function useFeeRows(): FeeRow[] {
         const recipient = recipientMember
           ? resolveMemberRecipientForTerm(recipientMember, f0.termNumber)
           : { recipientName: "", recipientEmail: "", recipientPhone: "" };
+        // 연구책임자·책임자이메일도 연차별로 다를 수 있어(과제 상세 페이지에서 연차별로 수정) researchLeadOverrides를 먼저 본다.
+        const lead = project
+          ? resolveResearchLeadForTerm(project, f0.termNumber)
+          : { name: "", email: "" };
 
         // 서류요청일/회신일을 들고 있는 TermFee — 분리행이면 그 기관 자신, 아니면 주관기관 쪽(없으면
         // 청구(BILLED)된 쪽, 그것도 없으면 첫 번째 행)을 기본 소유자로 삼는다.
@@ -1226,8 +1229,8 @@ function useFeeRows(): FeeRow[] {
           billedInstitutionId,
           billedInstitutionName,
           isSplitRow:          isSplit,
-          researchLead:        project?.researchLead ?? "",
-          researchLeadEmail:   project?.researchLeadEmail ?? "",
+          researchLead:        lead.name,
+          researchLeadEmail:   lead.email,
           projectCategory,
           startDate:           explicitTermStart ?? termRange?.start ?? project?.startDate ?? "",
           endDate:             explicitTermEnd ?? termRange?.end ?? project?.endDate ?? "",
@@ -1302,8 +1305,8 @@ function useFeeRows(): FeeRow[] {
         billedInstitutionId: project.leadInstitutionId ?? "",
         billedInstitutionName: project.leadInstitutionName ?? "",
         isSplitRow: false,
-        researchLead: project.researchLead ?? "",
-        researchLeadEmail: project.researchLeadEmail ?? "",
+        researchLead: resolveResearchLeadForTerm(project, project.currentTerm).name,
+        researchLeadEmail: resolveResearchLeadForTerm(project, project.currentTerm).email,
         projectCategory: isSettlementTerm(project, project.currentTerm) ? "정산" : "연차상시",
         startDate: termRange?.start ?? project.startDate ?? "",
         endDate: termRange?.end ?? project.endDate ?? "",
@@ -2054,6 +2057,7 @@ function BulkSimpleNoticeModal({
 // ── FeesPage ──────────────────────────────────────────────────
 export default function FeesPage() {
   const canEdit     = useCanWrite("fees");
+  const canEditFeesInfo = useCanWrite("fees-info-edit");
   const canEditSales = useCanWrite("fees-sales");
   const canEditEmails = useCanWrite("emails");
   const canSendSimpleNotice = useCanWrite("simple-notices");
@@ -2061,7 +2065,7 @@ export default function FeesPage() {
   // 쓸 수 있는 계산서발행 서류 요청/입금 확인 요청 일괄발송에도 필요해서 둘 중 하나만 있어도 보여준다.
   const canSelectRows = canEdit || canSendSimpleNotice;
   const allRows     = useFeeRows();
-  const { fundingAgencies, projects, projectMembers, agencyNoticeTemplates, users, emailDispatches, termFees } = useStore();
+  const { fundingAgencies, projects, projectMembers, institutions, agencyNoticeTemplates, users, emailDispatches, termFees } = useStore();
   const searchParams = useSearchParams();
   const router = useRouter();
   const [filterProjectNumber,   setFilterProjectNumber]   = useState("");
@@ -2597,45 +2601,16 @@ export default function FeesPage() {
     }
   }
 
+  // 예전엔 과제 단위 계산서·수금 현황 리포트(발행구분/공급가액/수금상태 등)를 내려받았지만, RCMS 엑셀
+  // 업로드가 요구하는 참여기관×연차 원본 데이터가 없어 그 파일을 그대로 재업로드하면 필수값 누락·
+  // 미인식 컬럼이 잔뜩 떴다. 그래서 지금 화면에 보이는(필터링된) 과제들의 참여기관·연차별 데이터를
+  // RCMS 업로드 양식과 동일한 컬럼으로 채워서 내려받도록 바꿨다 — 그대로(또는 일부만 고쳐서) 다시
+  // 업로드할 수 있다.
   function exportToExcel() {
-    const data = filtered.map((r) => ({
-      "약칭": r.agencyShortName,
-      "과제번호": r.projectNumber,
-      "과제명": r.projectName,
-      "주관기관": r.leadInstitutionName,
-      "연구책임자": r.researchLead,
-      "청구기관": r.billedInstitutionName,
-      "연차": `${r.termNumber}/${r.totalTerms}`,
-      "과제구분": r.projectCategory,
-      "당해시작일": r.startDate,
-      "당해종료일": r.endDate,
-      "발행구분": r.billingType,
-      "계산서일자": r.invoiceIssuedAt,
-      "공급가액": r.supplyAmount,
-      "부가세": r.taxAmount,
-      "합계": r.totalInvoiceAmount,
-      "수금상태": COLLECTION_STATUS_LABEL[r.collectionStatus] ?? "",
-      "수금액": r.paidAmount,
-      "수금일": r.paidAt ?? "",
-      "미수액": r.receivableAmount,
-      "손실금액": r.unclaimedAmount,
-      "과제코드": r.projectCode,
-      "전담기관배정일": r.agencyAssignedAt,
-      "서류요청일": r.docRequestDate,
-      "서류회신일": r.docReplyDate,
-      "실무자": r.recipientName,
-      "실무자이메일": r.recipientEmail,
-      "책임자이메일": r.researchLeadEmail,
-      "구분": r.projectDivision,
-      "과제담당자(부)": r.assignedManager,
-      "과제담당자(정)": r.assignedManagerPrimary,
-      "회계법인": r.auditFirm,
-    }));
-    const ws = XLSX.utils.json_to_sheet(data);
-    ws["!cols"] = Object.keys(data[0] ?? {}).map(() => ({ wch: 16 }));
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "수수료청구관리");
-    XLSX.writeFile(wb, `수수료청구관리_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    const projectIds = new Set(filtered.map((r) => r.projectId).filter(Boolean));
+    const targetProjects = projects.filter((p) => projectIds.has(p.id));
+    const targetMembers = projectMembers.filter((m) => projectIds.has(m.projectId));
+    downloadCurrentDataAsUploadTemplate(targetProjects, targetMembers, institutions, fundingAgencies);
   }
 
   return (
@@ -3087,9 +3062,10 @@ export default function FeesPage() {
                           </td>
                         );
                       })}
-                      {/* 공문발송 드롭다운 — 회계담당자만 발송 가능. 세금계산서 발행 전에도 청구서 공문을
-                          보낼 수 있어야 하므로(과제 상세 페이지의 BillingBlock과 동일 기준) 발행 여부와
-                          무관하게 항상 노출한다 — 금액은 아직 없으면 산정액 기준 예상치로 채워진다. */}
+                      {/* 공문발송 드롭다운 — 회계담당자·전담기관 담당자(SETTLEMENT) 발송 가능. 세금계산서
+                          발행 전에도 청구서 공문을 보낼 수 있어야 하므로(과제 상세 페이지의 BillingBlock과
+                          동일 기준) 발행 여부와 무관하게 항상 노출한다 — 금액은 아직 없으면 산정액 기준
+                          예상치로 채워진다. */}
                       <td className={`px-3 py-2.5 text-center align-middle w-24 ${rowBorder}`}>
                         {canEditEmails ? (
                           <DispatchDropdown
@@ -3258,7 +3234,7 @@ export default function FeesPage() {
                       </td>
                       {/* 정보수정 버튼 */}
                       <td className={`px-3 py-2.5 text-center align-middle w-20 ${rowBorder}`}>
-                        {canEdit && (
+                        {canEditFeesInfo && (
                           <button
                             onClick={() =>
                               setModal({
