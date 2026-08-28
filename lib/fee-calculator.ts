@@ -62,22 +62,27 @@ export function resolveResearchLeadForTerm(
   };
 }
 
-// ─── 기본값 변경 시 과거 연차 소급 방지 ────────────────────────────────
+// ─── 기본값 변경 시 이미 만들어진 연차로 소급 방지 ─────────────────────
 // 실무자·책임자 연락처처럼 "오버라이드가 없는 모든 연차의 기본값" 역할을 겸하는 필드는, 기본값 자체를
-// 새 값으로 바꾸면 그 순간부터 오버라이드 없는 모든 연차(과거 포함)가 한꺼번에 새 값으로 바뀌어버린다
-// — 새 값은 "이 시점부터 적용"이어야지 과거까지 소급되면 안 된다. 그래서 기본값을 바꾸기 전에,
-// 지금 이 변경이 적용되는 연차(targetTerm) 이전 연차 중 아직 자체 오버라이드가 없는 연차만 옛
-// 값으로 고정해두고 나서 기본값을 바꾼다 — 과거 연차는 계속 옛 값으로 남고, targetTerm부터(이후
-// 새로 생기는 연차 포함)는 새 기본값이 그대로 적용된다. 엑셀 재업로드(ExcelUploadModal)와
-// 과제 상세의 책임자이메일 직접 수정(projects/[id]/page.tsx) 양쪽에서 동일하게 쓴다.
-export function backfillPriorTermOverrides<O extends { termNumber: number }>(
+// 새 값으로 바꾸면 그 순간부터 오버라이드 없는 모든 연차가 한꺼번에 새 값으로 바뀌어버린다 — 새
+// 값은 "이 시점부터 적용"이어야지, 이미 만들어져 있는(TermFee가 존재하는) 다른 연차까지 새 값으로
+// 바뀌면 안 된다. 이건 과거 연차뿐 아니라 미래 연차도 마찬가지다 — 예를 들어 다년치 사업비를 한
+// 번에 입력해둬서 진행 연차(5연차)보다 나중 연차(6연차)의 TermFee가 이미 만들어져 있는 경우, 5연차
+// 값을 고쳐도 이미 만들어진 6연차 값은 그대로 유지돼야 한다(아직 안 만들어진 7연차부터는 새 기본값이
+// 적용되는 게 맞다). 그래서 "몇 연차 이전"이 아니라 "이미 TermFee가 있는 연차 집합"을 기준으로,
+// 지금 이 변경이 적용되는 연차(targetTerm) 자신을 뺀 나머지 중 아직 자체 오버라이드가 없는 연차만
+// 옛 값으로 고정해두고 나서 기본값을 바꾼다. 엑셀 재업로드(ExcelUploadModal)와 과제 상세의
+// 책임자이메일 직접 수정(projects/[id]/page.tsx) 양쪽에서 동일하게 쓴다.
+export function backfillExistingTermOverrides<O extends { termNumber: number }>(
   existingOverrides: O[] | undefined,
+  existingTermNumbers: Iterable<number>,
   targetTerm: number,
   makeOverride: (termNumber: number) => O,
 ): O[] | undefined {
   const covered = new Set((existingOverrides ?? []).map((o) => o.termNumber));
   const backfilled: O[] = [];
-  for (let t = 1; t < targetTerm; t++) {
+  for (const t of existingTermNumbers) {
+    if (t === targetTerm) continue;
     if (!covered.has(t)) backfilled.push(makeOverride(t));
   }
   if (backfilled.length === 0) return existingOverrides;

@@ -28,7 +28,7 @@ import {
 } from "@/lib/store";
 import type { Project, ProjectMember, AnnualBudget, AnnualFinancials, Institution, SystemUser } from "@/lib/mock";
 import { getCurrentUser } from "@/lib/auth";
-import { isSettlementTerm, resolveAutoDetectedAgencyId, backfillPriorTermOverrides } from "@/lib/fee-calculator";
+import { isSettlementTerm, resolveAutoDetectedAgencyId, backfillExistingTermOverrides } from "@/lib/fee-calculator";
 import ManagerPickerModal from "@/components/common/ManagerPickerModal";
 
 type InstitutionGrade = NonNullable<ProjectMember["institutionGrade"]>;
@@ -1997,7 +1997,7 @@ function parseSheetToParsedSheet(wb: XLSX.WorkBook, sheetName: string, def: Shee
 // ============================================================
 
 export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
-  const { fundingAgencies, institutions, projects, projectMembers, users } = useStore();
+  const { fundingAgencies, institutions, projects, projectMembers, users, termFees } = useStore();
   const [step, setStep] = useState<Step>("upload");
   const [workbook, setWorkbook] = useState<XLSX.WorkBook | null>(null);
   const [allSheetNames, setAllSheetNames] = useState<string[]>([]);
@@ -2516,12 +2516,19 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             researchLeadEmail: researchLeadEmail ?? renamedFrom.researchLeadEmail,
             // ??로 undefined일 때만 ""로 채운다 — 그대로 두면 resolveResearchLeadForTerm의 override?.email ??
             // researchLeadEmail 폴백이 "값 없음"으로 착각해 방금 바뀐 새 기본값으로 새어 들어가 버린다.
+            // "이전 연차"가 아니라 "이미 TermFee가 있는 연차"를 기준으로 고정한다 — 다년치 사업비를
+            // 미리 입력해둬서 진행 연차보다 나중 연차가 이미 만들어져 있는 경우도 소급되면 안 된다.
             researchLeadOverrides: leadChanged
-              ? backfillPriorTermOverrides(renamedFrom.researchLeadOverrides, currentTerm, (termNumber) => ({
-                  termNumber,
-                  name: renamedFrom.researchLead ?? "",
-                  email: renamedFrom.researchLeadEmail ?? "",
-                }))
+              ? backfillExistingTermOverrides(
+                  renamedFrom.researchLeadOverrides,
+                  termFees.filter((f) => f.projectNumber === renamedFrom.projectNumber).map((f) => f.termNumber),
+                  currentTerm,
+                  (termNumber) => ({
+                    termNumber,
+                    name: renamedFrom.researchLead ?? "",
+                    email: renamedFrom.researchLeadEmail ?? "",
+                  }),
+                )
               : renamedFrom.researchLeadOverrides,
             agencyAssignedAt: agencyAssignedAt ?? renamedFrom.agencyAssignedAt,
             internalAssignedAt: internalAssignedAt ?? renamedFrom.internalAssignedAt,
@@ -2703,8 +2710,11 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         if (agg.contactEmail) {
           if (agg.contactEmail !== existingMember.contactEmail) {
             const targetTerm = projectMaxTerm.get(normNum) ?? 1;
-            updates.recipientOverrides = backfillPriorTermOverrides(
+            // "이전 연차"가 아니라 "이미 TermFee가 있는 연차"를 기준으로 고정한다 — 다년치 사업비를
+            // 미리 입력해둬서 진행 연차보다 나중 연차가 이미 만들어져 있는 경우도 소급되면 안 된다.
+            updates.recipientOverrides = backfillExistingTermOverrides(
               existingMember.recipientOverrides,
+              termFees.filter((f) => f.projectNumber === agg.projectNumber).map((f) => f.termNumber),
               targetTerm,
               // ??로 undefined일 때만 ""로 채운다 — 여기서 undefined를 그대로 두면 resolveMemberRecipientForTerm의
               // override?.recipientEmail ?? member.contactEmail 폴백이 "값 없음"으로 착각해 방금 바뀐
@@ -2836,8 +2846,14 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           researchLeadEmail: researchLeadEmail ?? existingProject.researchLeadEmail,
           // ??로 undefined일 때만 ""로 채운다 — 그대로 두면 resolveResearchLeadForTerm의 override?.email ??
           // researchLeadEmail 폴백이 "값 없음"으로 착각해 방금 바뀐 새 기본값으로 새어 들어가 버린다.
+          // "이전 연차"가 아니라 "이미 TermFee가 있는 연차"를 기준으로 고정한다 — 다년치 사업비를
+          // 미리 입력해둬서 진행 연차보다 나중 연차가 이미 만들어져 있는 경우도 소급되면 안 된다.
           researchLeadOverrides: leadChanged
-            ? backfillPriorTermOverrides(existingProject.researchLeadOverrides, nextCurrentTerm, (termNumber) => ({
+            ? backfillExistingTermOverrides(
+                existingProject.researchLeadOverrides,
+                termFees.filter((f) => f.projectNumber === existingProject.projectNumber).map((f) => f.termNumber),
+                nextCurrentTerm,
+                (termNumber) => ({
                 termNumber,
                 name: existingProject.researchLead ?? "",
                 email: existingProject.researchLeadEmail ?? "",
