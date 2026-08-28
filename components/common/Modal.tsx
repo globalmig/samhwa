@@ -24,10 +24,10 @@ export default function Modal({ title, onClose, size = "md", fixedHeight = false
   }, [onClose]);
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
+    // 바깥(회색) 영역은 클릭해도 닫히지 않는다 — 안에서 텍스트를 드래그로 선택하다 마우스를 바깥에서
+    // 놓기만 해도 모달이 닫혀버리는 사고가 잦았다. 이제 우측 상단 X 버튼·Esc 키·본문의 "취소"/"저장"
+    // 버튼으로만 닫힌다.
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
       <div className={`bg-white rounded-2xl shadow-2xl w-full ${sizeClass[size]} flex flex-col overflow-hidden ${fixedHeight ? "h-[85vh]" : "max-h-[90vh]"}`}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 shrink-0">
           <h2 className="text-base font-semibold text-slate-800">{title}</h2>
