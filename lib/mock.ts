@@ -3004,14 +3004,21 @@ export const policyHistory: PolicyHistoryEntry[] = [
 // 사용자/권한 관리
 // ============================================================
 
+export type Role = "ADMIN" | "ACCOUNTANT" | "SETTLEMENT" | "VIEWER";
+
 export interface SystemUser {
   id: string;
   name: string;
   email: string;
-  role: "ADMIN" | "ACCOUNTANT" | "SETTLEMENT" | "VIEWER";
-  status: "ACTIVE" | "INACTIVE";
+  role: Role;
+  // PENDING: 회원가입 신청 후 시스템 관리자 승인 대기 중 — 로그인 불가, 승인되면 ACTIVE로 전환.
+  status: "ACTIVE" | "INACTIVE" | "PENDING";
   lastLoginAt: string | null;
   registeredAt: string;
+  /** 로그인 비밀번호 (데모용 평문 저장 — 실제 서비스에서는 해시 저장 필요).
+   *  초기 시드 계정은 이 필드 없이 lib/auth.ts의 DEMO_PASSWORDS로 로그인하며,
+   *  회원가입/비밀번호 재설정으로 생성·변경된 계정만 이 필드를 갖는다. */
+  password?: string;
   /** 하이웍스 개인 메일 계정 (조회 전용 계정은 대상 아님) */
   hiworksEmail?: string;
   /** 하이웍스 메일 전용 비밀번호 (로그인 비밀번호 아님, SMTP 발송용) */
@@ -3028,6 +3035,57 @@ export const systemUsers: SystemUser[] = [
   { id: "u-004", name: "최담당", email: "choi.view@samhwa.co.kr", role: "VIEWER", status: "ACTIVE", lastLoginAt: "2024-11-28 14:22", registeredAt: "2023-06-01" },
   { id: "u-005", name: "정수정", email: "jung.acc@samhwa.co.kr", role: "ACCOUNTANT", status: "INACTIVE", lastLoginAt: "2024-09-05 11:00", registeredAt: "2022-09-01" },
 ];
+
+// ============================================================
+// 권한 설정 (페이지 접근 / 기능별 쓰기 권한) — [권한 설정](/admin/permissions)에서
+// 시스템 관리자가 화면에서 직접 편집할 수 있는 초기값. 실제 정책은 lib/store.ts의
+// pageAccess/writeAccess에 담겨 런타임에 바뀌며, 여기 값은 그 시드 데이터일 뿐이다.
+// ============================================================
+
+export const initialPageAccess: Record<string, Role[]> = {
+  "/":               ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "/projects":          ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
+  "/funding-agencies":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "/notice-templates":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "/institutions":      ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "/fees":           ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
+  "/fee-calculation":["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "/company-class":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "/emails":         ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
+  "/issues":         ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
+  "/unclaimed":      ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "/receivables":    ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "/settlements":    ["ADMIN", "SETTLEMENT"],
+  "/tax-invoices":   ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "/policy-history": ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "/audit-log":      ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
+  "/admin/users":    ["ADMIN"],
+  "/admin/permissions": ["ADMIN"],
+};
+
+export const initialWriteAccess: Record<string, Role[]> = {
+  fees:           ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "fees-info-edit": ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
+  "fees-sales":   ["ADMIN", "ACCOUNTANT"],
+  "fees-other-firm": ["ADMIN", "ACCOUNTANT"],
+  "company-class":["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  unclaimed:      ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  receivables:    ["ADMIN", "ACCOUNTANT"],
+  settlements:    ["ADMIN", "SETTLEMENT"],
+  "tax-invoices": ["ADMIN", "ACCOUNTANT"],
+  emails:         ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
+  "simple-notices": ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
+  projects:            ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "projects-delete":   ["ADMIN"],
+  "funding-agencies":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "notice-templates":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  "standard-attachments": ["ADMIN", "ACCOUNTANT"],
+  institutions:        ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  users:          ["ADMIN"],
+  issues:         ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
+  "issues-manage": ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+  notices:        ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
+};
 
 // ============================================================
 // 공지사항 (알림 - 회계담당자/전담기관 담당자 공유용)
