@@ -53,12 +53,14 @@ export function computeOverdueAlerts(receivables: Receivable[], projects: Projec
     .filter((x): x is OverdueAlert => x !== null);
 }
 
-// 이슈/메모 작성 시 선택한 수신 대상(담당자/회계담당자/전담기관 담당자 그룹 + 개인 지정)에 따라
-// 특정 사용자에게 알림을 보여줄지 판정. 아무것도 선택 안 했으면 담당자 규칙(위 isAlertVisibleToUser)만 적용.
-// 그룹 선택과 개인 지정은 배타적이지 않다 — 개인으로 지정된 사람은 그룹 선택 여부와 무관하게 항상 수신.
+// 이슈/메모 작성 시 선택한 수신 대상(과제담당자(정)/과제담당자(부)/회계담당자/전담기관 담당자 그룹 +
+// 개인 지정)에 따라 특정 사용자에게 알림을 보여줄지 판정. 아무것도 선택 안 했으면 담당자(정) 규칙
+// (위 isAlertVisibleToUser)만 적용. 그룹 선택과 개인 지정은 배타적이지 않다 — 개인으로 지정된 사람은
+// 그룹 선택 여부와 무관하게 항상 수신.
 export function isIssueVisibleToUser(
   issue: { recipientGroups?: IssueRecipientGroup[]; recipientUserIds?: string[] },
-  assignedManager: string | undefined,
+  assignedManagerPrimary: string | undefined,
+  assignedManagerDeputy: string | undefined,
   user: NotifiableUser | null | undefined
 ): boolean {
   if (!user || user.role === "VIEWER") return false;
@@ -69,7 +71,8 @@ export function isIssueVisibleToUser(
   const hasSelection = (issue.recipientGroups && issue.recipientGroups.length > 0) || (issue.recipientUserIds && issue.recipientUserIds.length > 0);
   const groups = hasSelection ? (issue.recipientGroups ?? []) : ["MANAGER" as const];
 
-  if (groups.includes("MANAGER") && isAlertVisibleToUser(assignedManager, user)) return true;
+  if (groups.includes("MANAGER") && isAlertVisibleToUser(assignedManagerPrimary, user)) return true;
+  if (groups.includes("MANAGER_DEPUTY") && isAlertVisibleToUser(assignedManagerDeputy, user)) return true;
   if (groups.includes("ACCOUNTANT") && user.role === "ACCOUNTANT") return true;
   if (groups.includes("SETTLEMENT") && user.role === "SETTLEMENT") return true;
   return false;
@@ -84,7 +87,7 @@ export interface IssueAlert {
 }
 
 // 헤더 알림에 쓰는 "미해결 이슈/메모" 목록 (수신 대상 필터링 전 전체 목록)
-export function computeIssueAlerts(issues: ProjectIssue[], projects: Project[]): (IssueAlert & { assignedManager?: string; recipientGroups?: IssueRecipientGroup[] })[] {
+export function computeIssueAlerts(issues: ProjectIssue[], projects: Project[]): (IssueAlert & { assignedManagerPrimary?: string; assignedManagerDeputy?: string; recipientGroups?: IssueRecipientGroup[] })[] {
   return issues
     .filter((i) => i.status !== "RESOLVED")
     .map((i) => {
@@ -95,7 +98,8 @@ export function computeIssueAlerts(issues: ProjectIssue[], projects: Project[]):
         projectName: project?.projectName ?? i.projectNumber,
         content: i.content,
         priority: i.priority,
-        assignedManager: project?.assignedManager,
+        assignedManagerPrimary: project?.assignedManagerPrimary,
+        assignedManagerDeputy: project?.assignedManager,
         recipientGroups: i.recipientGroups,
       };
     });

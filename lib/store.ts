@@ -910,7 +910,7 @@ export function applyInstitutionGradeToProjects(
         createdAt: now,
         priority: "HIGH",
         status: "OPEN",
-        recipientGroups: ["MANAGER", "ACCOUNTANT"],
+        recipientGroups: ["MANAGER", "MANAGER_DEPUTY", "ACCOUNTANT"],
         institutionName,
       });
     }
@@ -2115,7 +2115,7 @@ export function autoGenerateTermFees(projectId: string): void {
       createdAt: new Date().toISOString().replace("T", " ").slice(0, 16),
       priority: "HIGH",
       status: "OPEN",
-      recipientGroups: ["MANAGER", "ACCOUNTANT"],
+      recipientGroups: ["MANAGER", "MANAGER_DEPUTY", "ACCOUNTANT"],
     });
   }
 

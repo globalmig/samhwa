@@ -31,9 +31,10 @@ const inp = "text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-7
 const sel = `${inp} bg-white`;
 
 const RECIPIENT_OPTIONS: { value: IssueRecipientGroup; label: string }[] = [
-  { value: "MANAGER",    label: "담당자" },
-  { value: "ACCOUNTANT", label: "회계담당자 전체" },
-  { value: "SETTLEMENT", label: "전담기관 담당자 전체" },
+  { value: "MANAGER",        label: "과제담당자(정)" },
+  { value: "MANAGER_DEPUTY", label: "과제담당자(부)" },
+  { value: "ACCOUNTANT",     label: "회계담당자 전체" },
+  { value: "SETTLEMENT",     label: "전담기관 담당자 전체" },
 ];
 
 type EditDraft = {
@@ -268,7 +269,7 @@ export default function IssuesPage() {
             </div>
           </div>
           <div>
-            <p className="text-xs text-slate-500 mb-1.5">알림 받을 대상(전체) <span className="text-slate-400 font-normal">· 선택 안 하면 과제 담당자에게만 전달</span></p>
+            <p className="text-xs text-slate-500 mb-1.5">알림 받을 대상(전체) <span className="text-slate-400 font-normal">· 선택 안 하면 과제담당자(정)에게만 전달</span></p>
             <div className="flex items-center gap-3">
               {RECIPIENT_OPTIONS.map(({ value, label }) => (
                 <label key={value} className="flex items-center gap-1.5 cursor-pointer">

@@ -2971,7 +2971,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         createdAt: now,
         priority: "MEDIUM",
         status: "OPEN",
-        recipientGroups: ["MANAGER", "ACCOUNTANT"],
+        recipientGroups: ["MANAGER", "MANAGER_DEPUTY", "ACCOUNTANT"],
         noInstitution: true,
       });
       stageAlertCount++;
@@ -2990,7 +2990,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         createdAt: now,
         priority: "HIGH",
         status: "OPEN",
-        recipientGroups: ["MANAGER", "ACCOUNTANT"],
+        recipientGroups: ["MANAGER", "MANAGER_DEPUTY", "ACCOUNTANT"],
         noInstitution: true,
       });
       stageAlertCount++;
@@ -3006,7 +3006,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         createdAt: now,
         priority: "HIGH",
         status: "OPEN",
-        recipientGroups: ["MANAGER", "ACCOUNTANT"],
+        recipientGroups: ["MANAGER", "MANAGER_DEPUTY", "ACCOUNTANT"],
         noInstitution: true,
       });
       stageAlertCount++;
@@ -3033,7 +3033,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         createdAt: now,
         priority: "MEDIUM",
         status: "OPEN",
-        recipientGroups: ["MANAGER", "ACCOUNTANT"],
+        recipientGroups: ["MANAGER", "MANAGER_DEPUTY", "ACCOUNTANT"],
         noInstitution: true,
       });
       stageAlertCount++;
@@ -3051,7 +3051,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         createdAt: now,
         priority: "MEDIUM",
         status: "OPEN",
-        recipientGroups: ["MANAGER", "ACCOUNTANT"],
+        recipientGroups: ["MANAGER", "MANAGER_DEPUTY", "ACCOUNTANT"],
         noInstitution: true,
       });
       stageAlertCount++;
@@ -3077,7 +3077,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         createdAt: now,
         priority: "HIGH",
         status: "OPEN",
-        recipientGroups: ["MANAGER", "ACCOUNTANT"],
+        recipientGroups: ["MANAGER", "MANAGER_DEPUTY", "ACCOUNTANT"],
         noInstitution: true,
       });
       stageAlertCount++;

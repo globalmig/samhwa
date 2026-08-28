@@ -3055,7 +3055,10 @@ export const notices: Notice[] = [
 // 이슈/메모 관리
 // ============================================================
 
-export type IssueRecipientGroup = "MANAGER" | "ACCOUNTANT" | "SETTLEMENT";
+// MANAGER = 과제담당자(정, Project.assignedManagerPrimary) / MANAGER_DEPUTY = 과제담당자(부,
+// Project.assignedManager — 옛 이름 "삼화담당자"). 예전엔 "MANAGER" 하나로 부담당자만 가리켰는데,
+// 정담당자를 그룹으로 선택할 방법이 아예 없어 MANAGER의 의미를 정담당자로 바꾸고 부담당자용을 새로 추가했다.
+export type IssueRecipientGroup = "MANAGER" | "MANAGER_DEPUTY" | "ACCOUNTANT" | "SETTLEMENT";
 
 export interface ProjectIssue {
   id: string;

@@ -1614,10 +1614,11 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 </div>
               </div>
               <div>
-                <p className="text-xs text-slate-500 mb-1.5">알림 받을 대상(전체) <span className="text-slate-400 font-normal">· 선택 안 하면 과제 담당자에게만 전달</span></p>
+                <p className="text-xs text-slate-500 mb-1.5">알림 받을 대상(전체) <span className="text-slate-400 font-normal">· 선택 안 하면 과제담당자(정)에게만 전달</span></p>
                 <div className="flex items-center gap-3">
                   {([
-                    { value: "MANAGER", label: "담당자" },
+                    { value: "MANAGER", label: "과제담당자(정)" },
+                    { value: "MANAGER_DEPUTY", label: "과제담당자(부)" },
                     { value: "ACCOUNTANT", label: "회계담당자 전체" },
                     { value: "SETTLEMENT", label: "전담기관 담당자 전체" },
                   ] as const).map(({ value, label }) => (
@@ -1702,7 +1703,8 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                     <div className="flex items-center gap-3 flex-wrap">
                       <span className="text-xs text-slate-500 shrink-0">대상(전체)</span>
                       {([
-                        { value: "MANAGER", label: "담당자" },
+                        { value: "MANAGER", label: "과제담당자(정)" },
+                        { value: "MANAGER_DEPUTY", label: "과제담당자(부)" },
                         { value: "ACCOUNTANT", label: "회계담당자 전체" },
                         { value: "SETTLEMENT", label: "전담기관 담당자 전체" },
                       ] as const).map(({ value, label }) => (

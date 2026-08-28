@@ -98,7 +98,7 @@ export default function Header() {
     ? computeOverdueAlerts(receivables, projects).filter((a) => isAlertVisibleToUser(a.assignedManager, user) && !isDismissed(a.id))
     : [];
   const issueAlerts = user
-    ? computeIssueAlerts(projectIssues, projects).filter((i) => isIssueVisibleToUser(i, i.assignedManager, user) && !isDismissed(i.id))
+    ? computeIssueAlerts(projectIssues, projects).filter((i) => isIssueVisibleToUser(i, i.assignedManagerPrimary, i.assignedManagerDeputy, user) && !isDismissed(i.id))
     : [];
   const visibleNotices = notices.filter((n) => !isDismissed(n.id));
   const notifCount = [...overdueAlerts.map((a) => a.id), ...issueAlerts.map((i) => i.id), ...visibleNotices.map((n) => n.id)]
