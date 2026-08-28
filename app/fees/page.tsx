@@ -45,7 +45,7 @@ import { buildNoticeEmailHtml } from "@/lib/notice-email-html";
 import { applyManagerContactRows } from "@/lib/notice-contacts";
 import { useCanWrite } from "@/lib/permissions";
 import { getCurrentUser } from "@/lib/auth";
-import { resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows } from "@/lib/fee-calculator";
+import { resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, resolveResearchLeadEmailForTerm, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows } from "@/lib/fee-calculator";
 
 // 여러 이메일 문자열(각각 콤마 구분일 수 있음)을 하나로 합치고 중복을 제거한다 — 정산절차 안내
 // 공문은 책임자(researchLeadEmail)+실무자(recipientEmail) 두 필드를 합쳐서 기본 수신자로 쓴다.
@@ -2297,7 +2297,10 @@ export default function FeesPage() {
         projectName: project.projectName,
         agencyShortName: agency?.shortName ?? "",
         leadInstitutionName: project.leadInstitutionName,
-        recipientEmail: combineEmails(project.researchLeadEmail, leadMember ? resolveMemberRecipientForTerm(leadMember, project.currentTerm).recipientEmail : undefined),
+        recipientEmail: combineEmails(
+          resolveResearchLeadEmailForTerm(project, project.currentTerm),
+          leadMember ? resolveMemberRecipientForTerm(leadMember, project.currentTerm).recipientEmail : undefined,
+        ),
         statusRows,
         feeRows,
         templates,

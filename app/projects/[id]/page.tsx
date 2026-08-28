@@ -15,7 +15,7 @@ import {
   setTermOtherFirmHandled, setTermBillingType, setTermDates,
 } from "@/lib/store";
 import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type SystemUser, type EmailDispatch, type FeePolicy, type AnnualFinancials, EMPTY_NOTICE_TEMPLATE } from "@/lib/mock";
-import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, type CalcMember } from "@/lib/fee-calculator";
+import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveResearchLeadEmailForTerm, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, type CalcMember } from "@/lib/fee-calculator";
 import { fmtWonFull, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange } from "@/lib/utils";
 import { fmtValue, fieldLabel, describeOverrideChange } from "@/lib/audit-log-format";
 import StatusBadge from "@/components/common/StatusBadge";
@@ -2971,6 +2971,27 @@ function BillingBlock({
   const [editingRecipient, setEditingRecipient] = useState(false);
   const [recipientDraft, setRecipientDraft] = useState({ recipientName: "", recipientEmail: "", recipientPhone: "" });
 
+  // 책임자(연구책임자) 이메일 — 정산절차 안내 공문 발송 시 실무자와 함께 수신하는 주소. 연구책임자가
+  // 연차 중간에 바뀌는 경우가 있어 실무자와 동일한 방식(연차별 오버라이드)으로 이 연차에만 적용되는
+  // 값을 저장한다(오버라이드가 없으면 과제 기본 정보의 책임자이메일을 그대로 보여준다).
+  const baseLeadEmail = project.researchLeadEmail ?? "";
+  const resolvedLeadEmail = resolveResearchLeadEmailForTerm(project, termNumber);
+  const [editingLeadEmail, setEditingLeadEmail] = useState(false);
+  const [leadEmailDraft, setLeadEmailDraft] = useState("");
+
+  function startEditLeadEmail() {
+    setLeadEmailDraft(resolvedLeadEmail);
+    setEditingLeadEmail(true);
+  }
+
+  function saveLeadEmail() {
+    const others = (project.researchLeadEmailOverrides ?? []).filter((o) => o.termNumber !== termNumber);
+    const isDefault = leadEmailDraft === baseLeadEmail;
+    const next = isDefault ? others : [...others, { termNumber, email: leadEmailDraft }];
+    updateProject(project.id, { researchLeadEmailOverrides: next.length > 0 ? next : undefined });
+    setEditingLeadEmail(false);
+  }
+
   // 계산서발행 서류 요청 / 입금 확인 요청 — 첨부파일 없이 메일 본문 하나만 보내는 간단 안내 메일.
   const [simpleNotice, setSimpleNotice] = useState<SimpleNoticeTarget | null>(null);
   const termRangeForEmail = resolveTermDateRange(project, termNumber);
@@ -3191,6 +3212,37 @@ function BillingBlock({
       {unit.institutionId && (
         <p className="text-xs font-semibold text-slate-500">{unit.billingLabel}</p>
       )}
+
+      {/* 책임자(연구책임자) 이메일 — 정산절차 안내 공문에서만 실무자와 함께 수신한다. 연차 중간에
+          연구책임자가 바뀔 수 있어 실무자와 동일하게 이 연차에만 적용되는 값으로 저장한다(오버라이드가
+          없으면 과제 기본 정보의 책임자이메일을 그대로 보여준다). 과제 단위 값이라 RDA2처럼 연차가
+          기관별로 쪼개져 있어도(unit이 여러 개) 같은 연차면 항상 같은 값을 보여준다. */}
+      <div className="flex items-start gap-3">
+        <span className="text-xs font-semibold text-slate-600 w-24 shrink-0 pt-1.5">책임자</span>
+        {editingLeadEmail ? (
+          <div className="flex-1 flex flex-wrap items-center gap-2">
+            <input
+              value={leadEmailDraft}
+              onChange={(e) => setLeadEmailDraft(e.target.value)}
+              placeholder="email@example.com (여러 명은 콤마로 구분)"
+              className="w-64 text-xs border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
+            />
+            <button onClick={() => setEditingLeadEmail(false)}
+              className="px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
+            <button onClick={saveLeadEmail}
+              className="px-2.5 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">저장</button>
+          </div>
+        ) : (
+          <div className="flex-1 flex flex-wrap items-center gap-2 text-xs text-slate-700">
+            <span>{resolvedLeadEmail || "-"}</span>
+            {canEditInvoices && (
+              <button type="button" onClick={startEditLeadEmail} className="text-slate-400 hover:text-blue-600 transition-colors">
+                <FiEdit2 size={12} />
+              </button>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* 실무자(구 "수신자") — 공문 발송 대상 담당자명·이메일·연락처. 연차별로 담당자가 다를 수 있어
           이 연차에만 적용되는 값으로 저장한다(연차별 오버라이드가 없으면 참여기관의 기본 담당자 정보를
@@ -4639,7 +4691,10 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
             templates={noticeAgencyTemplates}
             statusRows={noticeStatusRows}
             feeRows={noticeFeeRows}
-            recipientEmail={combineEmails(project.researchLeadEmail, leadMember ? resolveMemberRecipientForTerm(leadMember, project.currentTerm).recipientEmail : undefined)}
+            recipientEmail={combineEmails(
+              resolveResearchLeadEmailForTerm(project, project.currentTerm),
+              leadMember ? resolveMemberRecipientForTerm(leadMember, project.currentTerm).recipientEmail : undefined,
+            )}
             docNumber={noticeDocNumber}
             issuedDate={noticeIssuedDate}
             senderUser={senderUser}

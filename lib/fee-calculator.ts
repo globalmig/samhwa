@@ -48,6 +48,17 @@ export function resolveMemberRecipientForTerm(
   };
 }
 
+// ─── 연차별 책임자 이메일 조회 ────────────────────────────────────────
+// 연구책임자가 연차 중간에 바뀌는 경우가 있어, 특정 연차만 다른 경우 researchLeadEmailOverrides에
+// 그 연차분만 따로 기록한다. 오버라이드가 없는 연차는 researchLeadEmail(기본값)을 쓴다.
+export function resolveResearchLeadEmailForTerm(
+  project: Pick<Project, "researchLeadEmail" | "researchLeadEmailOverrides">,
+  termNumber: number,
+): string {
+  const override = project.researchLeadEmailOverrides?.find((o) => o.termNumber === termNumber);
+  return override?.email ?? project.researchLeadEmail ?? "";
+}
+
 // ─── 연차별 과제코드 조회 ────────────────────────────────────────────
 // 연차마다 서로 다른 SH 코드를 쓴다(termCodes, autoGenerateTermFees가 연차가 새로 생길 때마다 발급).
 // termCodes 마이그레이션 이전에 등록된 과제는 1연차 코드가 projectCode에만 남아 있을 수 있어,
