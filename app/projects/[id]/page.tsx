@@ -856,7 +856,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">
                   책임자이메일 (기본값)
-                  <span className="ml-1 text-slate-400 font-normal">· 정산절차 안내 공문만 실무자와 함께 수신</span>
+                  <span className="ml-1 text-slate-400 font-normal">· 정산절차 안내 공문만 실무자와 함께 수신 · 연차별로 다르면 연차별 수수료 현황의 &quot;책임자&quot; 항목에서 개별 지정</span>
                 </label>
                 <input className={`${inp} w-full bg-white`} value={draft.researchLeadEmail ?? ""}
                   onChange={(e) => setDraft((p) => ({ ...p, researchLeadEmail: e.target.value }))}
