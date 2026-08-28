@@ -2297,7 +2297,7 @@ export default function FeesPage() {
         projectName: project.projectName,
         agencyShortName: agency?.shortName ?? "",
         leadInstitutionName: project.leadInstitutionName,
-        recipientEmail: combineEmails(project.researchLeadEmail, leadMember?.contactEmail),
+        recipientEmail: combineEmails(project.researchLeadEmail, leadMember ? resolveMemberRecipientForTerm(leadMember, project.currentTerm).recipientEmail : undefined),
         statusRows,
         feeRows,
         templates,

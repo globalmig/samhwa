@@ -4639,7 +4639,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
             templates={noticeAgencyTemplates}
             statusRows={noticeStatusRows}
             feeRows={noticeFeeRows}
-            recipientEmail={combineEmails(project.researchLeadEmail, leadMember?.contactEmail)}
+            recipientEmail={combineEmails(project.researchLeadEmail, leadMember ? resolveMemberRecipientForTerm(leadMember, project.currentTerm).recipientEmail : undefined)}
             docNumber={noticeDocNumber}
             issuedDate={noticeIssuedDate}
             senderUser={senderUser}
