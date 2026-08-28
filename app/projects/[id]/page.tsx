@@ -15,7 +15,7 @@ import {
   setTermOtherFirmHandled, setTermBillingType, setTermDates,
 } from "@/lib/store";
 import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type SystemUser, type EmailDispatch, type FeePolicy, type AnnualFinancials, EMPTY_NOTICE_TEMPLATE } from "@/lib/mock";
-import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveResearchLeadEmailForTerm, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, type CalcMember } from "@/lib/fee-calculator";
+import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, type CalcMember } from "@/lib/fee-calculator";
 import { fmtWonFull, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange } from "@/lib/utils";
 import { fmtValue, fieldLabel, describeOverrideChange } from "@/lib/audit-log-format";
 import StatusBadge from "@/components/common/StatusBadge";
@@ -847,8 +847,8 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">
-                  책임자이메일
-                  <span className="ml-1 text-slate-400 font-normal">· 정산절차 안내 공문만 실무자와 함께 수신</span>
+                  책임자이메일 (기본값)
+                  <span className="ml-1 text-slate-400 font-normal">· 정산절차 안내 공문만 실무자와 함께 수신 · 연차별로 다르면 연차별 수수료 현황의 &quot;책임자&quot; 항목에서 개별 지정</span>
                 </label>
                 <input className={`${inp} w-full bg-white`} value={draft.researchLeadEmail ?? ""}
                   onChange={(e) => setDraft((p) => ({ ...p, researchLeadEmail: e.target.value }))}
@@ -2971,25 +2971,25 @@ function BillingBlock({
   const [editingRecipient, setEditingRecipient] = useState(false);
   const [recipientDraft, setRecipientDraft] = useState({ recipientName: "", recipientEmail: "", recipientPhone: "" });
 
-  // 책임자(연구책임자) 이메일 — 정산절차 안내 공문 발송 시 실무자와 함께 수신하는 주소. 연구책임자가
+  // 책임자(연구책임자) 이름·이메일 — 정산절차 안내 공문 발송 시 실무자와 함께 수신하는 정보. 연구책임자가
   // 연차 중간에 바뀌는 경우가 있어 실무자와 동일한 방식(연차별 오버라이드)으로 이 연차에만 적용되는
-  // 값을 저장한다(오버라이드가 없으면 과제 기본 정보의 책임자이메일을 그대로 보여준다).
-  const baseLeadEmail = project.researchLeadEmail ?? "";
-  const resolvedLeadEmail = resolveResearchLeadEmailForTerm(project, termNumber);
-  const [editingLeadEmail, setEditingLeadEmail] = useState(false);
-  const [leadEmailDraft, setLeadEmailDraft] = useState("");
+  // 값을 저장한다(오버라이드가 없으면 과제 기본 정보의 책임자이름·이메일을 그대로 보여준다).
+  const baseLead = { name: project.researchLead ?? "", email: project.researchLeadEmail ?? "" };
+  const resolvedLead = resolveResearchLeadForTerm(project, termNumber);
+  const [editingLead, setEditingLead] = useState(false);
+  const [leadDraft, setLeadDraft] = useState({ name: "", email: "" });
 
-  function startEditLeadEmail() {
-    setLeadEmailDraft(resolvedLeadEmail);
-    setEditingLeadEmail(true);
+  function startEditLead() {
+    setLeadDraft(resolvedLead);
+    setEditingLead(true);
   }
 
-  function saveLeadEmail() {
-    const others = (project.researchLeadEmailOverrides ?? []).filter((o) => o.termNumber !== termNumber);
-    const isDefault = leadEmailDraft === baseLeadEmail;
-    const next = isDefault ? others : [...others, { termNumber, email: leadEmailDraft }];
-    updateProject(project.id, { researchLeadEmailOverrides: next.length > 0 ? next : undefined });
-    setEditingLeadEmail(false);
+  function saveLead() {
+    const others = (project.researchLeadOverrides ?? []).filter((o) => o.termNumber !== termNumber);
+    const isDefault = leadDraft.name === baseLead.name && leadDraft.email === baseLead.email;
+    const next = isDefault ? others : [...others, { termNumber, name: leadDraft.name, email: leadDraft.email }];
+    updateProject(project.id, { researchLeadOverrides: next.length > 0 ? next : undefined });
+    setEditingLead(false);
   }
 
   // 계산서발행 서류 요청 / 입금 확인 요청 — 첨부파일 없이 메일 본문 하나만 보내는 간단 안내 메일.
@@ -3213,30 +3213,38 @@ function BillingBlock({
         <p className="text-xs font-semibold text-slate-500">{unit.billingLabel}</p>
       )}
 
-      {/* 책임자(연구책임자) 이메일 — 정산절차 안내 공문에서만 실무자와 함께 수신한다. 연차 중간에
+      {/* 책임자(연구책임자) 이름·이메일 — 정산절차 안내 공문에서만 실무자와 함께 수신한다. 연차 중간에
           연구책임자가 바뀔 수 있어 실무자와 동일하게 이 연차에만 적용되는 값으로 저장한다(오버라이드가
-          없으면 과제 기본 정보의 책임자이메일을 그대로 보여준다). 과제 단위 값이라 RDA2처럼 연차가
+          없으면 과제 기본 정보의 책임자이름·이메일을 그대로 보여준다). 과제 단위 값이라 RDA2처럼 연차가
           기관별로 쪼개져 있어도(unit이 여러 개) 같은 연차면 항상 같은 값을 보여준다. */}
       <div className="flex items-start gap-3">
         <span className="text-xs font-semibold text-slate-600 w-24 shrink-0 pt-1.5">책임자</span>
-        {editingLeadEmail ? (
+        {editingLead ? (
           <div className="flex-1 flex flex-wrap items-center gap-2">
             <input
-              value={leadEmailDraft}
-              onChange={(e) => setLeadEmailDraft(e.target.value)}
-              placeholder="email@example.com (여러 명은 콤마로 구분)"
-              className="w-64 text-xs border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
+              value={leadDraft.name}
+              onChange={(e) => setLeadDraft((p) => ({ ...p, name: e.target.value }))}
+              placeholder="연구책임자명"
+              className="w-28 text-xs border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
             />
-            <button onClick={() => setEditingLeadEmail(false)}
+            <input
+              value={leadDraft.email}
+              onChange={(e) => setLeadDraft((p) => ({ ...p, email: e.target.value }))}
+              placeholder="email@example.com (여러 명은 콤마로 구분)"
+              className="w-48 text-xs border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
+            />
+            <button onClick={() => setEditingLead(false)}
               className="px-2.5 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
-            <button onClick={saveLeadEmail}
+            <button onClick={saveLead}
               className="px-2.5 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">저장</button>
           </div>
         ) : (
           <div className="flex-1 flex flex-wrap items-center gap-2 text-xs text-slate-700">
-            <span>{resolvedLeadEmail || "-"}</span>
+            <span>{resolvedLead.name || "-"}</span>
+            <span className="text-slate-300">·</span>
+            <span>{resolvedLead.email || "-"}</span>
             {canEditInvoices && (
-              <button type="button" onClick={startEditLeadEmail} className="text-slate-400 hover:text-blue-600 transition-colors">
+              <button type="button" onClick={startEditLead} className="text-slate-400 hover:text-blue-600 transition-colors">
                 <FiEdit2 size={12} />
               </button>
             )}
@@ -4567,7 +4575,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
     { label: "대상기간", value: `${fmtDate(project.firstStartDate ?? project.startDate)} ~ ${fmtDate(project.finalEndDate ?? project.endDate)}` },
     { label: "정산구분", value: leadMember?.settlementType ?? "위탁정산" },
     { label: "주관연구개발기관", value: project.leadInstitutionName },
-    { label: "연구책임자", value: project.researchLead ?? "—" },
+    { label: "연구책임자", value: resolveResearchLeadForTerm(project, project.currentTerm).name || "—" },
     { label: "공동연구개발기관수", value: `${coInstitutionCount}개` },
   ];
   const noticeSeq = emailDispatches.filter((e) => e.emailType === "SETTLEMENT_NOTICE").length + 1;
@@ -4692,7 +4700,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
             statusRows={noticeStatusRows}
             feeRows={noticeFeeRows}
             recipientEmail={combineEmails(
-              resolveResearchLeadEmailForTerm(project, project.currentTerm),
+              resolveResearchLeadForTerm(project, project.currentTerm).email,
               leadMember ? resolveMemberRecipientForTerm(leadMember, project.currentTerm).recipientEmail : undefined,
             )}
             docNumber={noticeDocNumber}

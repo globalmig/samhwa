@@ -45,7 +45,7 @@ import { buildNoticeEmailHtml } from "@/lib/notice-email-html";
 import { applyManagerContactRows } from "@/lib/notice-contacts";
 import { useCanWrite } from "@/lib/permissions";
 import { getCurrentUser } from "@/lib/auth";
-import { resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, resolveResearchLeadEmailForTerm, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows } from "@/lib/fee-calculator";
+import { resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows } from "@/lib/fee-calculator";
 
 // 여러 이메일 문자열(각각 콤마 구분일 수 있음)을 하나로 합치고 중복을 제거한다 — 정산절차 안내
 // 공문은 책임자(researchLeadEmail)+실무자(recipientEmail) 두 필드를 합쳐서 기본 수신자로 쓴다.
@@ -2283,7 +2283,7 @@ export default function FeesPage() {
         { label: "대상기간", value: `${fmtDate(project.firstStartDate ?? project.startDate)} ~ ${fmtDate(project.finalEndDate ?? project.endDate)}` },
         { label: "정산구분", value: leadMember?.settlementType ?? "위탁정산" },
         { label: "주관연구개발기관", value: project.leadInstitutionName },
-        { label: "연구책임자", value: project.researchLead ?? "—" },
+        { label: "연구책임자", value: resolveResearchLeadForTerm(project, project.currentTerm).name || "—" },
         { label: "공동연구개발기관수", value: `${coInstitutionCount}개` },
       ];
       const feeRows: NoticeStatusRow[] = buildNoticeFeeRows(
@@ -2298,7 +2298,7 @@ export default function FeesPage() {
         agencyShortName: agency?.shortName ?? "",
         leadInstitutionName: project.leadInstitutionName,
         recipientEmail: combineEmails(
-          resolveResearchLeadEmailForTerm(project, project.currentTerm),
+          resolveResearchLeadForTerm(project, project.currentTerm).email,
           leadMember ? resolveMemberRecipientForTerm(leadMember, project.currentTerm).recipientEmail : undefined,
         ),
         statusRows,

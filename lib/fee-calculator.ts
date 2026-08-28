@@ -48,15 +48,18 @@ export function resolveMemberRecipientForTerm(
   };
 }
 
-// ─── 연차별 책임자 이메일 조회 ────────────────────────────────────────
-// 연구책임자가 연차 중간에 바뀌는 경우가 있어, 특정 연차만 다른 경우 researchLeadEmailOverrides에
-// 그 연차분만 따로 기록한다. 오버라이드가 없는 연차는 researchLeadEmail(기본값)을 쓴다.
-export function resolveResearchLeadEmailForTerm(
-  project: Pick<Project, "researchLeadEmail" | "researchLeadEmailOverrides">,
+// ─── 연차별 책임자(연구책임자) 이름·이메일 조회 ───────────────────────
+// 연구책임자가 연차 중간에 바뀌는 경우가 있어, 특정 연차만 다른 경우 researchLeadOverrides에
+// 그 연차분만 따로 기록한다. 오버라이드가 없는 연차는 researchLead/researchLeadEmail(기본값)을 쓴다.
+export function resolveResearchLeadForTerm(
+  project: Pick<Project, "researchLead" | "researchLeadEmail" | "researchLeadOverrides">,
   termNumber: number,
-): string {
-  const override = project.researchLeadEmailOverrides?.find((o) => o.termNumber === termNumber);
-  return override?.email ?? project.researchLeadEmail ?? "";
+): { name: string; email: string } {
+  const override = project.researchLeadOverrides?.find((o) => o.termNumber === termNumber);
+  return {
+    name: override?.name ?? project.researchLead ?? "",
+    email: override?.email ?? project.researchLeadEmail ?? "",
+  };
 }
 
 // ─── 연차별 과제코드 조회 ────────────────────────────────────────────

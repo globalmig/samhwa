@@ -851,6 +851,27 @@ function resolveStageStructure(
   };
 }
 
+// 실무자·책임자 연락처는 엑셀에 "몇 연차부터 적용"이라는 개념이 없어(연차별기관별 시트는 항상 그
+// 시점의 최신 값 한 줄만 담는다) 재업로드 때마다 기본값(contactEmail/researchLead 등)을 그대로
+// 덮어썼다. 그 기본값은 "오버라이드가 없는 모든 연차"의 폴백이기도 해서, 예전엔 최신 연차 정보로
+// 재업로드할 때마다 오버라이드가 없던 과거 연차까지 실무자·책임자 정보가 소급으로 바뀌는 버그가
+// 있었다. 그래서 기본값을 새 값으로 덮어쓰기 전에, 지금 이 엑셀이 반영하는 연차(targetTerm) 이전
+// 연차 중 아직 자체 오버라이드가 없는 연차만 옛 값으로 고정해두고 나서 기본값을 바꾼다 — 이러면
+// 과거 연차는 계속 옛 값으로 남고, targetTerm부터는 새 기본값이 적용된다.
+function backfillPriorTermOverrides<O extends { termNumber: number }>(
+  existingOverrides: O[] | undefined,
+  targetTerm: number,
+  makeOverride: (termNumber: number) => O,
+): O[] | undefined {
+  const covered = new Set((existingOverrides ?? []).map((o) => o.termNumber));
+  const backfilled: O[] = [];
+  for (let t = 1; t < targetTerm; t++) {
+    if (!covered.has(t)) backfilled.push(makeOverride(t));
+  }
+  if (backfilled.length === 0) return existingOverrides;
+  return [...(existingOverrides ?? []), ...backfilled].sort((a, b) => a.termNumber - b.termNumber);
+}
+
 // 엑셀에 담긴 과제 중 이미 등록된 과제를, 진행중인 연차(currentTerm)와 비교해
 // 신규/다음연차/동일연차/과거연차로 분류한다 (신규 과제는 여기서 다루지 않는다).
 function computeProjectUpdates(
@@ -2480,6 +2501,11 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           // 과제번호 변경으로 판단 — 새로 만들지 않고 기존 과제를 그대로 갱신한다. updateProject의
           // 변경이력 기록이 "이전 과제번호 → 새 과제번호"를 감사로그에 자동으로 남긴다.
           // 과제코드는 시스템이 최초 등록 시 자동으로 매긴 값이라 여기서는 건드리지 않는다.
+          // 책임자 이름·이메일이 이번 엑셀 값으로 바뀌는 경우, 그 값이 반영되는 연차(currentTerm)
+          // 이전 연차는 옛 값으로 고정해 소급 변경을 막는다.
+          const leadChanged =
+            (researchLead !== undefined && researchLead !== renamedFrom.researchLead) ||
+            (researchLeadEmail !== undefined && researchLeadEmail !== renamedFrom.researchLeadEmail);
           updateProject(renamedFrom.id, {
             projectNumber: row.projectNumber,
             projectName: row.projectName || renamedFrom.projectName,
@@ -2509,6 +2535,13 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             assignedManagerPrimaryHistory: mergeTermHistory(renamedFrom.assignedManagerPrimaryHistory, assignedManagerPrimaryHistory),
             researchLead: researchLead ?? renamedFrom.researchLead,
             researchLeadEmail: researchLeadEmail ?? renamedFrom.researchLeadEmail,
+            researchLeadOverrides: leadChanged
+              ? backfillPriorTermOverrides(renamedFrom.researchLeadOverrides, currentTerm, (termNumber) => ({
+                  termNumber,
+                  name: renamedFrom.researchLead,
+                  email: renamedFrom.researchLeadEmail,
+                }))
+              : renamedFrom.researchLeadOverrides,
             agencyAssignedAt: agencyAssignedAt ?? renamedFrom.agencyAssignedAt,
             internalAssignedAt: internalAssignedAt ?? renamedFrom.internalAssignedAt,
           });
@@ -2684,8 +2717,22 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           }
         }
         // "실무자 메일주소" 컬럼에 값이 있을 때만 덮어쓴다 — 비어 있으면 화면에서 직접 입력해둔
-        // 기존 실무자 이메일을 그대로 보존한다.
+        // 기존 실무자 이메일을 그대로 보존한다. 값이 실제로 달라지면, 이번 엑셀이 반영하는
+        // 연차(targetTerm) 이전 연차는 옛 연락처로 고정해 소급 변경을 막는다.
         if (agg.contactEmail) {
+          if (agg.contactEmail !== existingMember.contactEmail) {
+            const targetTerm = projectMaxTerm.get(normNum) ?? 1;
+            updates.recipientOverrides = backfillPriorTermOverrides(
+              existingMember.recipientOverrides,
+              targetTerm,
+              (termNumber) => ({
+                termNumber,
+                recipientName: existingMember.contactName,
+                recipientEmail: existingMember.contactEmail,
+                recipientPhone: existingMember.contactPhone,
+              }),
+            );
+          }
           updates.contactEmail = agg.contactEmail;
         }
 
@@ -2782,6 +2829,12 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         const assignedManagerPrimaryHistory = buildAssignedManagerPrimaryHistory(scalarInfo, managerNameResolutions, users);
         const resolvedAssignedManagerPrimary = scalarInfo?.assignedManagersPrimaryByTerm.get(nextCurrentTerm) ?? assignedManagerPrimaryFallback;
 
+        // 책임자 이름·이메일이 이번 엑셀 값으로 바뀌는 경우, 그 값이 반영되는 연차(nextCurrentTerm)
+        // 이전 연차는 옛 값으로 고정해 소급 변경을 막는다(위 신규/이름변경 과제 분기와 동일한 원칙).
+        const leadChanged =
+          (researchLead !== undefined && researchLead !== existingProject.researchLead) ||
+          (researchLeadEmail !== undefined && researchLeadEmail !== existingProject.researchLeadEmail);
+
         Object.assign(updates, {
           currentTerm: nextCurrentTerm,
           projectCategory,
@@ -2797,6 +2850,13 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           assignedManagerPrimaryHistory: mergeTermHistory(existingProject.assignedManagerPrimaryHistory, assignedManagerPrimaryHistory),
           researchLead: researchLead ?? existingProject.researchLead,
           researchLeadEmail: researchLeadEmail ?? existingProject.researchLeadEmail,
+          researchLeadOverrides: leadChanged
+            ? backfillPriorTermOverrides(existingProject.researchLeadOverrides, nextCurrentTerm, (termNumber) => ({
+                termNumber,
+                name: existingProject.researchLead,
+                email: existingProject.researchLeadEmail,
+              }))
+            : existingProject.researchLeadOverrides,
           agencyAssignedAt: agencyAssignedAt ?? existingProject.agencyAssignedAt,
           internalAssignedAt: internalAssignedAt ?? existingProject.internalAssignedAt,
         });

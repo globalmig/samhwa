@@ -541,10 +541,11 @@ export interface Project {
   // 정산절차 안내 공문만 책임자+실무자 모두에게 보내고, 그 외 공문은 실무자에게만 보낸다.
   // 여러 명이면 콤마(,)로 구분해서 한 문자열에 담는다.
   researchLeadEmail?: string;
-  // 연차별 책임자 이메일 오버라이드 — 연구책임자가 연차 중간에 바뀌는 등으로 특정 연차만 다른 경우
-  // 여기 그 연차분만 따로 기록한다. 오버라이드가 없는 연차는 researchLeadEmail(기본값)을 쓴다.
-  // resolveResearchLeadEmailForTerm(fee-calculator.ts) 참고 — ProjectMember.recipientOverrides와 동일한 방식.
-  researchLeadEmailOverrides?: { termNumber: number; email: string }[];
+  // 연차별 책임자(연구책임자) 이름·이메일 오버라이드 — 연구책임자가 연차 중간에 바뀌는 등으로 특정
+  // 연차만 다른 경우 여기 그 연차분만 따로 기록한다. 오버라이드가 없는 연차는 researchLead/
+  // researchLeadEmail(기본값)을 쓴다. resolveResearchLeadForTerm(fee-calculator.ts) 참고 —
+  // ProjectMember.recipientOverrides와 동일한 방식.
+  researchLeadOverrides?: ResearchLeadOverride[];
   // 과제코드(SH+6자리 일련번호) — 과제 등록 시(=1연차) 발급된 값. 과제 전체가 공유하던 예전 방식과
   // 달리, 연차마다 서로 다른 코드가 필요해(termCodes) 이 값은 이제 "1연차 코드"의 의미로만 남는다.
   // termCodes 마이그레이션 이전에 등록된 과제는 termCodes가 비어 있을 수 있어, 그 경우 1연차 조회 시
@@ -1017,6 +1018,12 @@ export interface RecipientOverride {
   recipientName?: string;
   recipientEmail?: string;
   recipientPhone?: string;
+}
+
+export interface ResearchLeadOverride {
+  termNumber: number;
+  name?: string;
+  email?: string;
 }
 
 export interface ProjectMember {
