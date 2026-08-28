@@ -1,64 +1,69 @@
 "use client";
 
 import { useAuth } from "./auth";
+import { useStore, getPageAccess, getWriteAccess } from "./store";
+import type { Role } from "./mock";
 
-type Role = "ADMIN" | "ACCOUNTANT" | "SETTLEMENT" | "VIEWER";
+export type { Role };
 
-// ─── 페이지 접근 권한 ────────────────────────────────────────
-const PAGE_ACCESS: Record<string, Role[]> = {
-  "/":               ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  "/projects":          ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
-  "/funding-agencies":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  "/notice-templates":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  "/institutions":      ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  "/fees":           ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
-  "/fee-calculation":["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  "/company-class":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  "/emails":         ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
-  "/issues":         ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
-  "/unclaimed":      ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  "/receivables":    ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  "/settlements":    ["ADMIN", "SETTLEMENT"],
-  "/tax-invoices":   ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  "/policy-history": ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  "/audit-log":      ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
-  "/admin/users":    ["ADMIN"],
-};
+// 로그인 없이 접근 가능한 인증 관련 페이지 (AuthGuard·LayoutShell에서 공통으로 참조)
+export const PUBLIC_AUTH_PATHS = ["/login", "/signup", "/find-id", "/find-password"];
 
-// ─── 쓰기(생성/수정/삭제) 권한 ──────────────────────────────
-const WRITE_ACCESS: Record<string, Role[]> = {
-  fees:           ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  // 매출발행·매출취소·수금관리: 전담기관 담당자·조회전용은 입력 불가
-  "fees-sales":   ["ADMIN", "ACCOUNTANT"],
-  // 타회계법인 진행 여부 체크: 시스템관리자·회계담당자만 설정 가능
-  "fees-other-firm": ["ADMIN", "ACCOUNTANT"],
-  "company-class":["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  unclaimed:      ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  // 수금관리 입력: 전담기관 담당자는 입력 불가(조회만)
-  receivables:    ["ADMIN", "ACCOUNTANT"],
-  settlements:    ["ADMIN", "SETTLEMENT"],
-  // 세금계산서 발행·취소(매출관리): 전담기관 담당자는 입력 불가(조회만)
-  "tax-invoices": ["ADMIN", "ACCOUNTANT"],
-  // 공문 발송(세금계산서·정산절차 안내 등): 회계담당자만 발송 가능 — 전담기관 담당자(SETTLEMENT)는 발송 불가
-  emails:         ["ADMIN", "ACCOUNTANT"],
-  // 계산서발행 서류 요청·입금 확인 요청(첨부 없는 간단 안내 메일): 금액 확정이나 발행 권한과 무관한
-  // 단순 요청/독촉 메일이라 전담기관 담당자·조회전용도 (개별/일괄) 발송할 수 있다.
-  "simple-notices": ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
-  projects:            ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  // 과제 전체 삭제(연쇄적으로 참여기관·수수료·세금계산서 등 전부 삭제됨)는 되돌릴 수 없어 시스템관리자만 가능 —
-  // 연차 단위 삭제는 훨씬 국지적이라 일반 수수료 편집 권한(projects)만으로 충분하다.
-  "projects-delete":   ["ADMIN"],
-  "funding-agencies":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  "notice-templates":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  // 사업자등록증·통장사본(공통 첨부 파일): 회계담당자·시스템관리자만 등록/교체 가능 — 전담기관 담당자는 조회만
-  "standard-attachments": ["ADMIN", "ACCOUNTANT"],
-  institutions:        ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  users:          ["ADMIN"],
-  issues:         ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
-  // 이슈 수정·삭제·상태변경: 조회전용은 등록만 가능하고 관리는 불가
-  "issues-manage": ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  notices:        ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-};
+// 페이지 접근 권한(pageAccess)·기능별 쓰기 권한(writeAccess)의 실제 값은 lib/store.ts에서
+// 관리한다 — [권한 설정](/admin/permissions)에서 시스템 관리자가 화면으로 편집하면 즉시
+// 반영돼야 하므로, 코드에 고정된 상수가 아니라 store의 live 상태를 그때그때 읽는다.
+// 초기값은 lib/mock.ts의 initialPageAccess/initialWriteAccess를 참고.
+
+// ─── [권한 설정] 화면에 쓰이는 라벨 카탈로그 ─────────────────────
+// 여기 없는 키가 store에 남아 있어도 동작에는 문제 없다(그냥 화면에 행이 안 뜰 뿐) — 이 목록은
+// 어떤 페이지/기능이 존재하는지에 대한 화면 표시용 메타데이터일 뿐, 권한 판정 로직과는 무관하다.
+export const PAGE_ACCESS_CATALOG: { key: string; label: string }[] = [
+  { key: "/", label: "통합 대시보드" },
+  { key: "/projects", label: "과제 전체조회" },
+  { key: "/fees", label: "수수료 청구 관리" },
+  { key: "/fee-calculation", label: "수수료 계산" },
+  { key: "/company-class", label: "수수료 기준 관리" },
+  { key: "/funding-agencies", label: "전담기관 관리" },
+  { key: "/notice-templates", label: "공문 양식 관리" },
+  { key: "/institutions", label: "수행기관관리" },
+  { key: "/emails", label: "공문 발송이력" },
+  { key: "/issues", label: "이슈현황" },
+  { key: "/unclaimed", label: "미청구 관리" },
+  { key: "/receivables", label: "수금관리 현황" },
+  { key: "/settlements", label: "기관 정산" },
+  { key: "/tax-invoices", label: "세금계산서 현황" },
+  { key: "/policy-history", label: "정책 변경이력" },
+  { key: "/audit-log", label: "전체 변경이력" },
+  { key: "/admin/users", label: "권한관리(사용자)" },
+  { key: "/admin/permissions", label: "권한 설정" },
+];
+
+export const WRITE_ACCESS_CATALOG: { key: string; label: string; group: string }[] = [
+  { key: "projects", label: "과제 관리 편집", group: "과제 · 수수료" },
+  { key: "projects-delete", label: "과제 전체 삭제", group: "과제 · 수수료" },
+  { key: "fees", label: "수수료청구관리 편집", group: "과제 · 수수료" },
+  { key: "fees-info-edit", label: "과제 정보수정(수신자·담당자·등록일)", group: "과제 · 수수료" },
+  { key: "fees-sales", label: "매출발행·매출취소·수금관리", group: "과제 · 수수료" },
+  { key: "fees-other-firm", label: "타회계법인 진행 여부 체크", group: "과제 · 수수료" },
+  { key: "company-class", label: "수수료 기준 관리", group: "과제 · 수수료" },
+
+  { key: "unclaimed", label: "미청구 관리", group: "채권 · 정산" },
+  { key: "receivables", label: "수금관리 입력", group: "채권 · 정산" },
+  { key: "settlements", label: "정산 관리", group: "채권 · 정산" },
+  { key: "tax-invoices", label: "세금계산서 발행·취소", group: "채권 · 정산" },
+
+  { key: "emails", label: "공문 발송(세금계산서·정산절차 안내 등)", group: "공문 · 안내" },
+  { key: "simple-notices", label: "간단 안내 메일 발송(서류요청·입금확인)", group: "공문 · 안내" },
+  { key: "notice-templates", label: "공문 양식 관리", group: "공문 · 안내" },
+  { key: "notices", label: "공지사항 게시(헤더 알림)", group: "공문 · 안내" },
+
+  { key: "funding-agencies", label: "전담기관 관리", group: "기관 · 시스템" },
+  { key: "institutions", label: "수행기관 관리", group: "기관 · 시스템" },
+  { key: "standard-attachments", label: "사업자등록증·통장사본 관리", group: "기관 · 시스템" },
+  { key: "users", label: "사용자 계정 관리", group: "기관 · 시스템" },
+  { key: "issues", label: "이슈 등록", group: "기관 · 시스템" },
+  { key: "issues-manage", label: "이슈 수정·삭제·상태변경", group: "기관 · 시스템" },
+];
 
 // 로그인/접근거부 시 이동할 역할별 기본 페이지 (VIEWER는 통합 대시보드 비노출)
 export function defaultLandingPath(role: Role | undefined): string {
@@ -70,14 +75,14 @@ export function canAccessPage(role: Role | undefined, pathname: string): boolean
   if (!role) return false;
   // 동적 경로 처리: /projects/xxx → /projects 기준 체크
   const base = pathname === "/" ? "/" : `/${pathname.split("/")[1]}`;
-  const allowed = PAGE_ACCESS[base];
+  const allowed = getPageAccess()[base];
   if (!allowed) return true; // 명시되지 않은 페이지는 허용
   return allowed.includes(role);
 }
 
 export function canWriteDomain(role: Role | undefined, domain: string): boolean {
   if (!role) return false;
-  const allowed = WRITE_ACCESS[domain];
+  const allowed = getWriteAccess()[domain];
   if (!allowed) return false;
   return allowed.includes(role);
 }
@@ -85,7 +90,7 @@ export function canWriteDomain(role: Role | undefined, domain: string): boolean 
 // 사이드바 필터용: 해당 href에 접근 가능한 역할 목록
 export function allowedRolesForPath(pathname: string): Role[] {
   const base = pathname === "/" ? "/" : `/${pathname.split("/")[1]}`;
-  return PAGE_ACCESS[base] ?? (["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"] as Role[]);
+  return getPageAccess()[base] ?? (["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"] as Role[]);
 }
 
 // ─── React Hooks ─────────────────────────────────────────────
@@ -93,6 +98,8 @@ export function allowedRolesForPath(pathname: string): Role[] {
 /** 특정 도메인에 쓰기 권한이 있는지 확인 */
 export function useCanWrite(domain: string): boolean {
   const { user } = useAuth();
+  // [권한 설정]에서 편집한 내용이 이 값을 쓰는 컴포넌트에 즉시 반영되도록 store 변경을 구독한다.
+  useStore();
   return canWriteDomain(user?.role as Role | undefined, domain);
 }
 

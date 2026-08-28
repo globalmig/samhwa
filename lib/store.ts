@@ -22,6 +22,9 @@ import {
   notices as initialNotices,
   standardAttachments as initialStandardAttachments,
   COMPANY_INFO as initialCompanyInfo,
+  initialPageAccess,
+  initialWriteAccess,
+  type Role,
   type CompanyInfo,
   type Institution,
   type Project,
@@ -87,6 +90,7 @@ export const ENTITY_NAMES: Record<string, string> = {
   feeInvoiceTemplate: "수수료 청구서 양식",
   simpleNoticeTemplate: "간단 안내 메일 양식",
   companyInfo: "공문 발신 회사 정보",
+  permission: "권한 설정",
 };
 
 // ============================================================
@@ -117,6 +121,10 @@ interface StoreState {
   simpleNoticeTemplates: SimpleNoticeTemplateEntry[];
   standardAttachments: StandardAttachment[];
   companyInfo: CompanyInfo;
+  // [권한 설정](/admin/permissions)에서 시스템 관리자가 역할별로 편집하는 페이지 접근/기능별 쓰기 권한.
+  // lib/permissions.ts의 canAccessPage·canWriteDomain이 이 값을 참조한다.
+  pageAccess: Record<string, Role[]>;
+  writeAccess: Record<string, Role[]>;
 }
 
 const INITIAL_AUDIT_LOG: AuditEntry[] = [
@@ -260,6 +268,8 @@ let _state: StoreState = {
   simpleNoticeTemplates: [...initialSimpleNoticeTemplates],
   standardAttachments: [...initialStandardAttachments],
   companyInfo: { ...initialCompanyInfo },
+  pageAccess: Object.fromEntries(Object.entries(initialPageAccess).map(([k, v]) => [k, [...v]])),
+  writeAccess: Object.fromEntries(Object.entries(initialWriteAccess).map(([k, v]) => [k, [...v]])),
 };
 
 const _listeners = new Set<() => void>();
@@ -1445,6 +1455,12 @@ export function updateCompanyInfo(data: Partial<CompanyInfo>): void {
 // USERS
 // ============================================================
 
+/** 로그인/아이디·비밀번호 찾기 등 React 훅 바깥(lib/auth.ts)에서 현재 사용자 목록을
+ *  동기적으로 읽기 위한 getter — useStore()는 훅이라 컴포넌트 바깥에서 쓸 수 없다. */
+export function getUsers(): SystemUser[] {
+  return _state.users;
+}
+
 export function addUser(data: Omit<SystemUser, "id">): SystemUser {
   const item: SystemUser = { ...data, id: genId("u") };
   _state = { ..._state, users: [..._state.users, item] };
@@ -1458,7 +1474,17 @@ export function updateUser(id: string, data: Partial<SystemUser>): void {
   if (!before) return;
   const after = { ...before, ...data };
   _state = { ..._state, users: _state.users.map((u) => (u.id === id ? after : u)) };
-  record("user", id, after.name, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
+
+  // 비밀번호는 변경이력(감사로그)에 원문이 남지 않도록 마스킹한다 — 감사로그는 VIEWER 권한도
+  // 조회 가능해 회원가입/비밀번호 재설정 시 그대로 diff()에 넘기면 평문이 노출된다
+  // (하이웍스 메일 비밀번호를 마스킹하는 updateUserHiworksCredentials와 동일한 방침).
+  const { password: beforePw, ...beforeRest } = before;
+  const { password: afterPw, ...afterRest } = after;
+  const changedFields = diff(beforeRest as unknown as Record<string, unknown>, afterRest as unknown as Record<string, unknown>) ?? {};
+  if (afterPw !== beforePw) {
+    changedFields.password = { before: beforePw ? "설정됨" : "미설정", after: "변경됨" };
+  }
+  record("user", id, after.name, "UPDATE", Object.keys(changedFields).length > 0 ? changedFields : undefined);
   notify();
 }
 
@@ -1500,6 +1526,42 @@ export function deleteUser(id: string): void {
     ),
   };
   record("user", id, item.name, "DELETE");
+  notify();
+}
+
+// ============================================================
+// PERMISSIONS (페이지 접근 / 기능별 쓰기 권한 — [권한 설정](/admin/permissions))
+// ============================================================
+
+/** 로그인/권한 체크 등 React 훅 바깥(lib/permissions.ts)에서 동기적으로 읽기 위한 getter. */
+export function getPageAccess(): Record<string, Role[]> {
+  return _state.pageAccess;
+}
+
+export function getWriteAccess(): Record<string, Role[]> {
+  return _state.writeAccess;
+}
+
+// 시스템 관리자는 화면에서 권한을 얼마든지 바꿀 수 있어야 하지만, 실수로 ADMIN 스스로를
+// 어떤 페이지·기능에서 빼버리면 그 즉시 [권한 설정] 화면 자체에 다시 접근할 방법이 없어진다.
+// 그런 자기잠금을 원천 차단하기 위해 ADMIN은 항상 포함되도록 저장 시점에 강제한다.
+function ensureAdminIncluded(roles: Role[]): Role[] {
+  return roles.includes("ADMIN") ? roles : ["ADMIN", ...roles];
+}
+
+export function updatePageAccess(path: string, roles: Role[]): void {
+  const safeRoles = ensureAdminIncluded(roles);
+  const before = _state.pageAccess[path] ?? [];
+  _state = { ..._state, pageAccess: { ..._state.pageAccess, [path]: safeRoles } };
+  record("permission", `page:${path}`, path, "UPDATE", { roles: { before, after: safeRoles } });
+  notify();
+}
+
+export function updateWriteAccess(domain: string, roles: Role[]): void {
+  const safeRoles = ensureAdminIncluded(roles);
+  const before = _state.writeAccess[domain] ?? [];
+  _state = { ..._state, writeAccess: { ..._state.writeAccess, [domain]: safeRoles } };
+  record("permission", `write:${domain}`, domain, "UPDATE", { roles: { before, after: safeRoles } });
   notify();
 }
 

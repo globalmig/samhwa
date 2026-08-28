@@ -3,7 +3,8 @@
 import { useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth, initAuth } from "@/lib/auth";
-import { canAccessPage, defaultLandingPath } from "@/lib/permissions";
+import { useStore } from "@/lib/store";
+import { canAccessPage, defaultLandingPath, PUBLIC_AUTH_PATHS } from "@/lib/permissions";
 
 function AccessDenied() {
   const router = useRouter();
@@ -33,16 +34,20 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const { user, isLoading } = useAuth();
+  // [권한 설정]에서 페이지 접근 권한을 바꾸면 이미 열려 있는 화면에도 즉시 반영되도록 구독한다.
+  useStore();
 
   useEffect(() => {
     initAuth();
   }, []);
 
+  const isPublicAuthPage = PUBLIC_AUTH_PATHS.includes(pathname);
+
   useEffect(() => {
-    if (!isLoading && !user && pathname !== "/login") {
+    if (!isLoading && !user && !isPublicAuthPage) {
       router.replace("/login");
     }
-  }, [user, isLoading, pathname, router]);
+  }, [user, isLoading, isPublicAuthPage, router]);
 
   if (isLoading) {
     return (
@@ -57,10 +62,10 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!user && pathname !== "/login") return null;
+  if (!user && !isPublicAuthPage) return null;
 
-  // 페이지 접근 권한 체크 (로그인 페이지 제외)
-  if (user && pathname !== "/login") {
+  // 페이지 접근 권한 체크 (로그인·회원가입 등 인증 관련 페이지 제외)
+  if (user && !isPublicAuthPage) {
     if (!canAccessPage(user.role as "ADMIN" | "ACCOUNTANT" | "SETTLEMENT" | "VIEWER", pathname)) {
       return <AccessDenied />;
     }

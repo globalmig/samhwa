@@ -3,11 +3,12 @@
 import { usePathname } from "next/navigation";
 import Sidebar from "./Sidebar";
 import Header from "./Header";
+import { PUBLIC_AUTH_PATHS } from "@/lib/permissions";
 
 export default function LayoutShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
-  if (pathname === "/login") {
+  if (PUBLIC_AUTH_PATHS.includes(pathname)) {
     return <>{children}</>;
   }
 

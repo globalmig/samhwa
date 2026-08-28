@@ -7,6 +7,7 @@ import { usePathname } from "next/navigation";
 import { FiChevronDown } from "react-icons/fi";
 import { LuPanelLeft } from "react-icons/lu";
 import { useAuth } from "@/lib/auth";
+import { useStore } from "@/lib/store";
 import { allowedRolesForPath } from "@/lib/permissions";
 
 type Role = "ADMIN" | "ACCOUNTANT" | "SETTLEMENT" | "VIEWER";
@@ -182,6 +183,15 @@ const navGroups: NavGroup[] = [
           </svg>
         ),
       },
+      {
+        label: "권한 설정",
+        href: "/admin/permissions",
+        icon: (
+          <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+            <path fillRule="evenodd" d="M10 1a4.5 4.5 0 0 0-4.5 4.5V9H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-.5V5.5A4.5 4.5 0 0 0 10 1zm3 8V5.5a3 3 0 1 0-6 0V9h6z" clipRule="evenodd" />
+          </svg>
+        ),
+      },
     ],
   },
 ];
@@ -231,6 +241,8 @@ export default function Sidebar() {
   const pathname = usePathname();
   const { user } = useAuth();
   const role = user?.role as Role | undefined;
+  // [권한 설정]에서 편집한 페이지 접근 권한이 메뉴 노출에 즉시 반영되도록 구독한다.
+  useStore();
   // 하위메뉴(children)가 있는 항목의 펼침/접힘 상태 — 수동으로 토글하기 전엔 하위 경로 중 하나가
   // 현재 활성 경로일 때 기본으로 펼쳐진다 (아래 expanded 계산부 참고).
   const [manualExpanded, setManualExpanded] = useState<Record<string, boolean>>({});
