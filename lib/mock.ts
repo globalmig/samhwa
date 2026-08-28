@@ -3078,6 +3078,8 @@ export interface ProjectIssue {
   // 이슈가 발생한 기관명 (선택 입력) — 특정 기관과 무관한 이슈는 noInstitution으로 표시
   institutionName?: string;
   noInstitution?: boolean;
+  // 등록 당시 보고 있던 연차(viewTerm) — 몇 연차에서 남긴 메모인지 화면에 태그로 표시하기 위함
+  term?: number;
 }
 
 export const projectIssues: ProjectIssue[] = [

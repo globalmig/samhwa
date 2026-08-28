@@ -771,6 +771,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       recipientUserIds: issueRecipientUserIds,
       institutionName: issueNoInstitution ? undefined : (issueInstitutionName.trim() || undefined),
       noInstitution: issueNoInstitution,
+      term: viewTerm,
     });
     setIssueContent("");
     setIssuePriority("MEDIUM");
@@ -1819,6 +1820,11 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                   <span className={`mt-0.5 shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded ${PRIORITY_STYLE[issue.priority]}`}>
                     {PRIORITY_LABEL[issue.priority]}
                   </span>
+                  {issue.term != null && (
+                    <span className="mt-0.5 shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">
+                      {issue.term}연차
+                    </span>
+                  )}
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-slate-700 leading-relaxed">{issue.content}</p>
                     <p className="text-xs text-slate-400 mt-1">
