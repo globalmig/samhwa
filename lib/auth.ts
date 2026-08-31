@@ -2,33 +2,10 @@
 
 import { useSyncExternalStore } from "react";
 import { type SystemUser } from "./mock";
-import { getUsers } from "./store";
-
-// 역할별 기본 비밀번호 (데모용)
-const DEMO_PASSWORDS: Record<string, string> = {
-  "admin@samhwa.co.kr": "admin1234",
-  "lee.acc@samhwa.co.kr": "samhwa1234",
-  "park.set@samhwa.co.kr": "samhwa1234",
-  "choi.view@samhwa.co.kr": "samhwa1234",
-  "jung.acc@samhwa.co.kr": "samhwa1234",
-};
 
 export interface AuthState {
   user: SystemUser | null;
   isLoading: boolean;
-}
-
-const STORAGE_KEY = "samhwa_auth_user_id";
-
-function loadInitialUser(): SystemUser | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const id = localStorage.getItem(STORAGE_KEY);
-    if (!id) return null;
-    return getUsers().find((u) => u.id === id && u.status === "ACTIVE") ?? null;
-  } catch {
-    return null;
-  }
 }
 
 let _state: AuthState = {
@@ -42,34 +19,40 @@ function notify() {
   _listeners.forEach((l) => l());
 }
 
-export function initAuth() {
-  const user = loadInitialUser();
-  _state = { user, isLoading: false };
+/** 서버(httpOnly 세션 쿠키)에 현재 로그인 상태를 물어 복원한다. AuthGuard가 마운트 시 호출한다. */
+export async function initAuth() {
+  try {
+    const res = await fetch("/api/auth/me");
+    const data: { ok: boolean; user?: SystemUser } = await res.json();
+    _state = { user: data.ok && data.user ? data.user : null, isLoading: false };
+  } catch {
+    _state = { user: null, isLoading: false };
+  }
   notify();
 }
 
-export function login(email: string, password: string): { ok: boolean; error?: string } {
-  const user = getUsers().find((u) => u.email === email);
-  if (!user) return { ok: false, error: "이메일 또는 비밀번호가 올바르지 않습니다." };
-  if (user.status === "PENDING") return { ok: false, error: "가입 승인 대기 중인 계정입니다. 시스템 관리자 승인 후 로그인할 수 있습니다." };
-  if (user.status === "INACTIVE") return { ok: false, error: "비활성화된 계정입니다. 관리자에게 문의하세요." };
-  // 회원가입/비밀번호 재설정으로 생성·변경된 계정은 password 필드를, 초기 시드 계정은
-  // DEMO_PASSWORDS를 확인한다 (SystemUser.password 주석 참고).
-  const validPassword = user.password !== undefined ? user.password === password : DEMO_PASSWORDS[email] === password;
-  if (!validPassword) return { ok: false, error: "이메일 또는 비밀번호가 올바르지 않습니다." };
-
+export async function login(email: string, password: string): Promise<{ ok: boolean; error?: string }> {
   try {
-    localStorage.setItem(STORAGE_KEY, user.id);
-  } catch {}
-
-  _state = { user, isLoading: false };
-  notify();
-  return { ok: true };
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    const data: { ok: boolean; user?: SystemUser; error?: string } = await res.json();
+    if (!data.ok || !data.user) {
+      return { ok: false, error: data.error ?? "로그인에 실패했습니다." };
+    }
+    _state = { user: data.user, isLoading: false };
+    notify();
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요." };
+  }
 }
 
-export function logout() {
+export async function logout() {
   try {
-    localStorage.removeItem(STORAGE_KEY);
+    await fetch("/api/auth/logout", { method: "POST" });
   } catch {}
   _state = { user: null, isLoading: false };
   notify();

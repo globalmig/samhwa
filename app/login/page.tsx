@@ -24,7 +24,7 @@ export default function LoginPage() {
     }
   }, [user, isLoading, router]);
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!email || !password) {
       setError("이메일과 비밀번호를 입력해 주세요.");
@@ -32,7 +32,7 @@ export default function LoginPage() {
     }
     setSubmitting(true);
     setError("");
-    const result = login(email, password);
+    const result = await login(email, password);
     setSubmitting(false);
     if (result.ok) {
       router.replace(defaultLandingPath(getCurrentUser()?.role as "ADMIN" | "ACCOUNTANT" | "SETTLEMENT" | "VIEWER" | undefined));

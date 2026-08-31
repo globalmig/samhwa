@@ -32,6 +32,17 @@ import {
   COMPANY_INFO,
 } from "../lib/mock";
 import { AGENCY_GUIDE } from "../lib/agency-guide";
+import bcrypt from "bcryptjs";
+
+// 예전 lib/auth.ts에 있던 데모 계정 기본 비밀번호 — Phase 2에서 서버사이드 로그인으로 옮기며
+// 이 파일로 이동. 값 자체는 그대로 유지 (기존 로그인 가능 계정/비밀번호가 바뀌지 않도록).
+const DEMO_PASSWORDS: Record<string, string> = {
+  "admin@samhwa.co.kr": "admin1234",
+  "lee.acc@samhwa.co.kr": "samhwa1234",
+  "park.set@samhwa.co.kr": "samhwa1234",
+  "choi.view@samhwa.co.kr": "samhwa1234",
+  "jung.acc@samhwa.co.kr": "samhwa1234",
+};
 
 const prisma = new PrismaClient();
 
@@ -90,13 +101,22 @@ async function main() {
   const userIdMap = new Map<string, string>(); // mock id -> db id
   const userNameToDbId = new Map<string, string>(); // name -> db id (권한/공문 매칭용)
   for (const u of mockSystemUsers) {
+    // 원래 로그인 가능했던 비밀번호 그대로(회원가입/재설정 계정은 u.password, 초기 시드 계정은
+    // DEMO_PASSWORDS) bcrypt 해시로 변환 — 값 자체를 새로 만들거나 바꾸지 않는다.
+    const plainPassword = u.password ?? DEMO_PASSWORDS[u.email] ?? null;
+    const passwordHash = plainPassword
+      ? await bcrypt.hash(plainPassword, 10)
+      : await bcrypt.hash(`unset-${u.id}-${Date.now()}`, 10); // 원본에 비밀번호가 없던 계정은 로그인 불가능한 임의 해시로 채움
     const row = await prisma.user.create({
       data: {
         email: u.email,
-        passwordHash: u.password ?? "DEMO_SEED_NO_HASH", // 데모 평문 비번 — Phase 2에서 해시로 교체 필요
+        passwordHash,
         name: u.name,
         role: ROLE_MAP[u.role] ?? "GENERAL",
-        isActive: u.status === "ACTIVE",
+        status: u.status,
+        hiworksEmail: u.hiworksEmail ?? null,
+        hiworksMailPassword: u.hiworksMailPassword ?? null,
+        phone: u.phone ?? null,
         lastLoginAt: toDate(u.lastLoginAt),
         createdAt: toDateOrNow(u.registeredAt),
       },

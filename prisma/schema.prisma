@@ -53,7 +53,10 @@ model User {
   passwordHash String    @map("password_hash") @db.NVarChar(255)
   name         String    @db.NVarChar(100)
   role         String    @db.NVarChar(20) // user_role
-  isActive     Boolean   @default(true) @map("is_active")
+  status       String    @default("ACTIVE") @db.NVarChar(20) // ACTIVE | INACTIVE | PENDING (회원가입 승인 대기)
+  hiworksEmail String?   @map("hiworks_email") @db.NVarChar(255)
+  hiworksMailPassword String? @map("hiworks_mail_password") @db.NVarChar(255)
+  phone        String?   @db.NVarChar(30)
   lastLoginAt  DateTime? @map("last_login_at") @db.DateTime2
   createdAt    DateTime  @default(now()) @map("created_at") @db.DateTime2
   updatedAt    DateTime  @updatedAt @map("updated_at") @db.DateTime2

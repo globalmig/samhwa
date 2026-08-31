@@ -1456,16 +1456,57 @@ export function updateCompanyInfo(data: Partial<CompanyInfo>): void {
 // ============================================================
 
 /** 로그인/아이디·비밀번호 찾기 등 React 훅 바깥(lib/auth.ts)에서 현재 사용자 목록을
- *  동기적으로 읽기 위한 getter — useStore()는 훅이라 컴포넌트 바깥에서 쓸 수 없다. */
+ *  동기적으로 읽기 위한 getter — useStore()는 훅이라 컴포넌트 바깥에서 쓸 수 없다.
+ *  (Phase 2: 실제 값은 hydrateUsers()가 /api/users에서 받아와 채운다. 서버에서 처음
+ *  렌더링되거나 아직 fetch가 끝나기 전에는 mock 시드 배열이 잠깐 보인다.) */
 export function getUsers(): SystemUser[] {
   return _state.users;
 }
 
+let _usersHydrated = false;
+/** 앱이 브라우저에서 처음 로드될 때 한 번, 실제 DB의 사용자 목록으로 _state.users를 교체한다. */
+function hydrateUsers(): void {
+  if (_usersHydrated || typeof window === "undefined") return;
+  _usersHydrated = true;
+  fetch("/api/users")
+    .then((res) => res.json())
+    .then((data: { ok: boolean; users?: SystemUser[] }) => {
+      if (data.ok && data.users) {
+        _state = { ..._state, users: data.users };
+        notify();
+      }
+    })
+    .catch((err) => {
+      console.error("사용자 목록을 불러오지 못했습니다.", err);
+      _usersHydrated = false;
+    });
+}
+if (typeof window !== "undefined") hydrateUsers();
+
 export function addUser(data: Omit<SystemUser, "id">): SystemUser {
-  const item: SystemUser = { ...data, id: genId("u") };
+  const tempId = genId("u");
+  const item: SystemUser = { ...data, id: tempId };
   _state = { ..._state, users: [..._state.users, item] };
-  record("user", item.id, item.name, "CREATE");
+  record("user", tempId, item.name, "CREATE");
   notify();
+
+  fetch("/api/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; user?: SystemUser; error?: string }) => {
+      if (res.ok && res.user) {
+        _state = { ..._state, users: _state.users.map((u) => (u.id === tempId ? res.user! : u)) };
+      } else {
+        _state = { ..._state, users: _state.users.filter((u) => u.id !== tempId) };
+        console.error("사용자 생성 실패:", res.error);
+      }
+      notify();
+    })
+    .catch((err) => {
+      _state = { ..._state, users: _state.users.filter((u) => u.id !== tempId) };
+      notify();
+      console.error("사용자 생성 실패:", err);
+    });
+
   return item;
 }
 
@@ -1486,6 +1527,25 @@ export function updateUser(id: string, data: Partial<SystemUser>): void {
   }
   record("user", id, after.name, "UPDATE", Object.keys(changedFields).length > 0 ? changedFields : undefined);
   notify();
+
+  // app/find-password(로그인 전)에서 비밀번호만 재설정하는 경우, 서버에서 본인확인(이메일+이름)을
+  // 다시 검증할 수 있도록 함께 보낸다 — 다른 필드 변경(로그인 상태)에는 영향 없다.
+  const payload: Record<string, unknown> = { ...data };
+  if (data.password) {
+    payload.verifyEmail = before.email;
+    payload.verifyName = before.name;
+  }
+  fetch(`/api/users/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; user?: SystemUser; error?: string }) => {
+      if (res.ok && res.user) {
+        _state = { ..._state, users: _state.users.map((u) => (u.id === id ? res.user! : u)) };
+        notify();
+      } else if (!res.ok) {
+        console.error("사용자 수정 실패:", res.error);
+      }
+    })
+    .catch((err) => console.error("사용자 수정 실패:", err));
 }
 
 /** 하이웍스 메일 연동 정보 저장. 조회 전용(VIEWER) 계정은 대상에서 제외되며,
@@ -1509,6 +1569,18 @@ export function updateUserHiworksCredentials(
   }
   record("user", id, after.name, "UPDATE", Object.keys(changedFields).length > 0 ? changedFields : undefined);
   notify();
+
+  fetch(`/api/users/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; user?: SystemUser; error?: string }) => {
+      if (res.ok && res.user) {
+        _state = { ..._state, users: _state.users.map((u) => (u.id === id ? res.user! : u)) };
+        notify();
+      } else if (!res.ok) {
+        console.error("하이웍스 계정 정보 저장 실패:", res.error);
+      }
+    })
+    .catch((err) => console.error("하이웍스 계정 정보 저장 실패:", err));
 }
 
 export function deleteUser(id: string): void {
@@ -1527,6 +1599,13 @@ export function deleteUser(id: string): void {
   };
   record("user", id, item.name, "DELETE");
   notify();
+
+  fetch(`/api/users/${id}`, { method: "DELETE" })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; error?: string }) => {
+      if (!res.ok) console.error("사용자 삭제 실패:", res.error);
+    })
+    .catch((err) => console.error("사용자 삭제 실패:", err));
 }
 
 // ============================================================
