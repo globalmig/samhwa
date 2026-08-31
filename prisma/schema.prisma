@@ -340,6 +340,8 @@ model FeePolicy {
   policyName     String    @map("policy_name") @db.NVarChar(200)
   policyVersion  Int       @map("policy_version")
   description    String?   @db.NVarChar(Max)
+  // mock.ts FeePolicy.agencyId — null이면 공통(전역) 정책, 있으면 해당 전담기관 전용 정책
+  fundingAgencyId String?  @map("funding_agency_id") @db.UniqueIdentifier
   status         String    @default("DRAFT") @db.NVarChar(20) // policy_status
   effectiveFrom  DateTime? @map("effective_from") @db.Date
   effectiveTo    DateTime? @map("effective_to") @db.Date
@@ -376,6 +378,7 @@ model FeePolicy {
 
   createdByUser  User? @relation("FeePolicyCreatedBy", fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
   approvedByUser User? @relation("FeePolicyApprovedBy", fields: [approvedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  fundingAgency  FundingAgency? @relation(fields: [fundingAgencyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   budgetRules           FeePolicyBudgetRule[]
   institutionCountRules FeePolicyInstitutionCountRule[]
@@ -868,6 +871,7 @@ model FundingAgency {
   projects        Project[]
   noticeTemplates AgencyNoticeTemplate[]
   termFeeCalcs    TermFeeCalc[]
+  feePolicies     FeePolicy[]
 
   @@map("funding_agencies")
 }

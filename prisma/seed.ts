@@ -388,6 +388,7 @@ async function main() {
         effectiveTo: toDate(fp.effectiveTo),
         approvedAt: fp.status === "ACTIVE" ? toDate(fp.effectiveFrom) : null,
         createdAt: toDateOrNow(fp.createdAt),
+        fundingAgencyId: fp.agencyId ? agencyIdMap.get(fp.agencyId) ?? null : null,
         // 정규화된 전용 컬럼 — extraData와 동일한 mock 원본(fp)에서 그대로 옮겨서 값 불일치 위험 없음
         versionLabel: fp.version,
         standardRate: fp.standardRate,

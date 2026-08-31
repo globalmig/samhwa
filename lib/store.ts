@@ -339,11 +339,49 @@ function record(
 // FUNDING AGENCIES (전담기관)
 // ============================================================
 
+let _fundingAgenciesHydrated = false;
+function hydrateFundingAgencies(): void {
+  if (_fundingAgenciesHydrated || typeof window === "undefined") return;
+  _fundingAgenciesHydrated = true;
+  fetch("/api/funding-agencies")
+    .then((res) => res.json())
+    .then((data: { ok: boolean; agencies?: FundingAgency[] }) => {
+      if (data.ok && data.agencies) {
+        _state = { ..._state, fundingAgencies: data.agencies };
+        notify();
+      }
+    })
+    .catch((err) => {
+      console.error("전담기관 목록을 불러오지 못했습니다.", err);
+      _fundingAgenciesHydrated = false;
+    });
+}
+if (typeof window !== "undefined") hydrateFundingAgencies();
+
 export function addFundingAgency(data: Omit<FundingAgency, "id">): FundingAgency {
-  const item: FundingAgency = { ...data, id: genId("fa") };
+  const tempId = genId("fa");
+  const item: FundingAgency = { ...data, id: tempId };
   _state = { ..._state, fundingAgencies: [..._state.fundingAgencies, item] };
-  record("fundingAgency", item.id, item.name, "CREATE");
+  record("fundingAgency", tempId, item.name, "CREATE");
   notify();
+
+  fetch("/api/funding-agencies", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; agency?: FundingAgency; error?: string }) => {
+      if (res.ok && res.agency) {
+        _state = { ..._state, fundingAgencies: _state.fundingAgencies.map((a) => (a.id === tempId ? res.agency! : a)) };
+      } else {
+        _state = { ..._state, fundingAgencies: _state.fundingAgencies.filter((a) => a.id !== tempId) };
+        console.error("전담기관 생성 실패:", res.error);
+      }
+      notify();
+    })
+    .catch((err) => {
+      _state = { ..._state, fundingAgencies: _state.fundingAgencies.filter((a) => a.id !== tempId) };
+      notify();
+      console.error("전담기관 생성 실패:", err);
+    });
+
   return item;
 }
 
@@ -376,6 +414,18 @@ export function updateFundingAgency(id: string, data: Partial<FundingAgency>): v
   }
   record("fundingAgency", id, after.name, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   notify();
+
+  fetch(`/api/funding-agencies/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; agency?: FundingAgency; error?: string }) => {
+      if (res.ok && res.agency) {
+        _state = { ..._state, fundingAgencies: _state.fundingAgencies.map((a) => (a.id === id ? res.agency! : a)) };
+        notify();
+      } else if (!res.ok) {
+        console.error("전담기관 수정 실패:", res.error);
+      }
+    })
+    .catch((err) => console.error("전담기관 수정 실패:", err));
 }
 
 // 참조 중인 과제·수수료정책·연차수수료산정이 하나라도 있으면 삭제를 막는다 — 참조를 그대로 두고
@@ -397,6 +447,14 @@ export function deleteFundingAgency(id: string): string | null {
   _state = { ..._state, fundingAgencies: _state.fundingAgencies.filter((a) => a.id !== id) };
   record("fundingAgency", id, item.name, "DELETE");
   notify();
+
+  fetch(`/api/funding-agencies/${id}`, { method: "DELETE" })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; error?: string }) => {
+      if (!res.ok) console.error("전담기관 삭제 실패(서버):", res.error);
+    })
+    .catch((err) => console.error("전담기관 삭제 실패(서버):", err));
+
   return null;
 }
 
@@ -956,12 +1014,50 @@ export function deleteProjectMember(id: string): void {
 // FEE POLICIES (수수료 기준 정책 — 버전 이력 포함)
 // ============================================================
 
+let _feePoliciesHydrated = false;
+function hydrateFeePolicies(): void {
+  if (_feePoliciesHydrated || typeof window === "undefined") return;
+  _feePoliciesHydrated = true;
+  fetch("/api/fee-policies")
+    .then((res) => res.json())
+    .then((data: { ok: boolean; policies?: FeePolicy[] }) => {
+      if (data.ok && data.policies) {
+        _state = { ..._state, feePolicies: data.policies };
+        notify();
+      }
+    })
+    .catch((err) => {
+      console.error("수수료 정책 목록을 불러오지 못했습니다.", err);
+      _feePoliciesHydrated = false;
+    });
+}
+if (typeof window !== "undefined") hydrateFeePolicies();
+
 export function addFeePolicy(data: Omit<FeePolicy, "id">): FeePolicy {
-  const item: FeePolicy = { ...data, id: genId("pol") };
+  const tempId = genId("pol");
+  const item: FeePolicy = { ...data, id: tempId };
   _state = { ..._state, feePolicies: [..._state.feePolicies, item] };
-  record("feePolicy", item.id, item.name, "CREATE");
-  recalcProjectsUsingPolicy(item.id);
+  record("feePolicy", tempId, item.name, "CREATE");
+  recalcProjectsUsingPolicy(tempId);
   notify();
+
+  fetch("/api/fee-policies", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; policy?: FeePolicy; error?: string }) => {
+      if (res.ok && res.policy) {
+        _state = { ..._state, feePolicies: _state.feePolicies.map((p) => (p.id === tempId ? res.policy! : p)) };
+      } else {
+        _state = { ..._state, feePolicies: _state.feePolicies.filter((p) => p.id !== tempId) };
+        console.error("수수료 정책 생성 실패:", res.error);
+      }
+      notify();
+    })
+    .catch((err) => {
+      _state = { ..._state, feePolicies: _state.feePolicies.filter((p) => p.id !== tempId) };
+      notify();
+      console.error("수수료 정책 생성 실패:", err);
+    });
+
   return item;
 }
 
@@ -973,6 +1069,18 @@ export function updateFeePolicy(id: string, data: Partial<FeePolicy>): void {
   record("feePolicy", id, after.name, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   recalcProjectsUsingPolicy(id);
   notify();
+
+  fetch(`/api/fee-policies/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; policy?: FeePolicy; error?: string }) => {
+      if (res.ok && res.policy) {
+        _state = { ..._state, feePolicies: _state.feePolicies.map((p) => (p.id === id ? res.policy! : p)) };
+        notify();
+      } else if (!res.ok) {
+        console.error("수수료 정책 수정 실패:", res.error);
+      }
+    })
+    .catch((err) => console.error("수수료 정책 수정 실패:", err));
 }
 
 export function deleteFeePolicy(id: string): void {
@@ -987,6 +1095,13 @@ export function deleteFeePolicy(id: string): void {
   record("feePolicy", id, item.name, "DELETE");
   affectedProjectIds.forEach((pid) => autoGenerateTermFees(pid));
   notify();
+
+  fetch(`/api/fee-policies/${id}`, { method: "DELETE" })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; error?: string }) => {
+      if (!res.ok) console.error("수수료 정책 삭제 실패(서버):", res.error);
+    })
+    .catch((err) => console.error("수수료 정책 삭제 실패(서버):", err));
 }
 
 // 정책 변경이 실제로 적용되는(resolvePolicy가 이 정책으로 귀결되는) 과제들만 골라 연차별 수수료를 재산정한다.
@@ -1652,6 +1767,17 @@ export function updateAgencyGuide(shortName: string, tabs: AgencyGuideTab[]): vo
   _state = { ..._state, agencyGuides: { ..._state.agencyGuides, [shortName]: tabs } };
   record("fundingAgency", shortName, `${shortName} 운용 안내`, "UPDATE");
   notify();
+
+  fetch(`/api/funding-agencies/by-short-name/${encodeURIComponent(shortName)}/guide`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(tabs),
+  })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; error?: string }) => {
+      if (!res.ok) console.error("운용 안내 저장 실패:", res.error);
+    })
+    .catch((err) => console.error("운용 안내 저장 실패:", err));
 }
 
 // ============================================================
