@@ -24,6 +24,7 @@ const PAGE_TITLES: Record<string, string> = {
   "/settlements": "기관 정산 관리",
   "/tax-invoices": "세금계산서 관리",
   "/audit-log": "전체 변경이력",
+  "/notices": "공지사항",
 };
 
 const ROLE_LABELS: Record<string, string> = {
@@ -137,6 +138,19 @@ export default function Header() {
       </div>
 
       <div className="flex items-center gap-3">
+        {/* 공지사항 — 알림 종과 별개로 전체 공지 목록을 볼 수 있는 전용 페이지 링크 */}
+        {user && (
+          <Link
+            href="/notices"
+            title="공지사항"
+            className="p-1.5 text-slate-400 hover:text-slate-600 transition-colors"
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+              <path fillRule="evenodd" d="M16.881 4.345A23.112 23.112 0 0 1 8.25 6H7.5a5.25 5.25 0 0 0-.88 10.427 21.593 21.593 0 0 0 1.378 3.94c.464 1.004 1.674 1.32 2.582.796l.657-.379c.88-.508 1.165-1.593.772-2.468a17.116 17.116 0 0 1-.628-1.607c1.918.258 3.76.75 5.5 1.446A21.727 21.727 0 0 0 18 11.25c0-2.649-.541-5.172-1.519-7.465ZM18.75 11.25a48.858 48.858 0 0 0-.88-8.28 1.5 1.5 0 0 1 2.826-.038 51.11 51.11 0 0 1 0 16.638 1.5 1.5 0 0 1-2.826-.038 48.9 48.9 0 0 0 .88-8.282Z" clipRule="evenodd" />
+            </svg>
+          </Link>
+        )}
+
         {/* 알림 — 조회 전용 계정도 담당 과제의 연체 알림은 받을 수 있어 아이콘을 항상 표시한다
             (이슈/메모 알림은 isIssueVisibleToUser에서 여전히 조회 전용을 제외함) */}
         {user && (

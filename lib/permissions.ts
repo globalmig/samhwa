@@ -34,6 +34,7 @@ export const PAGE_ACCESS_CATALOG: { key: string; label: string }[] = [
   { key: "/tax-invoices", label: "세금계산서 현황" },
   { key: "/policy-history", label: "정책 변경이력" },
   { key: "/audit-log", label: "전체 변경이력" },
+  { key: "/notices", label: "공지사항" },
   { key: "/admin/users", label: "권한관리(사용자)" },
   { key: "/admin/permissions", label: "권한 설정" },
 ];
