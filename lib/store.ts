@@ -462,11 +462,49 @@ export function deleteFundingAgency(id: string): string | null {
 // INSTITUTIONS (통합 기관)
 // ============================================================
 
+let _institutionsHydrated = false;
+function hydrateInstitutions(): void {
+  if (_institutionsHydrated || typeof window === "undefined") return;
+  _institutionsHydrated = true;
+  fetch("/api/institutions")
+    .then((res) => res.json())
+    .then((data: { ok: boolean; institutions?: Institution[] }) => {
+      if (data.ok && data.institutions) {
+        _state = { ..._state, institutions: data.institutions };
+        notify();
+      }
+    })
+    .catch((err) => {
+      console.error("기관 목록을 불러오지 못했습니다.", err);
+      _institutionsHydrated = false;
+    });
+}
+if (typeof window !== "undefined") hydrateInstitutions();
+
 export function addInstitution(data: Omit<Institution, "id">): Institution {
-  const item: Institution = { ...data, id: genId("inst") };
+  const tempId = genId("inst");
+  const item: Institution = { ...data, id: tempId };
   _state = { ..._state, institutions: [..._state.institutions, item] };
-  record("institution", item.id, item.name, "CREATE");
+  record("institution", tempId, item.name, "CREATE");
   notify();
+
+  fetch("/api/institutions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; institution?: Institution; error?: string }) => {
+      if (res.ok && res.institution) {
+        _state = { ..._state, institutions: _state.institutions.map((i) => (i.id === tempId ? res.institution! : i)) };
+      } else {
+        _state = { ..._state, institutions: _state.institutions.filter((i) => i.id !== tempId) };
+        console.error("기관 생성 실패:", res.error);
+      }
+      notify();
+    })
+    .catch((err) => {
+      _state = { ..._state, institutions: _state.institutions.filter((i) => i.id !== tempId) };
+      notify();
+      console.error("기관 생성 실패:", err);
+    });
+
   return item;
 }
 
@@ -506,6 +544,18 @@ export function updateInstitution(id: string, data: Partial<Institution>): void 
   }
   record("institution", id, after.name, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   notify();
+
+  fetch(`/api/institutions/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; institution?: Institution; error?: string }) => {
+      if (res.ok && res.institution) {
+        _state = { ..._state, institutions: _state.institutions.map((i) => (i.id === id ? res.institution! : i)) };
+        notify();
+      } else if (!res.ok) {
+        console.error("기관 수정 실패:", res.error);
+      }
+    })
+    .catch((err) => console.error("기관 수정 실패:", err));
 }
 
 // 참조 중인 과제·참여기관·미수금·세금계산서·정산이 하나라도 있으면 삭제를 막는다 — 참조를 그대로 두고
@@ -533,6 +583,14 @@ export function deleteInstitution(id: string): string | null {
   _state = { ..._state, institutions: _state.institutions.filter((i) => i.id !== id) };
   record("institution", id, item.name, "DELETE");
   notify();
+
+  fetch(`/api/institutions/${id}`, { method: "DELETE" })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; error?: string }) => {
+      if (!res.ok) console.error("기관 삭제 실패(서버):", res.error);
+    })
+    .catch((err) => console.error("기관 삭제 실패(서버):", err));
+
   return null;
 }
 
@@ -585,14 +643,71 @@ function nextTermCode(): string {
   return `SH${String(max + 1).padStart(6, "0")}`;
 }
 
+let _projectsHydrated = false;
+function hydrateProjects(): void {
+  if (_projectsHydrated || typeof window === "undefined") return;
+  _projectsHydrated = true;
+  fetch("/api/projects")
+    .then((res) => res.json())
+    .then((data: { ok: boolean; projects?: Project[] }) => {
+      if (data.ok && data.projects) {
+        _state = { ..._state, projects: data.projects };
+        notify();
+      }
+    })
+    .catch((err) => {
+      console.error("과제 목록을 불러오지 못했습니다.", err);
+      _projectsHydrated = false;
+    });
+}
+if (typeof window !== "undefined") hydrateProjects();
+
 export function addProject(data: Omit<Project, "id">): Project {
   const projectCode = data.projectCode ?? nextTermCode();
   const termCodes = data.termCodes ?? [{ termNumber: 1, code: projectCode }];
-  const item: Project = { registeredAt: new Date().toISOString().slice(0, 10), ...data, projectCode, termCodes, id: genId("p") };
+  const tempId = genId("p");
+  const item: Project = { registeredAt: new Date().toISOString().slice(0, 10), ...data, projectCode, termCodes, id: tempId };
   _state = { ..._state, projects: [..._state.projects, item] };
-  record("project", item.id, item.projectName, "CREATE");
+  record("project", tempId, item.projectName, "CREATE");
   ensureLeadMember(item);
   notify();
+
+  fetch("/api/projects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(item) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; project?: Project; error?: string }) => {
+      if (res.ok && res.project) {
+        // id가 임시값에서 실제 DB GUID로 바뀌므로, 이미 로컬에 만들어둔 참여기관(ensureLeadMember)의
+        // projectId도 함께 옮겨줘야 이후 조회/수정이 새 id로 정상 매칭된다. 그 참여기관을 저장하려던
+        // persistProjectMember 시도는 이 시점 이전엔 project가 서버에 없어 실패했을 수 있으므로 재시도한다.
+        const realId = res.project.id;
+        const remapped = _state.projectMembers.filter((m) => m.projectId === tempId);
+        _state = {
+          ..._state,
+          projects: _state.projects.map((p) => (p.id === tempId ? res.project! : p)),
+          projectMembers: _state.projectMembers.map((m) => (m.projectId === tempId ? { ...m, projectId: realId } : m)),
+        };
+        for (const m of remapped) persistProjectMember({ ...m, projectId: realId });
+        autoGenerateTermFees(realId);
+      } else {
+        _state = {
+          ..._state,
+          projects: _state.projects.filter((p) => p.id !== tempId),
+          projectMembers: _state.projectMembers.filter((m) => m.projectId !== tempId),
+        };
+        console.error("과제 생성 실패:", res.error);
+      }
+      notify();
+    })
+    .catch((err) => {
+      _state = {
+        ..._state,
+        projects: _state.projects.filter((p) => p.id !== tempId),
+        projectMembers: _state.projectMembers.filter((m) => m.projectId !== tempId),
+      };
+      notify();
+      console.error("과제 생성 실패:", err);
+    });
+
   return item;
 }
 
@@ -648,6 +763,18 @@ export function updateProject(id: string, data: Partial<Project>): void {
     ensureLeadMember(after);
   }
   notify();
+
+  fetch(`/api/projects/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; project?: Project; error?: string }) => {
+      if (res.ok && res.project) {
+        _state = { ..._state, projects: _state.projects.map((p) => (p.id === id ? res.project! : p)) };
+        notify();
+      } else if (!res.ok) {
+        console.error("과제 수정 실패:", res.error);
+      }
+    })
+    .catch((err) => console.error("과제 수정 실패:", err));
 }
 
 // 과제 삭제 시 연결된 참여기관·수수료·이슈·미청구액·미수금·세금계산서까지 함께 정리해
@@ -670,6 +797,13 @@ export function deleteProject(id: string): void {
   };
   record("project", id, item.projectName, "DELETE");
   notify();
+
+  fetch(`/api/projects/${id}`, { method: "DELETE" })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; error?: string }) => {
+      if (!res.ok) console.error("과제 삭제 실패(서버):", res.error);
+    })
+    .catch((err) => console.error("과제 삭제 실패(서버):", err));
 }
 
 // 과제 하나를 통째로 지우지 않고, 특정 연차(들)의 수수료·세금계산서·미청구·미수금 데이터만 지운다 —
@@ -725,6 +859,17 @@ export function deleteProjectTerms(projectId: string, termNumbers: number[]): vo
     deletedTerms: { before: [], after: Array.from(actuallyDeleted).sort((a, b) => a - b).map((n) => `${n}연차`) },
   });
   notify();
+
+  fetch(`/api/projects/${projectId}/delete-terms`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ termNumbers: Array.from(actuallyDeleted) }),
+  })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; error?: string }) => {
+      if (!res.ok) console.error("연차 삭제 실패(서버):", res.error);
+    })
+    .catch((err) => console.error("연차 삭제 실패(서버):", err));
 }
 
 // 참여기관 사업비 합계로 과제의 총사업비를 다시 맞춘다 (감사로그를 남기지 않는 파생값 재계산 —
@@ -744,6 +889,42 @@ export function recalcProjectTotalBudget(projectId: string): void {
 // PROJECT MEMBERS (참여기관)
 // ============================================================
 
+let _projectMembersHydrated = false;
+function hydrateProjectMembers(): void {
+  if (_projectMembersHydrated || typeof window === "undefined") return;
+  _projectMembersHydrated = true;
+  fetch("/api/project-members")
+    .then((res) => res.json())
+    .then((data: { ok: boolean; members?: ProjectMember[] }) => {
+      if (data.ok && data.members) {
+        _state = { ..._state, projectMembers: data.members };
+        notify();
+      }
+    })
+    .catch((err) => {
+      console.error("참여기관 목록을 불러오지 못했습니다.", err);
+      _projectMembersHydrated = false;
+    });
+}
+if (typeof window !== "undefined") hydrateProjectMembers();
+
+// project-members는 (project, institution) 그룹 단위 id를 서버가 매길 뿐 아니라 요청 시점에
+// project가 아직 임시 id(addProject의 fetch가 아직 안 끝났을 때 ensureLeadMember가 부르는 경우)일
+// 수도 있어 실패가 정상적으로 일어날 수 있다 — addProject 쪽에서 실제 id를 받은 뒤 다시 부른다.
+function persistProjectMember(item: ProjectMember): void {
+  fetch("/api/project-members", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(item) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; member?: ProjectMember; error?: string }) => {
+      if (res.ok && res.member) {
+        _state = { ..._state, projectMembers: _state.projectMembers.map((m) => (m.id === item.id ? res.member! : m)) };
+        notify();
+      } else if (!res.ok) {
+        console.error("참여기관 저장 실패:", res.error);
+      }
+    })
+    .catch((err) => console.error("참여기관 저장 실패:", err));
+}
+
 export function addProjectMember(data: Omit<ProjectMember, "id">): ProjectMember {
   const item: ProjectMember = { ...data, id: genId("pm") };
   _state = { ..._state, projectMembers: [..._state.projectMembers, item] };
@@ -751,6 +932,7 @@ export function addProjectMember(data: Omit<ProjectMember, "id">): ProjectMember
   autoGenerateTermFees(item.projectId);
   recalcProjectTotalBudget(item.projectId);
   notify();
+  persistProjectMember(item);
   return item;
 }
 
@@ -887,6 +1069,18 @@ export function updateProjectMember(id: string, data: Partial<ProjectMember>): v
     });
   }
   notify();
+
+  fetch(`/api/project-members/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(trackedData) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; member?: ProjectMember; error?: string }) => {
+      if (res.ok && res.member) {
+        _state = { ..._state, projectMembers: _state.projectMembers.map((m) => (m.id === id ? res.member! : m)) };
+        notify();
+      } else if (!res.ok) {
+        console.error("참여기관 수정 실패:", res.error);
+      }
+    })
+    .catch((err) => console.error("참여기관 수정 실패:", err));
 }
 
 export interface InstitutionGradeApplyResult {
@@ -986,12 +1180,22 @@ export function applyInstitutionGradeToProjects(
 
   if (affectedProjects.size === 0) return { updatedProjectCount: 0, updatedTermCount: 0, lockedTermCount, updatedProjects: [] };
 
+  const changedMembers = updatedMembers.filter((m, i) => m !== _state.projectMembers[i]);
   _state = { ..._state, projectMembers: updatedMembers };
   for (const pid of affectedProjects.keys()) {
     record("project", pid, `기관 등급 변경 반영 (${newGrade})`, "UPDATE");
     autoGenerateTermFees(pid);
   }
   notify();
+
+  for (const m of changedMembers) {
+    fetch(`/api/project-members/${m.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ gradeOverrides: m.gradeOverrides }) })
+      .then((res) => res.json())
+      .then((res: { ok: boolean; error?: string }) => {
+        if (!res.ok) console.error("등급 변경 저장 실패:", res.error);
+      })
+      .catch((err) => console.error("등급 변경 저장 실패:", err));
+  }
   return {
     updatedProjectCount: affectedProjects.size,
     updatedTermCount,
@@ -1008,6 +1212,13 @@ export function deleteProjectMember(id: string): void {
   autoGenerateTermFees(item.projectId);
   recalcProjectTotalBudget(item.projectId);
   notify();
+
+  fetch(`/api/project-members/${id}`, { method: "DELETE" })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; error?: string }) => {
+      if (!res.ok) console.error("참여기관 삭제 실패(서버):", res.error);
+    })
+    .catch((err) => console.error("참여기관 삭제 실패(서버):", err));
 }
 
 // ============================================================
@@ -1117,12 +1328,62 @@ function recalcProjectsUsingPolicy(policyId: string): void {
 // TERM FEE CALCS (과제단위 수수료 산정 내역)
 // ============================================================
 
+let _termFeeCalcsHydrated = false;
+function hydrateTermFeeCalcs(): void {
+  if (_termFeeCalcsHydrated || typeof window === "undefined") return;
+  _termFeeCalcsHydrated = true;
+  fetch("/api/term-fee-calcs")
+    .then((res) => res.json())
+    .then((data: { ok: boolean; termFeeCalcs?: TermFeeCalc[] }) => {
+      if (data.ok && data.termFeeCalcs) {
+        _state = { ..._state, termFeeCalcs: data.termFeeCalcs };
+        notify();
+      }
+    })
+    .catch((err) => {
+      console.error("연차수수료 산정 내역을 불러오지 못했습니다.", err);
+      _termFeeCalcsHydrated = false;
+    });
+}
+if (typeof window !== "undefined") hydrateTermFeeCalcs();
+
 export function addTermFeeCalc(data: Omit<TermFeeCalc, "id">): TermFeeCalc {
-  const item: TermFeeCalc = { ...data, id: genId("tfc") };
+  const tempId = genId("tfc");
+  const item: TermFeeCalc = { ...data, id: tempId };
   _state = { ..._state, termFeeCalcs: [..._state.termFeeCalcs, item] };
-  record("termFeeCalc", item.id, `${item.projectNumber} · ${item.termYear}년 ${item.termNumber}연차`, "CREATE");
+  record("termFeeCalc", tempId, `${item.projectNumber} · ${item.termYear}년 ${item.termNumber}연차`, "CREATE");
   notify();
+
+  fetch("/api/term-fee-calcs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; termFeeCalc?: TermFeeCalc; error?: string }) => {
+      if (res.ok && res.termFeeCalc) {
+        _state = { ..._state, termFeeCalcs: _state.termFeeCalcs.map((f) => (f.id === tempId ? res.termFeeCalc! : f)) };
+      } else {
+        _state = { ..._state, termFeeCalcs: _state.termFeeCalcs.filter((f) => f.id !== tempId) };
+        console.error("연차수수료 산정 생성 실패:", res.error);
+      }
+      notify();
+    })
+    .catch((err) => {
+      _state = { ..._state, termFeeCalcs: _state.termFeeCalcs.filter((f) => f.id !== tempId) };
+      notify();
+      console.error("연차수수료 산정 생성 실패:", err);
+    });
+
   return item;
+}
+
+function persistTermFeeCalc(id: string, data: Partial<TermFeeCalc>): void {
+  fetch(`/api/term-fee-calcs/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; termFeeCalc?: TermFeeCalc; error?: string }) => {
+      if (res.ok && res.termFeeCalc) {
+        _state = { ..._state, termFeeCalcs: _state.termFeeCalcs.map((f) => (f.id === id ? res.termFeeCalc! : f)) };
+        notify();
+      } else if (!res.ok) console.error("연차수수료 산정 수정 실패:", res.error);
+    })
+    .catch((err) => console.error("연차수수료 산정 수정 실패:", err));
 }
 
 export function updateTermFeeCalc(id: string, data: Partial<TermFeeCalc>): void {
@@ -1133,6 +1394,7 @@ export function updateTermFeeCalc(id: string, data: Partial<TermFeeCalc>): void 
   record("termFeeCalc", id, `${after.projectNumber} · ${after.termYear}년 ${after.termNumber}연차`, "UPDATE",
     diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   notify();
+  persistTermFeeCalc(id, data);
 }
 
 export function addTermFeeCalcOverride(
@@ -1145,6 +1407,7 @@ export function addTermFeeCalcOverride(
   _state = { ..._state, termFeeCalcs: _state.termFeeCalcs.map((f) => (f.id === id ? after : f)) };
   record("termFeeCalc", id, `${after.projectNumber} 오버라이드 추가`, "UPDATE");
   notify();
+  persistTermFeeCalc(id, { overrides: after.overrides });
 }
 
 export function deleteTermFeeCalc(id: string): void {
@@ -1153,17 +1416,72 @@ export function deleteTermFeeCalc(id: string): void {
   _state = { ..._state, termFeeCalcs: _state.termFeeCalcs.filter((f) => f.id !== id) };
   record("termFeeCalc", id, item.projectNumber, "DELETE");
   notify();
+
+  fetch(`/api/term-fee-calcs/${id}`, { method: "DELETE" })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; error?: string }) => { if (!res.ok) console.error("연차수수료 산정 삭제 실패(서버):", res.error); })
+    .catch((err) => console.error("연차수수료 산정 삭제 실패(서버):", err));
 }
 
 // ============================================================
 // TERM FEES (연차별 수수료 산정 내역)
 // ============================================================
 
+let _termFeesHydrated = false;
+function hydrateTermFees(): void {
+  if (_termFeesHydrated || typeof window === "undefined") return;
+  _termFeesHydrated = true;
+  fetch("/api/term-fees")
+    .then((res) => res.json())
+    .then((data: { ok: boolean; termFees?: TermFee[] }) => {
+      if (data.ok && data.termFees) {
+        _state = { ..._state, termFees: data.termFees };
+        notify();
+      }
+    })
+    .catch((err) => {
+      console.error("연차수수료 목록을 불러오지 못했습니다.", err);
+      _termFeesHydrated = false;
+    });
+}
+if (typeof window !== "undefined") hydrateTermFees();
+
+function persistTermFee(id: string, data: Partial<TermFee>): void {
+  fetch(`/api/term-fees/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; termFee?: TermFee; error?: string }) => {
+      if (res.ok && res.termFee) {
+        _state = { ..._state, termFees: _state.termFees.map((f) => (f.id === id ? res.termFee! : f)) };
+        notify();
+      } else if (!res.ok) console.error("연차수수료 수정 실패:", res.error);
+    })
+    .catch((err) => console.error("연차수수료 수정 실패:", err));
+}
+
 export function addTermFee(data: Omit<TermFee, "id">): TermFee {
-  const item: TermFee = { ...data, id: genId("tf") };
+  const tempId = genId("tf");
+  const item: TermFee = { ...data, id: tempId };
   _state = { ..._state, termFees: [..._state.termFees, item] };
-  record("termFee", item.id, `${item.projectNumber} · ${item.institutionName}`, "CREATE");
+  record("termFee", tempId, `${item.projectNumber} · ${item.institutionName}`, "CREATE");
   notify();
+
+  fetch("/api/term-fees", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; termFee?: TermFee; error?: string }) => {
+      if (res.ok && res.termFee) {
+        _state = { ..._state, termFees: _state.termFees.map((f) => (f.id === tempId ? res.termFee! : f)) };
+      } else {
+        _state = { ..._state, termFees: _state.termFees.filter((f) => f.id !== tempId) };
+        console.error("연차수수료 생성 실패:", res.error);
+      }
+      notify();
+    })
+    .catch((err) => {
+      _state = { ..._state, termFees: _state.termFees.filter((f) => f.id !== tempId) };
+      notify();
+      console.error("연차수수료 생성 실패:", err);
+    });
+
   return item;
 }
 
@@ -1174,6 +1492,7 @@ export function updateTermFee(id: string, data: Partial<TermFee>): void {
   _state = { ..._state, termFees: _state.termFees.map((f) => (f.id === id ? after : f)) };
   record("termFee", id, `${after.projectNumber} · ${after.institutionName}`, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   notify();
+  persistTermFee(id, data);
 }
 
 /** 한 연차(과제번호+연도+연차번호) 전체의 타회계법인 진행 여부를 일괄 변경한다.
@@ -1201,6 +1520,7 @@ export function setTermOtherFirmHandled(
     { otherFirmHandled: { before: !otherFirmHandled, after: otherFirmHandled } }
   );
   notify();
+  for (const t of targets) persistTermFee(t.id, { otherFirmHandled });
 }
 
 /** 한 연차(과제번호+연도+연차번호)의 실제 시작일/종료일을 직접 지정(또는 해제)한다. TermFee가
@@ -1232,6 +1552,7 @@ export function setTermDates(
     { termStartDate: { before: targets[0].termStartDate, after: termStartDate }, termEndDate: { before: targets[0].termEndDate, after: termEndDate } }
   );
   notify();
+  for (const t of targets) persistTermFee(t.id, { termStartDate: termStartDate ?? undefined, termEndDate: termEndDate ?? undefined });
 }
 
 /** 한 연차(과제번호+연도+연차번호)의 세금계산서 발행구분을 일괄 변경한다. TermFee가 기관별로
@@ -1264,17 +1585,56 @@ export function setTermBillingType(
     { billingType: { before: targets[0].billingType, after: billingType } }
   );
   notify();
+  for (const t of targets) persistTermFee(t.id, { billingType });
 }
 
 // ============================================================
 // UNCLAIMED FEES
 // ============================================================
 
+let _unclaimedFeesHydrated = false;
+function hydrateUnclaimedFees(): void {
+  if (_unclaimedFeesHydrated || typeof window === "undefined") return;
+  _unclaimedFeesHydrated = true;
+  fetch("/api/unclaimed-fees")
+    .then((res) => res.json())
+    .then((data: { ok: boolean; unclaimedFees?: UnclaimedFee[] }) => {
+      if (data.ok && data.unclaimedFees) {
+        _state = { ..._state, unclaimedFees: data.unclaimedFees };
+        notify();
+      }
+    })
+    .catch((err) => {
+      console.error("미청구수수료 목록을 불러오지 못했습니다.", err);
+      _unclaimedFeesHydrated = false;
+    });
+}
+if (typeof window !== "undefined") hydrateUnclaimedFees();
+
 export function addUnclaimedFee(data: Omit<UnclaimedFee, "id">): UnclaimedFee {
-  const item: UnclaimedFee = { ...data, id: genId("uc") };
+  const tempId = genId("uc");
+  const item: UnclaimedFee = { ...data, id: tempId };
   _state = { ..._state, unclaimedFees: [..._state.unclaimedFees, item] };
-  record("unclaimed", item.id, `${item.projectNumber} · ${item.leadInstitutionName}`, "CREATE");
+  record("unclaimed", tempId, `${item.projectNumber} · ${item.leadInstitutionName}`, "CREATE");
   notify();
+
+  fetch("/api/unclaimed-fees", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; unclaimedFee?: UnclaimedFee; error?: string }) => {
+      if (res.ok && res.unclaimedFee) {
+        _state = { ..._state, unclaimedFees: _state.unclaimedFees.map((f) => (f.id === tempId ? res.unclaimedFee! : f)) };
+      } else {
+        _state = { ..._state, unclaimedFees: _state.unclaimedFees.filter((f) => f.id !== tempId) };
+        console.error("미청구수수료 생성 실패:", res.error);
+      }
+      notify();
+    })
+    .catch((err) => {
+      _state = { ..._state, unclaimedFees: _state.unclaimedFees.filter((f) => f.id !== tempId) };
+      notify();
+      console.error("미청구수수료 생성 실패:", err);
+    });
+
   return item;
 }
 
@@ -1285,17 +1645,65 @@ export function updateUnclaimedFee(id: string, data: Partial<UnclaimedFee>): voi
   _state = { ..._state, unclaimedFees: _state.unclaimedFees.map((f) => (f.id === id ? after : f)) };
   record("unclaimed", id, `${after.projectNumber} · ${after.leadInstitutionName}`, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   notify();
+
+  fetch(`/api/unclaimed-fees/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; unclaimedFee?: UnclaimedFee; error?: string }) => {
+      if (res.ok && res.unclaimedFee) {
+        _state = { ..._state, unclaimedFees: _state.unclaimedFees.map((f) => (f.id === id ? res.unclaimedFee! : f)) };
+        notify();
+      } else if (!res.ok) console.error("미청구수수료 수정 실패:", res.error);
+    })
+    .catch((err) => console.error("미청구수수료 수정 실패:", err));
 }
 
 // ============================================================
 // RECEIVABLES
 // ============================================================
 
+let _receivablesHydrated = false;
+function hydrateReceivables(): void {
+  if (_receivablesHydrated || typeof window === "undefined") return;
+  _receivablesHydrated = true;
+  fetch("/api/receivables")
+    .then((res) => res.json())
+    .then((data: { ok: boolean; receivables?: Receivable[] }) => {
+      if (data.ok && data.receivables) {
+        _state = { ..._state, receivables: data.receivables };
+        notify();
+      }
+    })
+    .catch((err) => {
+      console.error("미수금 목록을 불러오지 못했습니다.", err);
+      _receivablesHydrated = false;
+    });
+}
+if (typeof window !== "undefined") hydrateReceivables();
+
 export function addReceivable(data: Omit<Receivable, "id">): Receivable {
-  const item: Receivable = { ...data, id: genId("rv") };
+  const tempId = genId("rv");
+  const item: Receivable = { ...data, id: tempId };
   _state = { ..._state, receivables: [..._state.receivables, item] };
-  record("receivable", item.id, `${item.projectNumber} · ${item.leadInstitutionName}`, "CREATE");
+  record("receivable", tempId, `${item.projectNumber} · ${item.leadInstitutionName}`, "CREATE");
   notify();
+
+  fetch("/api/receivables", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; receivable?: Receivable; error?: string }) => {
+      if (res.ok && res.receivable) {
+        _state = { ..._state, receivables: _state.receivables.map((r) => (r.id === tempId ? res.receivable! : r)) };
+      } else {
+        _state = { ..._state, receivables: _state.receivables.filter((r) => r.id !== tempId) };
+        console.error("미수금 생성 실패:", res.error);
+      }
+      notify();
+    })
+    .catch((err) => {
+      _state = { ..._state, receivables: _state.receivables.filter((r) => r.id !== tempId) };
+      notify();
+      console.error("미수금 생성 실패:", err);
+    });
+
   return item;
 }
 
@@ -1306,17 +1714,65 @@ export function updateReceivable(id: string, data: Partial<Receivable>): void {
   _state = { ..._state, receivables: _state.receivables.map((r) => (r.id === id ? after : r)) };
   record("receivable", id, `${after.projectNumber} · ${after.leadInstitutionName}`, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   notify();
+
+  fetch(`/api/receivables/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; receivable?: Receivable; error?: string }) => {
+      if (res.ok && res.receivable) {
+        _state = { ..._state, receivables: _state.receivables.map((r) => (r.id === id ? res.receivable! : r)) };
+        notify();
+      } else if (!res.ok) console.error("미수금 수정 실패:", res.error);
+    })
+    .catch((err) => console.error("미수금 수정 실패:", err));
 }
 
 // ============================================================
 // SETTLEMENTS
 // ============================================================
 
+let _settlementsHydrated = false;
+function hydrateSettlements(): void {
+  if (_settlementsHydrated || typeof window === "undefined") return;
+  _settlementsHydrated = true;
+  fetch("/api/settlements")
+    .then((res) => res.json())
+    .then((data: { ok: boolean; settlements?: Settlement[] }) => {
+      if (data.ok && data.settlements) {
+        _state = { ..._state, settlements: data.settlements };
+        notify();
+      }
+    })
+    .catch((err) => {
+      console.error("정산 목록을 불러오지 못했습니다.", err);
+      _settlementsHydrated = false;
+    });
+}
+if (typeof window !== "undefined") hydrateSettlements();
+
 export function addSettlement(data: Omit<Settlement, "id">): Settlement {
-  const item: Settlement = { ...data, id: genId("st") };
+  const tempId = genId("st");
+  const item: Settlement = { ...data, id: tempId };
   _state = { ..._state, settlements: [..._state.settlements, item] };
-  record("settlement", item.id, `${item.projectNumber} · ${item.institutionName}`, "CREATE");
+  record("settlement", tempId, `${item.projectNumber} · ${item.institutionName}`, "CREATE");
   notify();
+
+  fetch("/api/settlements", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; settlement?: Settlement; error?: string }) => {
+      if (res.ok && res.settlement) {
+        _state = { ..._state, settlements: _state.settlements.map((s) => (s.id === tempId ? res.settlement! : s)) };
+      } else {
+        _state = { ..._state, settlements: _state.settlements.filter((s) => s.id !== tempId) };
+        console.error("정산 생성 실패:", res.error);
+      }
+      notify();
+    })
+    .catch((err) => {
+      _state = { ..._state, settlements: _state.settlements.filter((s) => s.id !== tempId) };
+      notify();
+      console.error("정산 생성 실패:", err);
+    });
+
   return item;
 }
 
@@ -1327,17 +1783,65 @@ export function updateSettlement(id: string, data: Partial<Settlement>): void {
   _state = { ..._state, settlements: _state.settlements.map((s) => (s.id === id ? after : s)) };
   record("settlement", id, `${after.projectNumber} · ${after.institutionName}`, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   notify();
+
+  fetch(`/api/settlements/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; settlement?: Settlement; error?: string }) => {
+      if (res.ok && res.settlement) {
+        _state = { ..._state, settlements: _state.settlements.map((s) => (s.id === id ? res.settlement! : s)) };
+        notify();
+      } else if (!res.ok) console.error("정산 수정 실패:", res.error);
+    })
+    .catch((err) => console.error("정산 수정 실패:", err));
 }
 
 // ============================================================
 // PROJECT ISSUES (이슈/메모)
 // ============================================================
 
+let _projectIssuesHydrated = false;
+function hydrateProjectIssues(): void {
+  if (_projectIssuesHydrated || typeof window === "undefined") return;
+  _projectIssuesHydrated = true;
+  fetch("/api/project-issues")
+    .then((res) => res.json())
+    .then((data: { ok: boolean; projectIssues?: ProjectIssue[] }) => {
+      if (data.ok && data.projectIssues) {
+        _state = { ..._state, projectIssues: data.projectIssues };
+        notify();
+      }
+    })
+    .catch((err) => {
+      console.error("이슈 목록을 불러오지 못했습니다.", err);
+      _projectIssuesHydrated = false;
+    });
+}
+if (typeof window !== "undefined") hydrateProjectIssues();
+
 export function addProjectIssue(data: Omit<ProjectIssue, "id">): ProjectIssue {
-  const item: ProjectIssue = { ...data, id: genId("pi") };
+  const tempId = genId("pi");
+  const item: ProjectIssue = { ...data, id: tempId };
   _state = { ..._state, projectIssues: [..._state.projectIssues, item] };
-  record("projectIssue", item.id, `${item.projectNumber} 이슈`, "CREATE");
+  record("projectIssue", tempId, `${item.projectNumber} 이슈`, "CREATE");
   notify();
+
+  fetch("/api/project-issues", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; projectIssue?: ProjectIssue; error?: string }) => {
+      if (res.ok && res.projectIssue) {
+        _state = { ..._state, projectIssues: _state.projectIssues.map((i) => (i.id === tempId ? res.projectIssue! : i)) };
+      } else {
+        _state = { ..._state, projectIssues: _state.projectIssues.filter((i) => i.id !== tempId) };
+        console.error("이슈 생성 실패:", res.error);
+      }
+      notify();
+    })
+    .catch((err) => {
+      _state = { ..._state, projectIssues: _state.projectIssues.filter((i) => i.id !== tempId) };
+      notify();
+      console.error("이슈 생성 실패:", err);
+    });
+
   return item;
 }
 
@@ -1351,12 +1855,27 @@ export function updateProjectIssue(id: string, changes: Partial<Omit<ProjectIssu
   };
   record("projectIssue", id, "이슈 업데이트", "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   notify();
+
+  fetch(`/api/project-issues/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(changes) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; projectIssue?: ProjectIssue; error?: string }) => {
+      if (res.ok && res.projectIssue) {
+        _state = { ..._state, projectIssues: _state.projectIssues.map((i) => (i.id === id ? res.projectIssue! : i)) };
+        notify();
+      } else if (!res.ok) console.error("이슈 수정 실패:", res.error);
+    })
+    .catch((err) => console.error("이슈 수정 실패:", err));
 }
 
 export function deleteProjectIssue(id: string): void {
   _state = { ..._state, projectIssues: _state.projectIssues.filter((i) => i.id !== id) };
   record("projectIssue", id, "이슈 삭제", "DELETE");
   notify();
+
+  fetch(`/api/project-issues/${id}`, { method: "DELETE" })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; error?: string }) => { if (!res.ok) console.error("이슈 삭제 실패(서버):", res.error); })
+    .catch((err) => console.error("이슈 삭제 실패(서버):", err));
 }
 
 // ============================================================
@@ -1421,11 +1940,49 @@ export function dismissNotification(userId: string, id: string): void {
 // TAX INVOICES
 // ============================================================
 
+let _taxInvoicesHydrated = false;
+function hydrateTaxInvoices(): void {
+  if (_taxInvoicesHydrated || typeof window === "undefined") return;
+  _taxInvoicesHydrated = true;
+  fetch("/api/tax-invoices")
+    .then((res) => res.json())
+    .then((data: { ok: boolean; taxInvoices?: TaxInvoice[] }) => {
+      if (data.ok && data.taxInvoices) {
+        _state = { ..._state, taxInvoices: data.taxInvoices };
+        notify();
+      }
+    })
+    .catch((err) => {
+      console.error("세금계산서 목록을 불러오지 못했습니다.", err);
+      _taxInvoicesHydrated = false;
+    });
+}
+if (typeof window !== "undefined") hydrateTaxInvoices();
+
 export function addTaxInvoice(data: Omit<TaxInvoice, "id">): TaxInvoice {
-  const item: TaxInvoice = { ...data, id: genId("ti") };
+  const tempId = genId("ti");
+  const item: TaxInvoice = { ...data, id: tempId };
   _state = { ..._state, taxInvoices: [..._state.taxInvoices, item] };
-  record("taxInvoice", item.id, item.invoiceNumber, "CREATE");
+  record("taxInvoice", tempId, item.invoiceNumber, "CREATE");
   notify();
+
+  fetch("/api/tax-invoices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; taxInvoice?: TaxInvoice; error?: string }) => {
+      if (res.ok && res.taxInvoice) {
+        _state = { ..._state, taxInvoices: _state.taxInvoices.map((t) => (t.id === tempId ? res.taxInvoice! : t)) };
+      } else {
+        _state = { ..._state, taxInvoices: _state.taxInvoices.filter((t) => t.id !== tempId) };
+        console.error("세금계산서 생성 실패:", res.error);
+      }
+      notify();
+    })
+    .catch((err) => {
+      _state = { ..._state, taxInvoices: _state.taxInvoices.filter((t) => t.id !== tempId) };
+      notify();
+      console.error("세금계산서 생성 실패:", err);
+    });
+
   return item;
 }
 
@@ -1451,6 +2008,16 @@ export function updateTaxInvoice(id: string, data: Partial<TaxInvoice>): void {
   }
   record("taxInvoice", id, after.invoiceNumber, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   notify();
+
+  fetch(`/api/tax-invoices/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; taxInvoice?: TaxInvoice; error?: string }) => {
+      if (res.ok && res.taxInvoice) {
+        _state = { ..._state, taxInvoices: _state.taxInvoices.map((t) => (t.id === id ? res.taxInvoice! : t)) };
+        notify();
+      } else if (!res.ok) console.error("세금계산서 수정 실패:", res.error);
+    })
+    .catch((err) => console.error("세금계산서 수정 실패:", err));
 }
 
 // ─── 세금계산서 미발행 연차 집계 (연차별 청구액 확정 O, 세금계산서 발행 X) ───
@@ -2591,6 +3158,23 @@ export function autoGenerateTermFees(projectId: string): void {
   }
 
   notify();
+
+  // 계산 자체는 위에서 전부 로컬로 끝났다 — 그 결과(이 과제분 termFees/termFeeCalcs 전체)를
+  // 통째로 서버에 반영만 한다(계산 로직을 서버로 옮기지 않는다). project.id가 아직 addProject의
+  // POST가 끝나기 전 임시 id일 수도 있는데, 그 경우 서버가 과제를 못 찾아 이 호출은 조용히 실패하고
+  // addProject 쪽에서 실제 id로 다시 이 함수를 호출해 정상 동기화된다.
+  const projectTermFees = _state.termFees.filter((f) => f.projectNumber === project.projectNumber);
+  const projectTermFeeCalcs = _state.termFeeCalcs.filter((c) => c.projectId === project.id);
+  fetch(`/api/projects/${project.id}/sync-fees`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ termFees: projectTermFees, termFeeCalcs: projectTermFeeCalcs }),
+  })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; error?: string }) => {
+      if (!res.ok) console.error("연차수수료 동기화 실패(서버):", res.error);
+    })
+    .catch((err) => console.error("연차수수료 동기화 실패(서버):", err));
 }
 
 // ============================================================
