@@ -290,7 +290,6 @@ model ProjectTerm {
   emailBatches            EmailBatch[]
   emailLogs               EmailLog[]
 
-  @@unique([projectId, termYear])
   @@unique([projectId, termNumber])
   @@index([projectId], name: "idx_project_terms_project_id")
   @@index([termYear, projectId], name: "idx_project_terms_year")
