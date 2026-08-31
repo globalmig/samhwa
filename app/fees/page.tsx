@@ -1554,6 +1554,11 @@ function FeeRowDetail({ row }: { row: FeeRow }) {
                   <span className={`shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded whitespace-nowrap ${ISSUE_STATUS_STYLE[issue.status ?? "OPEN"]}`}>
                     {ISSUE_STATUS_LABEL[issue.status ?? "OPEN"]}
                   </span>
+                  {issue.term != null && (
+                    <span className="shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded whitespace-nowrap bg-slate-100 text-slate-500">
+                      {issue.term}연차
+                    </span>
+                  )}
                   <p className="flex-1 text-xs text-slate-700 leading-relaxed">{issue.content}</p>
                   <span className="shrink-0 text-[10px] text-slate-400 font-mono whitespace-nowrap">{issue.author} · {issue.createdAt}</span>
                 </div>

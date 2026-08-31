@@ -45,6 +45,7 @@ type EditDraft = {
   recipientUserIds: string[];
   institutionName: string;
   noInstitution: boolean;
+  term: number | "";
 };
 
 export default function IssuesPage() {
@@ -70,12 +71,13 @@ export default function IssuesPage() {
   const [formRecipientUserIds, setFormRecipientUserIds] = useState<string[]>([]);
   const [formInstitutionName, setFormInstitutionName] = useState("");
   const [formNoInstitution, setFormNoInstitution] = useState(false);
+  const [formTerm, setFormTerm] = useState<number | "">("");
 
   // Edit state
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<EditDraft>({
     content: "", priority: "MEDIUM", status: "OPEN", recipientGroups: [],
-    recipientUserIds: [], institutionName: "", noInstitution: false,
+    recipientUserIds: [], institutionName: "", noInstitution: false, term: "",
   });
 
   // Delete confirm
@@ -120,6 +122,7 @@ export default function IssuesPage() {
       recipientUserIds: formRecipientUserIds,
       institutionName: formNoInstitution ? undefined : (formInstitutionName.trim() || undefined),
       noInstitution: formNoInstitution,
+      term: formTerm === "" ? undefined : formTerm,
     });
     setFormContent("");
     setFormPriority("MEDIUM");
@@ -129,6 +132,7 @@ export default function IssuesPage() {
     setFormRecipientUserIds([]);
     setFormInstitutionName("");
     setFormNoInstitution(false);
+    setFormTerm("");
     setShowForm(false);
   }
 
@@ -138,6 +142,7 @@ export default function IssuesPage() {
       content: issue.content, priority: issue.priority, status: issue.status ?? "OPEN",
       recipientGroups: issue.recipientGroups ?? [], recipientUserIds: issue.recipientUserIds ?? [],
       institutionName: issue.institutionName ?? "", noInstitution: issue.noInstitution ?? false,
+      term: issue.term ?? "",
     });
   }
 
@@ -151,6 +156,7 @@ export default function IssuesPage() {
       recipientUserIds: editDraft.recipientUserIds,
       institutionName: editDraft.noInstitution ? undefined : (editDraft.institutionName.trim() || undefined),
       noInstitution: editDraft.noInstitution,
+      term: editDraft.term === "" ? undefined : editDraft.term,
     });
     setEditingId(null);
   }
@@ -162,6 +168,7 @@ export default function IssuesPage() {
       return {
         "우선순위": PRIORITY_LABEL[issue.priority],
         "진행여부": STATUS_LABEL[issue.status ?? "OPEN"],
+        "연차": issue.term != null ? `${issue.term}연차` : "",
         "내용": issue.content,
         "과제": project?.projectName ?? issue.projectNumber,
         "과제번호": issue.projectNumber,
@@ -220,15 +227,27 @@ export default function IssuesPage() {
       {showForm && (
         <div className="bg-white rounded-xl border border-blue-200 px-5 py-4 space-y-3">
           <h3 className="text-xs font-semibold text-slate-700">새 이슈 등록</h3>
-          <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">과제 선택</label>
-            <select value={formProjectId} onChange={(e) => setFormProjectId(e.target.value)}
-              className={`${sel} w-full`}>
-              <option value="">과제를 선택하세요</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>{p.projectName}</option>
-              ))}
-            </select>
+          <div className="flex items-start gap-3">
+            <div className="flex-1">
+              <label className="block text-xs font-medium text-slate-500 mb-1">과제 선택</label>
+              <select value={formProjectId} onChange={(e) => { setFormProjectId(e.target.value); setFormTerm(""); }}
+                className={`${sel} w-full`}>
+                <option value="">과제를 선택하세요</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>{p.projectName}</option>
+                ))}
+              </select>
+            </div>
+            <div className="w-28 shrink-0">
+              <label className="block text-xs font-medium text-slate-500 mb-1">연차</label>
+              <select value={formTerm} onChange={(e) => setFormTerm(e.target.value === "" ? "" : Number(e.target.value))}
+                disabled={!formProjectId} className={`${sel} w-full disabled:bg-slate-50 disabled:text-slate-400`}>
+                <option value="">선택 안함</option>
+                {Array.from({ length: projects.find((p) => p.id === formProjectId)?.totalTerms ?? 0 }, (_, i) => i + 1).map((n) => (
+                  <option key={n} value={n}>{n}연차</option>
+                ))}
+              </select>
+            </div>
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">이슈 발생 기관명</label>
@@ -456,6 +475,21 @@ export default function IssuesPage() {
                       <tr className="border-b border-blue-100 bg-blue-50/30">
                         <td className="px-4 pt-1 pb-2" colSpan={8}>
                           <div className="flex items-center gap-2">
+                            <span className="text-xs text-slate-500 w-20 shrink-0">연차</span>
+                            <select value={editDraft.term}
+                              onChange={(e) => setEditDraft((d) => ({ ...d, term: e.target.value === "" ? "" : Number(e.target.value) }))}
+                              className="text-xs border border-slate-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400 w-28">
+                              <option value="">선택 안함</option>
+                              {Array.from({ length: project?.totalTerms ?? 0 }, (_, i) => i + 1).map((n) => (
+                                <option key={n} value={n}>{n}연차</option>
+                              ))}
+                            </select>
+                          </div>
+                        </td>
+                      </tr>
+                      <tr className="border-b border-blue-100 bg-blue-50/30">
+                        <td className="px-4 pt-1 pb-2" colSpan={8}>
+                          <div className="flex items-center gap-2">
                             <span className="text-xs text-slate-500 w-20 shrink-0">이슈 발생 기관</span>
                             <input value={editDraft.institutionName}
                               onChange={(e) => setEditDraft((d) => ({ ...d, institutionName: e.target.value }))}
@@ -517,7 +551,14 @@ export default function IssuesPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3 max-w-md">
-                      <p className="text-sm text-slate-700 leading-relaxed line-clamp-2">{issue.content}</p>
+                      <div className="flex items-start gap-2">
+                        {issue.term != null && (
+                          <span className="mt-0.5 shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded whitespace-nowrap bg-slate-100 text-slate-500">
+                            {issue.term}연차
+                          </span>
+                        )}
+                        <p className="text-sm text-slate-700 leading-relaxed line-clamp-2">{issue.content}</p>
+                      </div>
                       {!issue.noInstitution && issue.institutionName && (
                         <p className="text-[11px] text-slate-400 mt-0.5">기관: {issue.institutionName}</p>
                       )}
