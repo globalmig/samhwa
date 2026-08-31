@@ -1529,6 +1529,22 @@ export function addEmailDispatch(data: Omit<EmailDispatch, "id">): EmailDispatch
 // STANDARD ATTACHMENTS (공문 표준 첨부서류 — 사업자등록증 등 일괄 관리)
 // ============================================================
 
+let _standardAttachmentsHydrated = false;
+function hydrateStandardAttachments(): void {
+  if (_standardAttachmentsHydrated || typeof window === "undefined") return;
+  _standardAttachmentsHydrated = true;
+  fetch("/api/standard-attachments")
+    .then((res) => res.json())
+    .then((data: { ok: boolean; attachments?: StandardAttachment[] }) => {
+      if (data.ok && data.attachments) {
+        _state = { ..._state, standardAttachments: data.attachments };
+        notify();
+      }
+    })
+    .catch((err) => { console.error("표준 첨부서류를 불러오지 못했습니다.", err); _standardAttachmentsHydrated = false; });
+}
+if (typeof window !== "undefined") hydrateStandardAttachments();
+
 export function updateStandardAttachment(id: string, data: Partial<Omit<StandardAttachment, "id">>): void {
   const before = _state.standardAttachments.find((a) => a.id === id);
   if (!before) return;
@@ -1536,13 +1552,42 @@ export function updateStandardAttachment(id: string, data: Partial<Omit<Standard
   _state = { ..._state, standardAttachments: _state.standardAttachments.map((a) => (a.id === id ? after : a)) };
   record("standardAttachment", id, after.name, "UPDATE");
   notify();
+
+  fetch(`/api/standard-attachments/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; attachment?: StandardAttachment; error?: string }) => {
+      if (res.ok && res.attachment) {
+        _state = { ..._state, standardAttachments: _state.standardAttachments.map((a) => (a.id === id ? res.attachment! : a)) };
+        notify();
+      } else if (!res.ok) console.error("표준 첨부서류 수정 실패:", res.error);
+    })
+    .catch((err) => console.error("표준 첨부서류 수정 실패:", err));
 }
 
 export function addStandardAttachment(name: string): StandardAttachment {
-  const item: StandardAttachment = { id: genId("sa"), name, updatedAt: new Date().toISOString().slice(0, 10) };
+  const tempId = genId("sa");
+  const item: StandardAttachment = { id: tempId, name, updatedAt: new Date().toISOString().slice(0, 10) };
   _state = { ..._state, standardAttachments: [..._state.standardAttachments, item] };
-  record("standardAttachment", item.id, name, "CREATE");
+  record("standardAttachment", tempId, name, "CREATE");
   notify();
+
+  fetch("/api/standard-attachments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; attachment?: StandardAttachment; error?: string }) => {
+      if (res.ok && res.attachment) {
+        _state = { ..._state, standardAttachments: _state.standardAttachments.map((a) => (a.id === tempId ? res.attachment! : a)) };
+      } else {
+        _state = { ..._state, standardAttachments: _state.standardAttachments.filter((a) => a.id !== tempId) };
+        console.error("표준 첨부서류 생성 실패:", res.error);
+      }
+      notify();
+    })
+    .catch((err) => {
+      _state = { ..._state, standardAttachments: _state.standardAttachments.filter((a) => a.id !== tempId) };
+      notify();
+      console.error("표준 첨부서류 생성 실패:", err);
+    });
+
   return item;
 }
 
@@ -1552,6 +1597,11 @@ export function deleteStandardAttachment(id: string): void {
   _state = { ..._state, standardAttachments: _state.standardAttachments.filter((a) => a.id !== id) };
   record("standardAttachment", id, `${item.name} 삭제`, "DELETE");
   notify();
+
+  fetch(`/api/standard-attachments/${id}`, { method: "DELETE" })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; error?: string }) => { if (!res.ok) console.error("표준 첨부서류 삭제 실패(서버):", res.error); })
+    .catch((err) => console.error("표준 첨부서류 삭제 실패(서버):", err));
 }
 
 // ============================================================
@@ -1784,15 +1834,50 @@ export function updateAgencyGuide(shortName: string, tabs: AgencyGuideTab[]): vo
 // AGENCY NOTICE TEMPLATES (전담기관 공문 템플릿)
 // ============================================================
 
+let _agencyNoticeTemplatesHydrated = false;
+function hydrateAgencyNoticeTemplates(): void {
+  if (_agencyNoticeTemplatesHydrated || typeof window === "undefined") return;
+  _agencyNoticeTemplatesHydrated = true;
+  fetch("/api/agency-notice-templates")
+    .then((res) => res.json())
+    .then((data: { ok: boolean; templates?: AgencyNoticeTemplateEntry[] }) => {
+      if (data.ok && data.templates) {
+        _state = { ..._state, agencyNoticeTemplates: data.templates };
+        notify();
+      }
+    })
+    .catch((err) => { console.error("전담기관 공문 템플릿을 불러오지 못했습니다.", err); _agencyNoticeTemplatesHydrated = false; });
+}
+if (typeof window !== "undefined") hydrateAgencyNoticeTemplates();
+
 export function addAgencyNoticeTemplate(
   agencyShortName: string,
   name: string,
   content: AgencyNoticeTemplate
 ): AgencyNoticeTemplateEntry {
-  const item: AgencyNoticeTemplateEntry = { id: genId("ant"), agencyShortName, name, content };
+  const tempId = genId("ant");
+  const item: AgencyNoticeTemplateEntry = { id: tempId, agencyShortName, name, content };
   _state = { ..._state, agencyNoticeTemplates: [..._state.agencyNoticeTemplates, item] };
   record("fundingAgency", agencyShortName, `${agencyShortName} 공문 템플릿 등록 (${name})`, "CREATE");
   notify();
+
+  fetch("/api/agency-notice-templates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agencyShortName, name, content }) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; template?: AgencyNoticeTemplateEntry; error?: string }) => {
+      if (res.ok && res.template) {
+        _state = { ..._state, agencyNoticeTemplates: _state.agencyNoticeTemplates.map((t) => (t.id === tempId ? res.template! : t)) };
+      } else {
+        _state = { ..._state, agencyNoticeTemplates: _state.agencyNoticeTemplates.filter((t) => t.id !== tempId) };
+        console.error("공문 템플릿 생성 실패:", res.error);
+      }
+      notify();
+    })
+    .catch((err) => {
+      _state = { ..._state, agencyNoticeTemplates: _state.agencyNoticeTemplates.filter((t) => t.id !== tempId) };
+      notify();
+      console.error("공문 템플릿 생성 실패:", err);
+    });
+
   return item;
 }
 
@@ -1806,6 +1891,16 @@ export function updateAgencyNoticeTemplate(
   _state = { ..._state, agencyNoticeTemplates: _state.agencyNoticeTemplates.map((t) => (t.id === id ? after : t)) };
   record("fundingAgency", after.agencyShortName, `${after.agencyShortName} 공문 템플릿 수정 (${after.name})`, "UPDATE");
   notify();
+
+  fetch(`/api/agency-notice-templates/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; template?: AgencyNoticeTemplateEntry; error?: string }) => {
+      if (res.ok && res.template) {
+        _state = { ..._state, agencyNoticeTemplates: _state.agencyNoticeTemplates.map((t) => (t.id === id ? res.template! : t)) };
+        notify();
+      } else if (!res.ok) console.error("공문 템플릿 수정 실패:", res.error);
+    })
+    .catch((err) => console.error("공문 템플릿 수정 실패:", err));
 }
 
 export function deleteAgencyNoticeTemplate(id: string): void {
@@ -1814,21 +1909,58 @@ export function deleteAgencyNoticeTemplate(id: string): void {
   _state = { ..._state, agencyNoticeTemplates: _state.agencyNoticeTemplates.filter((t) => t.id !== id) };
   record("fundingAgency", item.agencyShortName, `${item.agencyShortName} 공문 템플릿 삭제 (${item.name})`, "DELETE");
   notify();
+
+  fetch(`/api/agency-notice-templates/${id}`, { method: "DELETE" })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; error?: string }) => { if (!res.ok) console.error("공문 템플릿 삭제 실패(서버):", res.error); })
+    .catch((err) => console.error("공문 템플릿 삭제 실패(서버):", err));
 }
 
 // ============================================================
 // FEE INVOICE TEMPLATES (수수료 청구서 양식)
 // ============================================================
 
+let _feeInvoiceTemplatesHydrated = false;
+function hydrateFeeInvoiceTemplates(): void {
+  if (_feeInvoiceTemplatesHydrated || typeof window === "undefined") return;
+  _feeInvoiceTemplatesHydrated = true;
+  fetch("/api/fee-invoice-templates")
+    .then((res) => res.json())
+    .then((data: { ok: boolean; templates?: FeeInvoiceTemplateEntry[] }) => {
+      if (data.ok && data.templates) { _state = { ..._state, feeInvoiceTemplates: data.templates }; notify(); }
+    })
+    .catch((err) => { console.error("수수료 청구서 템플릿을 불러오지 못했습니다.", err); _feeInvoiceTemplatesHydrated = false; });
+}
+if (typeof window !== "undefined") hydrateFeeInvoiceTemplates();
+
 export function addFeeInvoiceTemplate(
   category: FeeInvoiceTemplateEntry["category"],
   name: string,
   content: FeeInvoiceTemplate
 ): FeeInvoiceTemplateEntry {
-  const item: FeeInvoiceTemplateEntry = { id: genId("fit"), category, name, isDefault: false, content };
+  const tempId = genId("fit");
+  const item: FeeInvoiceTemplateEntry = { id: tempId, category, name, isDefault: false, content };
   _state = { ..._state, feeInvoiceTemplates: [..._state.feeInvoiceTemplates, item] };
-  record("feeInvoiceTemplate", item.id, name, "CREATE");
+  record("feeInvoiceTemplate", tempId, name, "CREATE");
   notify();
+
+  fetch("/api/fee-invoice-templates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ category, name, content }) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; template?: FeeInvoiceTemplateEntry; error?: string }) => {
+      if (res.ok && res.template) {
+        _state = { ..._state, feeInvoiceTemplates: _state.feeInvoiceTemplates.map((t) => (t.id === tempId ? res.template! : t)) };
+      } else {
+        _state = { ..._state, feeInvoiceTemplates: _state.feeInvoiceTemplates.filter((t) => t.id !== tempId) };
+        console.error("수수료 청구서 템플릿 생성 실패:", res.error);
+      }
+      notify();
+    })
+    .catch((err) => {
+      _state = { ..._state, feeInvoiceTemplates: _state.feeInvoiceTemplates.filter((t) => t.id !== tempId) };
+      notify();
+      console.error("수수료 청구서 템플릿 생성 실패:", err);
+    });
+
   return item;
 }
 
@@ -1842,6 +1974,16 @@ export function updateFeeInvoiceTemplate(
   _state = { ..._state, feeInvoiceTemplates: _state.feeInvoiceTemplates.map((t) => (t.id === id ? after : t)) };
   record("feeInvoiceTemplate", id, `${after.name} 수정`, "UPDATE");
   notify();
+
+  fetch(`/api/fee-invoice-templates/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; template?: FeeInvoiceTemplateEntry; error?: string }) => {
+      if (res.ok && res.template) {
+        _state = { ..._state, feeInvoiceTemplates: _state.feeInvoiceTemplates.map((t) => (t.id === id ? res.template! : t)) };
+        notify();
+      } else if (!res.ok) console.error("수수료 청구서 템플릿 수정 실패:", res.error);
+    })
+    .catch((err) => console.error("수수료 청구서 템플릿 수정 실패:", err));
 }
 
 // 대표양식(isDefault)은 카테고리마다 항상 최소 1개 있어야 발송(DispatchModal) 흐름이 깨지지 않으므로
@@ -1852,6 +1994,11 @@ export function deleteFeeInvoiceTemplate(id: string): void {
   _state = { ..._state, feeInvoiceTemplates: _state.feeInvoiceTemplates.filter((t) => t.id !== id) };
   record("feeInvoiceTemplate", id, `${item.name} 삭제`, "DELETE");
   notify();
+
+  fetch(`/api/fee-invoice-templates/${id}`, { method: "DELETE" })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; error?: string }) => { if (!res.ok) console.error("수수료 청구서 템플릿 삭제 실패(서버):", res.error); })
+    .catch((err) => console.error("수수료 청구서 템플릿 삭제 실패(서버):", err));
 }
 
 export function setDefaultFeeInvoiceTemplate(id: string): void {
@@ -1865,21 +2012,58 @@ export function setDefaultFeeInvoiceTemplate(id: string): void {
   };
   record("feeInvoiceTemplate", id, `${item.name} 대표양식으로 지정`, "UPDATE");
   notify();
+
+  fetch(`/api/fee-invoice-templates/${id}/set-default`, { method: "POST" })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; error?: string }) => { if (!res.ok) console.error("대표양식 지정 실패(서버):", res.error); })
+    .catch((err) => console.error("대표양식 지정 실패(서버):", err));
 }
 
 // ============================================================
 // SIMPLE NOTICE TEMPLATES (계산서발행 서류 요청 / 입금 확인 요청 — 첨부 없이 본문 하나만 보내는 안내 메일)
 // ============================================================
 
+let _simpleNoticeTemplatesHydrated = false;
+function hydrateSimpleNoticeTemplates(): void {
+  if (_simpleNoticeTemplatesHydrated || typeof window === "undefined") return;
+  _simpleNoticeTemplatesHydrated = true;
+  fetch("/api/simple-notice-templates")
+    .then((res) => res.json())
+    .then((data: { ok: boolean; templates?: SimpleNoticeTemplateEntry[] }) => {
+      if (data.ok && data.templates) { _state = { ..._state, simpleNoticeTemplates: data.templates }; notify(); }
+    })
+    .catch((err) => { console.error("간단 안내메일 템플릿을 불러오지 못했습니다.", err); _simpleNoticeTemplatesHydrated = false; });
+}
+if (typeof window !== "undefined") hydrateSimpleNoticeTemplates();
+
 export function addSimpleNoticeTemplate(
   category: SimpleNoticeTemplateEntry["category"],
   name: string,
   content: SimpleNoticeTemplate
 ): SimpleNoticeTemplateEntry {
-  const item: SimpleNoticeTemplateEntry = { id: genId("snt"), category, name, isDefault: false, content };
+  const tempId = genId("snt");
+  const item: SimpleNoticeTemplateEntry = { id: tempId, category, name, isDefault: false, content };
   _state = { ..._state, simpleNoticeTemplates: [..._state.simpleNoticeTemplates, item] };
-  record("simpleNoticeTemplate", item.id, name, "CREATE");
+  record("simpleNoticeTemplate", tempId, name, "CREATE");
   notify();
+
+  fetch("/api/simple-notice-templates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ category, name, content }) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; template?: SimpleNoticeTemplateEntry; error?: string }) => {
+      if (res.ok && res.template) {
+        _state = { ..._state, simpleNoticeTemplates: _state.simpleNoticeTemplates.map((t) => (t.id === tempId ? res.template! : t)) };
+      } else {
+        _state = { ..._state, simpleNoticeTemplates: _state.simpleNoticeTemplates.filter((t) => t.id !== tempId) };
+        console.error("간단 안내메일 템플릿 생성 실패:", res.error);
+      }
+      notify();
+    })
+    .catch((err) => {
+      _state = { ..._state, simpleNoticeTemplates: _state.simpleNoticeTemplates.filter((t) => t.id !== tempId) };
+      notify();
+      console.error("간단 안내메일 템플릿 생성 실패:", err);
+    });
+
   return item;
 }
 
@@ -1890,6 +2074,16 @@ export function updateSimpleNoticeTemplate(id: string, data: Partial<Pick<Simple
   _state = { ..._state, simpleNoticeTemplates: _state.simpleNoticeTemplates.map((t) => (t.id === id ? after : t)) };
   record("simpleNoticeTemplate", id, `${after.name} 수정`, "UPDATE");
   notify();
+
+  fetch(`/api/simple-notice-templates/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; template?: SimpleNoticeTemplateEntry; error?: string }) => {
+      if (res.ok && res.template) {
+        _state = { ..._state, simpleNoticeTemplates: _state.simpleNoticeTemplates.map((t) => (t.id === id ? res.template! : t)) };
+        notify();
+      } else if (!res.ok) console.error("간단 안내메일 템플릿 수정 실패:", res.error);
+    })
+    .catch((err) => console.error("간단 안내메일 템플릿 수정 실패:", err));
 }
 
 // 대표양식(isDefault)은 카테고리마다 항상 최소 1개 있어야 발송(SimpleNoticeModal) 흐름이 깨지지 않으므로
@@ -1900,6 +2094,11 @@ export function deleteSimpleNoticeTemplate(id: string): void {
   _state = { ..._state, simpleNoticeTemplates: _state.simpleNoticeTemplates.filter((t) => t.id !== id) };
   record("simpleNoticeTemplate", id, `${item.name} 삭제`, "DELETE");
   notify();
+
+  fetch(`/api/simple-notice-templates/${id}`, { method: "DELETE" })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; error?: string }) => { if (!res.ok) console.error("간단 안내메일 템플릿 삭제 실패(서버):", res.error); })
+    .catch((err) => console.error("간단 안내메일 템플릿 삭제 실패(서버):", err));
 }
 
 export function setDefaultSimpleNoticeTemplate(id: string): void {
@@ -1913,6 +2112,11 @@ export function setDefaultSimpleNoticeTemplate(id: string): void {
   };
   record("simpleNoticeTemplate", id, `${item.name} 대표양식으로 지정`, "UPDATE");
   notify();
+
+  fetch(`/api/simple-notice-templates/${id}/set-default`, { method: "POST" })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; error?: string }) => { if (!res.ok) console.error("대표양식 지정 실패(서버):", res.error); })
+    .catch((err) => console.error("대표양식 지정 실패(서버):", err));
 }
 
 // ============================================================
