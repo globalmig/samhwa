@@ -1767,11 +1767,49 @@ export function deleteProjectIssue(id: string): void {
 // NOTICES (공지사항)
 // ============================================================
 
+let _noticesHydrated = false;
+function hydrateNotices(): void {
+  if (_noticesHydrated || typeof window === "undefined") return;
+  _noticesHydrated = true;
+  fetch("/api/notices")
+    .then((res) => res.json())
+    .then((data: { ok: boolean; notices?: Notice[] }) => {
+      if (data.ok && data.notices) {
+        _state = { ..._state, notices: data.notices };
+        notify();
+      }
+    })
+    .catch((err) => {
+      console.error("공지사항 목록을 불러오지 못했습니다.", err);
+      _noticesHydrated = false;
+    });
+}
+if (typeof window !== "undefined") hydrateNotices();
+
 export function addNotice(data: Omit<Notice, "id">): Notice {
-  const item: Notice = { ...data, id: genId("notice") };
+  const tempId = genId("notice");
+  const item: Notice = { ...data, id: tempId };
   _state = { ..._state, notices: [item, ..._state.notices] };
-  record("notice", item.id, item.title, "CREATE");
+  record("notice", tempId, item.title, "CREATE");
   notify();
+
+  fetch("/api/notices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; notice?: Notice; error?: string }) => {
+      if (res.ok && res.notice) {
+        _state = { ..._state, notices: _state.notices.map((n) => (n.id === tempId ? res.notice! : n)) };
+      } else {
+        _state = { ..._state, notices: _state.notices.filter((n) => n.id !== tempId) };
+        console.error("공지사항 생성 실패:", res.error);
+      }
+      notify();
+    })
+    .catch((err) => {
+      _state = { ..._state, notices: _state.notices.filter((n) => n.id !== tempId) };
+      notify();
+      console.error("공지사항 생성 실패:", err);
+    });
+
   return item;
 }
 
@@ -1781,6 +1819,11 @@ export function deleteNotice(id: string): void {
   _state = { ..._state, notices: _state.notices.filter((n) => n.id !== id) };
   record("notice", id, item.title, "DELETE");
   notify();
+
+  fetch(`/api/notices/${id}`, { method: "DELETE" })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; error?: string }) => { if (!res.ok) console.error("공지사항 삭제 실패(서버):", res.error); })
+    .catch((err) => console.error("공지사항 삭제 실패(서버):", err));
 }
 
 // ============================================================
