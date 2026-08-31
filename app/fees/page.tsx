@@ -29,6 +29,7 @@ import {
   type ProjectIssue,
   type AgencyNoticeTemplateEntry,
   type SystemUser,
+  type Receivable,
   EMPTY_NOTICE_TEMPLATE,
 } from "@/lib/mock";
 import { fmtWon, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange } from "@/lib/utils";
@@ -44,6 +45,7 @@ import { buildNoticeEmailHtml } from "@/lib/notice-email-html";
 import { applyManagerContactRows } from "@/lib/notice-contacts";
 import { useCanWrite } from "@/lib/permissions";
 import { getCurrentUser } from "@/lib/auth";
+import { isOverdueByRule } from "@/lib/notifications";
 import { resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows } from "@/lib/fee-calculator";
 
 // 여러 이메일 문자열(각각 콤마 구분일 수 있음)을 하나로 합치고 중복을 제거한다 — 정산절차 안내
@@ -222,6 +224,16 @@ const COLLECTION_STATUS_COLOR: Record<string, string> = {
   PENDING: "bg-slate-100 text-slate-500",
   OVERDUE: "bg-red-100 text-red-600",
 };
+
+// Receivable.status의 기본값은 "OVERDUE"라는 이름과 달리 실제로는 "미수(청구 후 미입금)"를 뜻하고,
+// 실제 연체 여부는 만기일(계산서일자+3개월)이 지났는지로 따로 판정한다(isOverdueByRule) —
+// receivables 페이지(effectiveDisplayStatus)와 동일한 기준. raw status를 그대로 라벨링하면
+// 발행 직후부터 곧장 "연체"로 보여버려(만기 전인데도) 잘못된 화면이 된다.
+function feesCollectionStatus(rv: Pick<Receivable, "status" | "dueDate"> | undefined): "" | "PAID" | "PARTIAL" | "PENDING" | "OVERDUE" {
+  if (!rv) return "";
+  if (rv.status === "PAID" || rv.status === "PARTIAL") return rv.status;
+  return isOverdueByRule(rv) ? "OVERDUE" : "PENDING";
+}
 
 const inputCls  = "w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400";
 const selectCls = `${inputCls} bg-white`;
@@ -1246,7 +1258,7 @@ function useFeeRows(): FeeRow[] {
           totalInvoiceAmount:  invoice?.totalAmount ?? appliedFeeTotal,
           receivableId:        rv?.id ?? "",
           billedAmount:        rv?.billedAmount ?? 0,
-          collectionStatus:    rv?.status ?? "",
+          collectionStatus:    feesCollectionStatus(rv),
           paidAmount:          rv?.paidAmount ?? 0,
           paidAt:              rv?.paidAt ?? null,
           receivableAmount:    rv?.receivableAmount ?? 0,
@@ -1473,6 +1485,13 @@ const COLUMNS = [
   { key: "assignedManager",    label: "과제담당자(부)", width: "w-20", align: "text-center" },
   { key: "assignedManagerPrimary", label: "과제담당자(정)", width: "w-20", align: "text-center" },
 ] as const;
+
+// 공문발송/매출관리/수금관리 액션 열은 데이터 열(COLUMNS)이 아니라 버튼·드롭다운을 담은 별도
+// <td>라 COLUMNS 배열엔 없지만, "손실금액"과 "과제코드" 사이에 표시돼야 해서 그 지점에서 COLUMNS를
+// 둘로 나눠 그 사이에 끼워 넣는다(헤더·바디 렌더링에서 공통으로 사용).
+const SALES_ACTIONS_INSERT_INDEX = COLUMNS.findIndex((c) => c.key === "projectCode");
+const COLUMNS_BEFORE_SALES_ACTIONS = COLUMNS.slice(0, SALES_ACTIONS_INSERT_INDEX);
+const COLUMNS_AFTER_SALES_ACTIONS = COLUMNS.slice(SALES_ACTIONS_INSERT_INDEX);
 
 // ── 좌측 고정(freeze) 열 — 체크박스/펼치기 버튼 + 약칭~연구책임자는 가로로 스크롤해도 계속 보이게 고정한다.
 // Tailwind의 w-* 유틸은 빌드 타임에 고정된 px값이라(w-20=80px 등) 여기서도 같은 값을 그대로 사용해
@@ -2966,7 +2985,7 @@ export default function FeesPage() {
                   className="px-2 py-3 sticky top-0 z-30 bg-slate-50 border-b border-slate-200"
                   style={{ ...fixedColStyle(STICKY_CHEVRON_PX), left: canSelectRows ? STICKY_CHECKBOX_PX : 0 }}
                 />
-                {COLUMNS.map((col) => {
+                {COLUMNS_BEFORE_SALES_ACTIONS.map((col) => {
                   const isSticky = columnsFrozen && (STICKY_LEFT_KEYS as readonly string[]).includes(col.key);
                   const isLastSticky = col.key === STICKY_LEFT_KEYS[STICKY_LEFT_KEYS.length - 1];
                   return (
@@ -2984,6 +3003,21 @@ export default function FeesPage() {
                 <th className="px-3 py-3 text-center font-medium text-slate-500 whitespace-nowrap w-24 sticky top-0 z-20 bg-slate-50 border-b border-slate-200">공문발송</th>
                 <th className="px-3 py-3 text-center font-medium text-slate-500 whitespace-nowrap w-32 sticky top-0 z-20 bg-slate-50 border-b border-slate-200">매출관리</th>
                 <th className="px-3 py-3 text-center font-medium text-slate-500 whitespace-nowrap w-20 sticky top-0 z-20 bg-slate-50 border-b border-slate-200">수금관리</th>
+                {COLUMNS_AFTER_SALES_ACTIONS.map((col) => {
+                  const isSticky = columnsFrozen && (STICKY_LEFT_KEYS as readonly string[]).includes(col.key);
+                  const isLastSticky = col.key === STICKY_LEFT_KEYS[STICKY_LEFT_KEYS.length - 1];
+                  return (
+                    <th
+                      key={col.key}
+                      className={`px-3 py-3 font-medium text-slate-500 whitespace-nowrap ${col.align} ${isSticky ? "" : col.width} sticky top-0 border-b border-slate-200 ${
+                        isSticky ? `z-30 bg-slate-50 ${isLastSticky ? "border-r border-r-slate-200" : ""}` : "z-20 bg-slate-50"
+                      }`}
+                      style={isSticky ? { ...fixedColStyle(STICKY_COL_PX[col.key]), left: stickyLeftOffset(col.key, canSelectRows) } : undefined}
+                    >
+                      {col.label}
+                    </th>
+                  );
+                })}
                 <th className="px-3 py-3 text-center font-medium text-slate-500 whitespace-nowrap w-24 sticky top-0 z-20 bg-slate-50 border-b border-slate-200">회계법인</th>
                 <th className="px-3 py-3 text-center font-medium text-slate-500 whitespace-nowrap w-20 sticky top-0 z-20 bg-slate-50 border-b border-slate-200">정보수정</th>
               </tr>
@@ -3047,7 +3081,7 @@ export default function FeesPage() {
                           {isExpanded ? <FiChevronUp size={13} /> : <FiChevronDown size={13} />}
                         </button>
                       </td>
-                      {COLUMNS.map((col) => {
+                      {COLUMNS_BEFORE_SALES_ACTIONS.map((col) => {
                         const isSticky = columnsFrozen && (STICKY_LEFT_KEYS as readonly string[]).includes(col.key);
                         const isLastSticky = col.key === STICKY_LEFT_KEYS[STICKY_LEFT_KEYS.length - 1];
                         return (
@@ -3226,6 +3260,21 @@ export default function FeesPage() {
                           <span className="text-slate-300 text-xs">—</span>
                         )}
                       </td>
+                      {COLUMNS_AFTER_SALES_ACTIONS.map((col) => {
+                        const isSticky = columnsFrozen && (STICKY_LEFT_KEYS as readonly string[]).includes(col.key);
+                        const isLastSticky = col.key === STICKY_LEFT_KEYS[STICKY_LEFT_KEYS.length - 1];
+                        return (
+                          <td
+                            key={col.key}
+                            className={`px-3 py-2.5 ${col.align} ${isSticky ? "" : col.width} align-middle ${rowBorder} ${
+                              isSticky ? `sticky z-10 ${rowBg} ${isLastSticky ? "border-r border-r-slate-200" : ""}` : ""
+                            }`}
+                            style={isSticky ? { ...fixedColStyle(STICKY_COL_PX[col.key]), left: stickyLeftOffset(col.key, canSelectRows) } : undefined}
+                          >
+                            {cell(row, col.key)}
+                          </td>
+                        );
+                      })}
                       {/* 회계법인 — 엑셀 업로드("회계법인" 열)로 반영, 삼화 자신이면 보통 비어있다 */}
                       <td className={`px-3 py-2.5 text-center align-middle w-24 ${rowBorder}`}>
                         {row.auditFirm
