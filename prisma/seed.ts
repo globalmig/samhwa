@@ -31,6 +31,7 @@ import {
   initialWriteAccess,
   COMPANY_INFO,
 } from "../lib/mock";
+import { AGENCY_GUIDE } from "../lib/agency-guide";
 
 const prisma = new PrismaClient();
 
@@ -182,6 +183,7 @@ async function main() {
         autoDetectByLeadInstitution: !!fa.autoDetectByLeadInstitution,
         affiliatedInstitutionNames: fa.affiliatedInstitutionNames ? JSON.stringify(fa.affiliatedInstitutionNames) : null,
         specialNotes: fa.specialNotes ? JSON.stringify(fa.specialNotes) : null,
+        guideContent: AGENCY_GUIDE[fa.shortName] ? JSON.stringify(AGENCY_GUIDE[fa.shortName]) : null,
       },
     });
     agencyIdMap.set(fa.id, row.id);
