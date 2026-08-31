@@ -68,7 +68,7 @@ async function cleanTables() {
     "policy_change_histories",
     "fee_policy_exception_rules", "fee_policy_exemption_rules", "fee_policy_billing_ratio_rules",
     "fee_policy_company_class_rules", "fee_policy_settlement_type_rules", "fee_policy_project_type_rules",
-    "fee_policy_institution_count_rules", "fee_policy_budget_rules", "fee_policies",
+    "fee_policy_institution_count_rules", "fee_policy_budget_rules", "fee_policy_exempt_grades", "fee_policies",
     "project_term_institutions", "project_terms", "projects",
     "agency_notice_templates", "funding_agencies",
     "fee_invoice_templates", "simple_notice_templates", "standard_attachments", "company_info",
@@ -356,7 +356,7 @@ async function main() {
 
   // ── fee_policies (+ budget rules) ─────────────────────────
   const policyIdByAgency = new Map<string | null, string[]>(); // mock agencyId(or null=공통) -> [dbId,...]
-  let feePolicyCount = 0, budgetRuleCount = 0;
+  let feePolicyCount = 0, budgetRuleCount = 0, exemptGradeCount = 0;
   for (const [i, fp] of mockFeePolicies.entries()) {
     const row = await prisma.feePolicy.create({
       data: {
@@ -368,6 +368,25 @@ async function main() {
         effectiveTo: toDate(fp.effectiveTo),
         approvedAt: fp.status === "ACTIVE" ? toDate(fp.effectiveFrom) : null,
         createdAt: toDateOrNow(fp.createdAt),
+        // 정규화된 전용 컬럼 — extraData와 동일한 mock 원본(fp)에서 그대로 옮겨서 값 불일치 위험 없음
+        versionLabel: fp.version,
+        standardRate: fp.standardRate,
+        coInstAddonMethod: fp.coInstAddonMethod,
+        coInstFirstRate: fp.coInstFirstRate ?? null,
+        coInstAdditionalRate: fp.coInstAdditionalRate ?? null,
+        exemptionMode: fp.exemptionMode,
+        exemptCustomRate: fp.exemptCustomRate ?? null,
+        defaultSettlementType: fp.defaultSettlementType ?? null,
+        feeBasis: fp.feeBasis,
+        hasAutonomyTrack: fp.hasAutonomyTrack,
+        annualBillingRate: fp.annualBillingRate,
+        minimumFee: fp.minimumFee == null ? null : big(fp.minimumFee),
+        perInstitutionMinimumFee: fp.perInstitutionMinimumFee == null ? null : big(fp.perInstitutionMinimumFee),
+        excludeLeadFromCalc: !!fp.excludeLeadFromCalc,
+        calcMode: fp.calcMode ?? null,
+        programType: fp.programType ?? null,
+        legacyTransitionNote: fp.legacyTransitionNote ?? null,
+        // 컬럼화 이후에도 원본 스냅샷은 그대로 유지 (이중 보존, 삭제하지 않음)
         extraData: JSON.stringify({
           coInstAddonMethod: fp.coInstAddonMethod, coInstFirstRate: fp.coInstFirstRate,
           coInstAdditionalRate: fp.coInstAdditionalRate, exemptGrades: fp.exemptGrades,
@@ -386,6 +405,11 @@ async function main() {
     if (!policyIdByAgency.has(key)) policyIdByAgency.set(key, []);
     policyIdByAgency.get(key)!.push(row.id);
 
+    for (const grade of fp.exemptGrades) {
+      await prisma.feePolicyExemptGrade.create({ data: { policyId: row.id, grade } });
+      exemptGradeCount++;
+    }
+
     for (const [j, br] of fp.feeRateBrackets.entries()) {
       await prisma.feePolicyBudgetRule.create({
         data: {
@@ -399,7 +423,7 @@ async function main() {
       budgetRuleCount++;
     }
   }
-  console.log(`fee_policies: ${feePolicyCount}, fee_policy_budget_rules: ${budgetRuleCount}`);
+  console.log(`fee_policies: ${feePolicyCount}, fee_policy_budget_rules: ${budgetRuleCount}, fee_policy_exempt_grades: ${exemptGradeCount}`);
 
   function resolveFeePolicyId(agencyMockId: string | null): string {
     const forAgency = policyIdByAgency.get(agencyMockId);

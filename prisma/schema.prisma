@@ -343,9 +343,31 @@ model FeePolicy {
   createdBy      String?   @map("created_by") @db.UniqueIdentifier
   approvedBy     String?   @map("approved_by") @db.UniqueIdentifier
   approvedAt     DateTime? @map("approved_at") @db.DateTime2
-  // mock.ts FeePolicy의 세부 계산 파라미터(coInstAddonMethod/exemptGrades/exemptionMode/feeBasis/
-  // annualBillingRate/calcMode 등) — 8개 rule 테이블 구조와 1:1로 안 맞아 스냅샷으로 보존
-  extraData      String?   @map("extra_data") @db.NVarChar(Max) // JSON.stringify
+
+  // ── mock.ts FeePolicy의 실제 계산 파라미터 (정규화된 전용 컬럼) ──
+  // 원래 있던 8개 rule 테이블은 이 프로젝트의 실제 계산 방식(구간표+가산방식+면제모드)과
+  // 구조가 안 맞아 값이 채워지지 않는다 — 대신 fee-calculator.ts가 실제로 쓰는 파라미터를
+  // 그대로 컬럼화했다.
+  versionLabel          String?  @map("version_label") @db.NVarChar(50) // mock.ts의 원래 version 문자열(예: "v1.0") — policyVersion(Int)과는 별개로 원본 그대로 보존
+  standardRate          Decimal  @default(0) @map("standard_rate") @db.Decimal(9, 4)
+  coInstAddonMethod     String   @map("co_inst_addon_method") @db.NVarChar(20) // TIERED | FLAT | CUSTOM
+  coInstFirstRate       Decimal? @map("co_inst_first_rate") @db.Decimal(9, 4)
+  coInstAdditionalRate  Decimal? @map("co_inst_additional_rate") @db.Decimal(9, 4)
+  exemptionMode         String   @map("exemption_mode") @db.NVarChar(20) // DISCOUNT | EXCLUDE | CUSTOM
+  exemptCustomRate      Decimal? @map("exempt_custom_rate") @db.Decimal(9, 4)
+  defaultSettlementType String?  @map("default_settlement_type") @db.NVarChar(20) // 위탁정산 | 자체정산
+  feeBasis              String   @map("fee_basis") @db.NVarChar(20) // CASH | CASH_PLUS_INKIND
+  hasAutonomyTrack      Boolean  @default(false) @map("has_autonomy_track")
+  annualBillingRate     Decimal  @default(0) @map("annual_billing_rate") @db.Decimal(9, 4)
+  minimumFee            BigInt?  @map("minimum_fee")
+  perInstitutionMinimumFee BigInt? @map("per_institution_minimum_fee")
+  excludeLeadFromCalc   Boolean  @default(false) @map("exclude_lead_from_calc")
+  calcMode              String?  @map("calc_mode") @db.NVarChar(20) // AGGREGATE | PER_INSTITUTION
+  programType           String?  @map("program_type") @db.NVarChar(20) // GENERAL | ICT_FUND
+  legacyTransitionNote  String?  @map("legacy_transition_note") @db.NVarChar(Max)
+
+  // 위 컬럼화 이후에도 원본 백업으로 계속 유지 (분실 위험 없이 이중 보존)
+  extraData      String?   @map("extra_data") @db.NVarChar(Max) // JSON.stringify — 원본 스냅샷, 컬럼화와 무관하게 계속 보존
   createdAt      DateTime  @default(now()) @map("created_at") @db.DateTime2
   updatedAt      DateTime  @updatedAt @map("updated_at") @db.DateTime2
 
@@ -362,9 +384,23 @@ model FeePolicy {
   exceptionRules        FeePolicyExceptionRule[]
   changeHistories       PolicyChangeHistory[]
   termFees              TermFee[]
+  exemptGrades          FeePolicyExemptGrade[]
 
   @@index([status, effectiveFrom, effectiveTo], name: "idx_fee_policies_status")
   @@map("fee_policies")
+}
+
+// mock.ts FeePolicy.exemptGrades(string[])의 정규화된 형태 — 정책 하나당 면제등급 여러 개를
+// 각각 별도 행으로 저장해 "이 등급을 면제하는 정책"을 바로 조회할 수 있게 한다.
+model FeePolicyExemptGrade {
+  id       String @id @default(uuid()) @db.UniqueIdentifier
+  policyId String @map("policy_id") @db.UniqueIdentifier
+  grade    String @db.NVarChar(10) // S | A | B | C
+
+  policy FeePolicy @relation(fields: [policyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([policyId, grade])
+  @@map("fee_policy_exempt_grades")
 }
 
 model FeePolicyBudgetRule {
