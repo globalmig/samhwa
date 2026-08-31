@@ -75,6 +75,8 @@ model User {
   settlementHistories           SettlementHistory[]
   createdEmailBatches           EmailBatch[]
   sentEmailLogs                 EmailLog[]
+  notices                       Notice[]
+  notificationState             NotificationState?
 
   @@map("users")
 }
@@ -242,24 +244,31 @@ model InstitutionContact {
 // ============================================================
 
 model Project {
-  id             String   @id @default(uuid()) @db.UniqueIdentifier
-  projectNumber  String   @unique @map("project_number") @db.NVarChar(100)
-  projectName    String   @map("project_name") @db.NVarChar(500)
-  projectType    String   @map("project_type") @db.NVarChar(100)
-  agency         String?  @db.NVarChar(200)
-  settlementType String   @map("settlement_type") @db.NVarChar(50)
-  startYear      Int      @map("start_year")
-  endYear        Int      @map("end_year")
-  totalTerms     Int      @map("total_terms")
-  status         String   @default("ACTIVE") @db.NVarChar(20) // project_status
-  notes          String?  @db.NVarChar(Max)
-  createdBy      String?  @map("created_by") @db.UniqueIdentifier
-  createdAt      DateTime @default(now()) @map("created_at") @db.DateTime2
-  updatedAt      DateTime @updatedAt @map("updated_at") @db.DateTime2
+  id              String   @id @default(uuid()) @db.UniqueIdentifier
+  projectNumber   String   @unique @map("project_number") @db.NVarChar(100)
+  projectName     String   @map("project_name") @db.NVarChar(500)
+  projectType     String   @map("project_type") @db.NVarChar(100)
+  agency          String?  @db.NVarChar(200)
+  fundingAgencyId String?  @map("funding_agency_id") @db.UniqueIdentifier
+  settlementType  String   @map("settlement_type") @db.NVarChar(50)
+  startYear       Int      @map("start_year")
+  endYear         Int      @map("end_year")
+  totalTerms      Int      @map("total_terms")
+  status          String   @default("ACTIVE") @db.NVarChar(20) // project_status
+  notes           String?  @db.NVarChar(Max)
+  // mock.ts Project의 긴 꼬리 필드(termCodes/stages/assignedManagerHistory/researchLeadOverrides/
+  // annualFinancials 등, 별도 컬럼화하지 않은 것들) 전체를 손실 없이 보존하는 JSON 스냅샷
+  extraData       String?  @map("extra_data") @db.NVarChar(Max) // JSON.stringify
+  createdBy       String?  @map("created_by") @db.UniqueIdentifier
+  createdAt       DateTime @default(now()) @map("created_at") @db.DateTime2
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.DateTime2
 
   createdByUser       User?                     @relation(fields: [createdBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  fundingAgency        FundingAgency?            @relation(fields: [fundingAgencyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   terms               ProjectTerm[]
   feePolicyExceptions FeePolicyExceptionRule[]
+  termFeeCalcs         TermFeeCalc[]
+  issues                ProjectIssue[]
 
   @@map("projects")
 }
@@ -297,6 +306,9 @@ model ProjectTermInstitution {
   projectBudget   BigInt   @map("project_budget")
   status          String   @default("ACTIVE") @db.NVarChar(20)
   notes           String?  @db.NVarChar(Max)
+  // mock.ts ProjectMember의 긴 꼬리 필드(gradeOverrides/recipientOverrides/settlementTypeOverrides/
+  // feeRate/institutionType 등, 별도 컬럼화하지 않은 것들) 전체를 손실 없이 보존하는 JSON 스냅샷
+  extraData       String?  @map("extra_data") @db.NVarChar(Max) // JSON.stringify
   createdAt       DateTime @default(now()) @map("created_at") @db.DateTime2
   updatedAt       DateTime @updatedAt @map("updated_at") @db.DateTime2
 
@@ -332,6 +344,9 @@ model FeePolicy {
   createdBy      String?   @map("created_by") @db.UniqueIdentifier
   approvedBy     String?   @map("approved_by") @db.UniqueIdentifier
   approvedAt     DateTime? @map("approved_at") @db.DateTime2
+  // mock.ts FeePolicy의 세부 계산 파라미터(coInstAddonMethod/exemptGrades/exemptionMode/feeBasis/
+  // annualBillingRate/calcMode 등) — 8개 rule 테이블 구조와 1:1로 안 맞아 스냅샷으로 보존
+  extraData      String?   @map("extra_data") @db.NVarChar(Max) // JSON.stringify
   createdAt      DateTime  @default(now()) @map("created_at") @db.DateTime2
   updatedAt      DateTime  @updatedAt @map("updated_at") @db.DateTime2
 
@@ -503,6 +518,7 @@ model TermFee {
   confirmedBy                  String?   @map("confirmed_by") @db.UniqueIdentifier
   confirmedAt                  DateTime? @map("confirmed_at") @db.DateTime2
   notes                        String?   @db.NVarChar(Max)
+  extraData                    String?   @map("extra_data") @db.NVarChar(Max) // JSON.stringify — mock.ts TermFee 긴 꼬리 필드
   createdAt                    DateTime  @default(now()) @map("created_at") @db.DateTime2
   updatedAt                    DateTime  @updatedAt @map("updated_at") @db.DateTime2
 
@@ -785,4 +801,198 @@ model EmailLog {
   @@index([institutionId], name: "idx_email_logs_institution_id")
   @@index([status], name: "idx_email_logs_status")
   @@map("email_logs")
+}
+
+// ============================================================
+// 그룹 11. 전담기관 / 공문·청구서 양식 / 사내 공지 / 수수료 산정 스냅샷
+// (Phase 1 스키마 보완 — 원래 DB_SCHEMA.md에는 없던, mock.ts에만 있던 도메인)
+// ============================================================
+
+model FundingAgency {
+  id                            String   @id @default(uuid()) @db.UniqueIdentifier
+  name                          String   @db.NVarChar(200)
+  shortName                     String   @unique @map("short_name") @db.NVarChar(50)
+  code                          String   @db.NVarChar(50)
+  contactName                   String   @map("contact_name") @db.NVarChar(100)
+  contactEmail                  String   @map("contact_email") @db.NVarChar(255)
+  contactPhone                  String   @map("contact_phone") @db.NVarChar(30)
+  status                        String   @default("ACTIVE") @db.NVarChar(20) // ACTIVE | INACTIVE
+  registeredAt                  DateTime @map("registered_at") @db.Date
+  website                       String?  @db.NVarChar(255)
+  noticeRecipientScope          String   @map("notice_recipient_scope") @db.NVarChar(30) // LEAD_ONLY | LEAD_AND_PARTICIPANTS
+  autoDetectByLeadInstitution   Boolean  @default(false) @map("auto_detect_by_lead_institution")
+  affiliatedInstitutionNames    String?  @map("affiliated_institution_names") @db.NVarChar(Max) // JSON.stringify(string[])
+  specialNotes                  String?  @map("special_notes") @db.NVarChar(Max) // JSON.stringify(string[])
+  guideContent                  String?  @map("guide_content") @db.NVarChar(Max) // JSON.stringify(AgencyGuideTab[])
+  createdAt                     DateTime @default(now()) @map("created_at") @db.DateTime2
+  updatedAt                     DateTime @updatedAt @map("updated_at") @db.DateTime2
+
+  projects        Project[]
+  noticeTemplates AgencyNoticeTemplate[]
+  termFeeCalcs    TermFeeCalc[]
+
+  @@map("funding_agencies")
+}
+
+model AgencyNoticeTemplate {
+  id              String   @id @default(uuid()) @db.UniqueIdentifier
+  fundingAgencyId String   @map("funding_agency_id") @db.UniqueIdentifier
+  name            String   @db.NVarChar(200)
+  content         String   @db.NVarChar(Max) // JSON.stringify(AgencyNoticeTemplate — title/recipient/scheduleRows/contactRows/attachments 등)
+  createdAt       DateTime @default(now()) @map("created_at") @db.DateTime2
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.DateTime2
+
+  fundingAgency FundingAgency @relation(fields: [fundingAgencyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("agency_notice_templates")
+}
+
+model FeeInvoiceTemplate {
+  id                 String   @id @default(uuid()) @db.UniqueIdentifier
+  category           String   @db.NVarChar(20) // ANNUAL | SETTLEMENT | REVERSE | OTHER
+  name               String   @db.NVarChar(200)
+  isDefault          Boolean  @default(false) @map("is_default")
+  content            String   @db.NVarChar(Max) // JSON.stringify(FeeInvoiceTemplate)
+  defaultAttachments String?  @map("default_attachments") @db.NVarChar(Max) // JSON.stringify(FeeInvoiceDefaultAttachment[])
+  createdAt          DateTime @default(now()) @map("created_at") @db.DateTime2
+  updatedAt          DateTime @updatedAt @map("updated_at") @db.DateTime2
+
+  @@map("fee_invoice_templates")
+}
+
+model SimpleNoticeTemplate {
+  id        String   @id @default(uuid()) @db.UniqueIdentifier
+  category  String   @db.NVarChar(30) // DOC_REQUEST | PAYMENT_REMINDER
+  name      String   @db.NVarChar(200)
+  isDefault Boolean  @default(false) @map("is_default")
+  content   String   @db.NVarChar(Max) // JSON.stringify({ subject, body })
+  createdAt DateTime @default(now()) @map("created_at") @db.DateTime2
+  updatedAt DateTime @updatedAt @map("updated_at") @db.DateTime2
+
+  @@map("simple_notice_templates")
+}
+
+model StandardAttachment {
+  id                 String   @id @default(uuid()) @db.UniqueIdentifier
+  name               String   @db.NVarChar(200)
+  fileDataUrl        String?  @map("file_data_url") @db.NVarChar(Max)
+  enabledByCategory  String?  @map("enabled_by_category") @db.NVarChar(Max) // JSON.stringify(Partial<Record<category,bool>>)
+  updatedAt          DateTime @updatedAt @map("updated_at") @db.DateTime2
+
+  @@map("standard_attachments")
+}
+
+// 싱글턴(항상 1행) — 발신 회사 레터헤드 정보
+model CompanyInfo {
+  id                 String   @id @default(uuid()) @db.UniqueIdentifier
+  name               String   @db.NVarChar(200)
+  addressLine        String   @map("address_line") @db.NVarChar(500)
+  tel                String   @db.NVarChar(30)
+  fax                String   @db.NVarChar(30)
+  preparedBy         String   @map("prepared_by") @db.NVarChar(100)
+  ceoName            String   @map("ceo_name") @db.NVarChar(100)
+  docNumberPrefix    String   @map("doc_number_prefix") @db.NVarChar(50)
+  managerName        String   @map("manager_name") @db.NVarChar(100)
+  managerEmail       String   @map("manager_email") @db.NVarChar(255)
+  managerPhone       String   @map("manager_phone") @db.NVarChar(30)
+  depositAccountNote String   @map("deposit_account_note") @db.NVarChar(500)
+  stampDataUrl       String?  @map("stamp_data_url") @db.NVarChar(Max)
+  updatedAt          DateTime @updatedAt @map("updated_at") @db.DateTime2
+
+  @@map("company_info")
+}
+
+model Notice {
+  id         String   @id @default(uuid()) @db.UniqueIdentifier
+  title      String   @db.NVarChar(300)
+  content    String   @db.NVarChar(Max)
+  authorName String   @map("author_name") @db.NVarChar(100)
+  authorId   String?  @map("author_id") @db.UniqueIdentifier
+  authorRole String   @map("author_role") @db.NVarChar(20) // user_role
+  createdAt  DateTime @default(now()) @map("created_at") @db.DateTime2
+
+  author User? @relation(fields: [authorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("notices")
+}
+
+// 과제단위 수수료 산정 내역 스냅샷 (정액 구간표 기반 계산 결과 + 수기 override 이력)
+model TermFeeCalc {
+  id                    String    @id @default(uuid()) @db.UniqueIdentifier
+  projectId             String    @map("project_id") @db.UniqueIdentifier
+  projectNumber         String    @map("project_number") @db.NVarChar(100)
+  projectName           String    @map("project_name") @db.NVarChar(500)
+  fundingAgencyId        String    @map("funding_agency_id") @db.UniqueIdentifier
+  termYear               Int       @map("term_year")
+  termNumber             Int       @map("term_number")
+  stageNumber            Int       @map("stage_number")
+  workType                String    @map("work_type") @db.NVarChar(20) // ANNUAL | SETTLEMENT
+
+  totalCashBudget          BigInt    @map("total_cash_budget")
+  coInstCount               Int       @map("co_inst_count")
+  baseFee                    BigInt    @map("base_fee")
+  addonFee                    BigInt    @map("addon_fee")
+  standardFee                  BigInt    @map("standard_fee")
+
+  nonExemptCashBudget            BigInt    @map("non_exempt_cash_budget")
+  nonExemptCoInstCount             Int       @map("non_exempt_co_inst_count")
+  nonExemptBaseFee                   BigInt    @map("non_exempt_base_fee")
+  nonExemptAddonFee                    BigInt    @map("non_exempt_addon_fee")
+  generalFee                             BigInt    @map("general_fee")
+
+  exemptFeeTotal                           BigInt    @map("exempt_fee_total")
+  exemptBreakdown                            String    @map("exempt_breakdown") @db.NVarChar(Max) // JSON.stringify(ExemptInstDetail[])
+
+  calculatedFee                                BigInt    @map("calculated_fee")
+
+  generalCalcFee                                 BigInt    @map("general_calc_fee")
+  generalBillingFee                                BigInt    @map("general_billing_fee")
+  generalUnclaimedFee                                BigInt    @map("general_unclaimed_fee")
+  carriedOverUnclaimed                                 BigInt    @map("carried_over_unclaimed")
+  totalBillingFee                                        BigInt    @map("total_billing_fee")
+
+  overrides                                                String    @db.NVarChar(Max) // JSON.stringify(FeeOverride[])
+  status                                                     String    @default("DRAFT") @db.NVarChar(20) // fee_status
+  createdAt                                                  DateTime  @default(now()) @map("created_at") @db.DateTime2
+  updatedAt                                                  DateTime? @updatedAt @map("updated_at") @db.DateTime2
+
+  project       Project       @relation(fields: [projectId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  fundingAgency FundingAgency @relation(fields: [fundingAgencyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([projectId], name: "idx_term_fee_calcs_project_id")
+  @@map("term_fee_calcs")
+}
+
+// 과제 이슈/메모
+model ProjectIssue {
+  id                String   @id @default(uuid()) @db.UniqueIdentifier
+  projectId         String   @map("project_id") @db.UniqueIdentifier
+  content           String   @db.NVarChar(Max)
+  author            String   @db.NVarChar(100)
+  priority          String   @default("MEDIUM") @db.NVarChar(10) // HIGH | MEDIUM | LOW
+  status            String   @default("OPEN") @db.NVarChar(20) // OPEN | IN_PROGRESS | RESOLVED
+  recipientGroups   String?  @map("recipient_groups") @db.NVarChar(Max) // JSON.stringify(string[])
+  recipientUserIds  String?  @map("recipient_user_ids") @db.NVarChar(Max) // JSON.stringify(string[])
+  institutionName   String?  @map("institution_name") @db.NVarChar(200)
+  noInstitution     Boolean  @default(false) @map("no_institution")
+  term              Int?
+  createdAt         DateTime @default(now()) @map("created_at") @db.DateTime2
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([projectId], name: "idx_project_issues_project_id")
+  @@map("project_issues")
+}
+
+// 유저별 알림 읽음/닫음 상태 (현재는 빈 상태로 시작 — 실사용 시 채워짐)
+model NotificationState {
+  id            String   @id @default(uuid()) @db.UniqueIdentifier
+  userId        String   @unique @map("user_id") @db.UniqueIdentifier
+  readIds       String   @map("read_ids") @db.NVarChar(Max) // JSON.stringify(string[])
+  dismissedIds  String   @map("dismissed_ids") @db.NVarChar(Max) // JSON.stringify(string[])
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.DateTime2
+
+  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("notification_state")
 }
