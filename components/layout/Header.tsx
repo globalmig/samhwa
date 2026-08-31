@@ -4,9 +4,8 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth, logout } from "@/lib/auth";
-import { useStore, addNotice, markNotificationRead, markAllNotificationsRead, dismissNotification } from "@/lib/store";
+import { useStore, markNotificationRead, markAllNotificationsRead, dismissNotification } from "@/lib/store";
 import { computeOverdueAlerts, computeIssueAlerts, isAlertVisibleToUser, isIssueVisibleToUser } from "@/lib/notifications";
-import { useCanWrite } from "@/lib/permissions";
 import { fmtDatetime } from "@/lib/utils";
 
 const PAGE_TITLES: Record<string, string> = {
@@ -67,12 +66,8 @@ export default function Header() {
   const router = useRouter();
   const { user } = useAuth();
   const { receivables, projects, notices, projectIssues, notificationState } = useStore();
-  const canPostNotice = useCanWrite("notices");
   const [menuOpen, setMenuOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
-  const [showNoticeForm, setShowNoticeForm] = useState(false);
-  const [noticeTitle, setNoticeTitle] = useState("");
-  const [noticeContent, setNoticeContent] = useState("");
 
   function resolveTitle(path: string): string {
     if (PAGE_TITLES[path]) return PAGE_TITLES[path];
@@ -118,20 +113,6 @@ export default function Header() {
     dismissNotification(user.id, noticeId);
   }
 
-  function submitNotice() {
-    if (!user || !noticeTitle.trim() || !noticeContent.trim()) return;
-    addNotice({
-      title: noticeTitle.trim(),
-      content: noticeContent.trim(),
-      authorName: user.name,
-      authorRole: user.role,
-      createdAt: new Date().toISOString().replace("T", " ").slice(0, 16),
-    });
-    setNoticeTitle("");
-    setNoticeContent("");
-    setShowNoticeForm(false);
-  }
-
   return (
     <header className="flex items-center justify-between px-6 h-14 bg-white border-b border-slate-200 shrink-0">
       <div className="flex items-center gap-2">
@@ -170,7 +151,7 @@ export default function Header() {
 
           {notifOpen && (
             <>
-              <div className="fixed inset-0 z-40" onClick={() => { setNotifOpen(false); setShowNoticeForm(false); }} />
+              <div className="fixed inset-0 z-40" onClick={() => setNotifOpen(false)} />
               {/* z-50: 페이지 안쪽 sticky 표 헤더(z-30 이하) 위에 항상 떠 있어야 한다 */}
               <div className="absolute right-0 top-full mt-1 w-80 bg-white border border-slate-200 rounded-xl shadow-lg z-50 max-h-[70vh] overflow-y-auto">
                 <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white gap-2">
@@ -181,49 +162,8 @@ export default function Header() {
                         모두 읽음
                       </button>
                     )}
-                    {canPostNotice && (
-                      <button
-                        onClick={() => setShowNoticeForm((v) => !v)}
-                        className="text-xs font-medium text-blue-600 hover:text-blue-700"
-                      >
-                        + 공지 작성
-                      </button>
-                    )}
                   </div>
                 </div>
-
-                {showNoticeForm && canPostNotice && (
-                  <div className="px-4 py-3 border-b border-slate-100 bg-slate-50 space-y-2">
-                    <input
-                      value={noticeTitle}
-                      onChange={(e) => setNoticeTitle(e.target.value)}
-                      placeholder="제목"
-                      className="w-full text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-                    />
-                    <textarea
-                      value={noticeContent}
-                      onChange={(e) => setNoticeContent(e.target.value)}
-                      placeholder="내용"
-                      rows={3}
-                      className="w-full text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 resize-none"
-                    />
-                    <div className="flex justify-end gap-2">
-                      <button
-                        onClick={() => { setShowNoticeForm(false); setNoticeTitle(""); setNoticeContent(""); }}
-                        className="px-2.5 py-1 text-xs text-slate-500 hover:bg-slate-100 rounded-lg transition-colors"
-                      >
-                        취소
-                      </button>
-                      <button
-                        onClick={submitNotice}
-                        disabled={!noticeTitle.trim() || !noticeContent.trim()}
-                        className="px-2.5 py-1 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        등록
-                      </button>
-                    </div>
-                  </div>
-                )}
 
                 <div>
                   <p className="px-4 pt-3 pb-1 text-[10px] font-semibold text-slate-400 tracking-wide">공지사항</p>
