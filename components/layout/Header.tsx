@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth, logout } from "@/lib/auth";
-import { useStore, addNotice, deleteNotice, markNotificationRead, markAllNotificationsRead, dismissNotification } from "@/lib/store";
+import { useStore, addNotice, markNotificationRead, markAllNotificationsRead, dismissNotification } from "@/lib/store";
 import { computeOverdueAlerts, computeIssueAlerts, isAlertVisibleToUser, isIssueVisibleToUser } from "@/lib/notifications";
 import { useCanWrite } from "@/lib/permissions";
 import { fmtDatetime } from "@/lib/utils";
@@ -111,10 +111,11 @@ export default function Header() {
     markAllNotificationsRead(user.id, ids);
   }
 
-  function handleDeleteNotice(noticeId: string, authorName: string) {
+  // 알림 종 드롭다운의 "삭제"는 연체/이슈 알림과 마찬가지로 "내 알림 목록에서만 숨기기"다 —
+  // 실제 공지 자체를 지우는(전 계정에서 사라지는) 동작은 /notices 페이지의 삭제로만 한다.
+  function handleDeleteNotice(noticeId: string) {
     if (!user) return;
-    if (user.role === "ADMIN" || user.name === authorName) deleteNotice(noticeId);
-    else dismissNotification(user.id, noticeId);
+    dismissNotification(user.id, noticeId);
   }
 
   function submitNotice() {
@@ -241,7 +242,7 @@ export default function Header() {
                             {n.authorName} · {ROLE_LABELS[n.authorRole] ?? n.authorRole} · {fmtDatetime(n.createdAt)}
                           </p>
                         </div>
-                        <NotifActions read={isRead(n.id)} onRead={() => user && markNotificationRead(user.id, n.id)} onDismiss={() => handleDeleteNotice(n.id, n.authorName)} />
+                        <NotifActions read={isRead(n.id)} onRead={() => user && markNotificationRead(user.id, n.id)} onDismiss={() => handleDeleteNotice(n.id)} />
                       </div>
                     ))
                   )}
