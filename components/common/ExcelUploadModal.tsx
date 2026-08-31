@@ -150,8 +150,16 @@ interface MemberAggregate {
   // 기존에 더 구체적인 등급(B/C)이 있는 기관을 실수로 A로 깎아내리지 않는 데 쓴다.
   institutionGradeRaw?: string;
   // 실무자(구 "수신자") 이메일 — "실무자 메일주소" 컬럼에서 읽는다. 여러 개면 셀에 콤마(,)로
-  // 구분해 적힌 그대로 문자열로 보존한다(발송 시점에 파싱).
+  // 구분해 적힌 그대로 문자열로 보존한다(발송 시점에 파싱). 마지막으로 읽은 행의 값(과제×기관당
+  // "현재" 기본값 후보) — 연차별로 정확한 값은 아래 contactEmailsByTerm을 따로 쓴다.
   contactEmail?: string;
+  // 연차별로 관측된 실무자 메일주소 — 담당자가 연차 중간에 바뀌는 경우가 있어(예: 3연차부터
+  // 담당자 교체), 값이 있는 연차마다 정확히 recipientOverrides로 남기기 위해 따로 모은다.
+  // "연차별기관별" 시트에만 연차 값이 있어 그 시트에서만 채워진다.
+  contactEmailsByTerm: Map<number, string>;
+  // 같은 연차 안에서 서로 다른 실무자 메일주소가 동시에 관측된 연차(중복 행 등 데이터 오류) —
+  // 이 연차는 어느 값도 신뢰할 수 없으니 반영하지 않고 이슈로 안내한다.
+  contactEmailConflictTerms: Set<number>;
   // "연차별기관별"(현재 진행중인 연차 실적) 시트에서 이미 값을 받았는지 — "단계기관별" 시트는
   // 단계 전체의 정산 시점 스냅샷이라 지난 단계의 오래된 역할·정산형태·등급을 담고 있을 수 있어서,
   // 연차별 시트에 값이 있으면 그걸 우선하고 단계기관별 값으론 덮어쓰지 않는다.
@@ -234,12 +242,98 @@ function buildGradeOverridesFromExcel(
   return merged.length > 0 ? merged : undefined;
 }
 
+// "연차별기관별" 시트가 연차마다 서로 다른 실무자 메일주소를 담고 있을 수 있다(예: 3연차부터 담당자
+// 교체) — settlementType/institutionGrade와 동일한 방식으로, 값이 있는 연차마다 정확히 오버라이드로
+// 남긴다. 같은 연차 안에서 서로 다른 값이 동시에 관측된 연차(agg.contactEmailConflictTerms)는 어느
+// 값도 신뢰할 수 없으니 건너뛰고 기존 오버라이드를 그대로 둔다 — 그 연차는 별도로 이슈 안내한다.
+function buildRecipientOverridesFromExcel(
+  agg: MemberAggregate,
+  existingMember: Pick<ProjectMember, "contactName" | "contactPhone">,
+  existingOverrides: NonNullable<ProjectMember["recipientOverrides"]> | undefined
+): ProjectMember["recipientOverrides"] {
+  const perTerm = Array.from(agg.contactEmailsByTerm.entries())
+    .filter(([termNumber]) => !agg.contactEmailConflictTerms.has(termNumber))
+    .map(([termNumber, email]) => ({
+      termNumber,
+      recipientName: existingMember.contactName ?? "",
+      recipientEmail: email,
+      recipientPhone: existingMember.contactPhone ?? "",
+    }));
+  if (perTerm.length === 0) return existingOverrides;
+  const newTermNumbers = new Set(perTerm.map((p) => p.termNumber));
+  const merged = [
+    ...(existingOverrides ?? []).filter((o) => !newTermNumbers.has(o.termNumber)),
+    ...perTerm,
+  ].sort((a, b) => a.termNumber - b.termNumber);
+  return merged.length > 0 ? merged : undefined;
+}
+
+// buildRecipientOverridesFromExcel과 동일한 방식으로, "연차별기관별" 시트의 주관기관 행에 담긴
+// 연차별 연구책임자 이름·메일주소를 Project.researchLeadOverrides로 직접 반영한다. 같은 연차 안에서
+// 서로 다른 값이 동시에 관측된 연차(scalarInfo의 ...ConflictTerms)는 건너뛰고 기존 오버라이드를
+// 그대로 둔다 — 그 연차는 별도로 이슈 안내한다. 이름/메일주소 중 한쪽만 그 연차에 적혀 있으면
+// 나머지 한쪽은 지금 반영되는 기본값(currentName/currentEmail)으로 채운다.
+function buildResearchLeadOverridesFromExcel(
+  scalarInfo: ProjectScalarInfo | undefined,
+  currentName: string | undefined,
+  currentEmail: string | undefined,
+  existingOverrides: NonNullable<Project["researchLeadOverrides"]> | undefined
+): Project["researchLeadOverrides"] {
+  if (!scalarInfo) return existingOverrides;
+  const termNumbers = new Set<number>([
+    ...scalarInfo.researchLeadsByTerm.keys(),
+    ...scalarInfo.researchLeadEmailsByTerm.keys(),
+  ]);
+  const perTerm = [...termNumbers]
+    .filter((t) => !scalarInfo.researchLeadConflictTerms.has(t) && !scalarInfo.researchLeadEmailConflictTerms.has(t))
+    .map((termNumber) => ({
+      termNumber,
+      name: scalarInfo.researchLeadsByTerm.get(termNumber) ?? currentName ?? "",
+      email: scalarInfo.researchLeadEmailsByTerm.get(termNumber) ?? currentEmail ?? "",
+    }));
+  if (perTerm.length === 0) return existingOverrides;
+  const newTermNumbers = new Set(perTerm.map((p) => p.termNumber));
+  const merged = [
+    ...(existingOverrides ?? []).filter((o) => !newTermNumbers.has(o.termNumber)),
+    ...perTerm,
+  ].sort((a, b) => a.termNumber - b.termNumber);
+  return merged.length > 0 ? merged : undefined;
+}
+
 // ============================================================
 // 유틸
 // ============================================================
 
 function normBiz(s: string): string {
   return s.replace(/[^0-9]/g, "");
+}
+
+// 연차별 이력(byTerm)에 그 연차 값이 있으면 우선 쓰고, 없으면 파일 전체에서 값이 정확히 하나로만
+// 모아졌을 때(=서로 다른 연차라도 값이 전부 같을 때)만 그 값을 쓴다. assignedManager가 이미 쓰던
+// "연차별 우선, 안 되면 유일값" 폴백을 연구책임자·책임자메일주소·실무자메일주소에도 동일하게 적용해,
+// 연차마다 정말 다른 값(인사이동 등)을 "서로 달라 등록 못 함"으로 잘못 막지 않게 한다.
+function resolveScalarForTerm(byTerm: Map<number, string> | undefined, term: number, flat: Set<string> | undefined): string | undefined {
+  return byTerm?.get(term) ?? (flat && flat.size === 1 ? [...flat][0] : undefined);
+}
+
+function resolveContactEmailForTerm(agg: MemberAggregate, term: number): string | undefined {
+  if (!agg.contactEmailConflictTerms.has(term)) {
+    const termEmail = agg.contactEmailsByTerm.get(term);
+    if (termEmail) return termEmail;
+  }
+  const emails = new Set(
+    [...agg.contactEmailsByTerm.entries()]
+      .filter(([termNumber]) => !agg.contactEmailConflictTerms.has(termNumber))
+      .map(([, email]) => email)
+  );
+  return emails.size === 1 ? [...emails][0] : agg.contactEmail;
+}
+
+function cleanRecipientOverridesForExcelMerge(
+  overrides: ProjectMember["recipientOverrides"],
+): ProjectMember["recipientOverrides"] {
+  const cleaned = (overrides ?? []).filter((o) => o.recipientEmail !== "");
+  return cleaned.length > 0 ? cleaned : undefined;
 }
 
 function normProjectNum(s: string): string {
@@ -346,6 +440,8 @@ function buildMemberAggregates(
           roleFromAnnual: false,
           settlementFromAnnual: false,
           gradeFromAnnual: false,
+          contactEmailsByTerm: new Map(),
+          contactEmailConflictTerms: new Set(),
           budgetsByTerm: new Map(),
           totalCashBudgetFallback: 0,
           totalInKindBudgetFallback: 0,
@@ -387,7 +483,19 @@ function buildMemberAggregates(
           agg.gradeFromAnnual = true;
         }
         const contactEmailStr = get("contactEmail", row);
-        if (contactEmailStr) agg.contactEmail = contactEmailStr;
+        if (contactEmailStr) {
+          agg.contactEmail = contactEmailStr;
+          // 실무자 메일주소는 연차마다 값이 다를 수 있어(담당자 교체) 연차별로도 모은다 — 같은
+          // 연차 안에서 서로 다른 값이 두 번 이상 나오면(중복 행 등) 그 연차는 신뢰할 수 없으니
+          // contactEmailConflictTerms로 표시하고, 이미 기록된 값은 덮어쓰지 않는다.
+          const termNumberForEmail = parseInt(get("termYear", row), 10) || 1;
+          const existingEmailForTerm = agg.contactEmailsByTerm.get(termNumberForEmail);
+          if (existingEmailForTerm !== undefined && existingEmailForTerm !== contactEmailStr) {
+            agg.contactEmailConflictTerms.add(termNumberForEmail);
+          } else {
+            agg.contactEmailsByTerm.set(termNumberForEmail, contactEmailStr);
+          }
+        }
       } else {
         // "단계기관별"은 정산 시점 스냅샷이라 지난 단계의 값을 담고 있을 수 있음 — 연차별 시트가
         // 이미 채워둔 필드는 그대로 두고, 비어 있는 필드만 이걸로 보충한다.
@@ -465,8 +573,16 @@ export interface ProjectScalarInfo {
   // 찾아 쓰므로(lib/notice-contacts.ts) 엑셀에 실을 필요가 없다.
   assignedManagersPrimary: Set<string>;
   assignedManagersPrimaryByTerm: Map<number, string>;
-  researchLeads: Set<string>;     // 주관기관 기관책임자
-  researchLeadEmails: Set<string>; // 주관기관 "책임자 메일주소"
+  researchLeads: Set<string>;     // 주관기관 기관책임자 — 연차 구분 없이 관측된 모든 값(유일값 폴백용)
+  researchLeadEmails: Set<string>; // 주관기관 "책임자 메일주소" — 위와 동일한 용도의 폴백
+  // 연구책임자도 담당자와 마찬가지로 인사이동 등으로 연차마다 바뀔 수 있어(예: 3연차부터 책임교수
+  // 변경) 연차별로 따로 모은다 — "연차별기관별" 시트의 주관기관 행에서만 채워진다.
+  researchLeadsByTerm: Map<number, string>;
+  researchLeadEmailsByTerm: Map<number, string>;
+  // 같은 연차 안에서 서로 다른 값이 동시에 관측된 연차 — 정상적인 연차 간 변화(위 ...ByTerm)와
+  // 달리 이건 데이터 오류이므로 그 연차만 반영하지 않고 이슈로 안내한다.
+  researchLeadConflictTerms: Set<number>;
+  researchLeadEmailConflictTerms: Set<number>;
   isAutonomyTrack: boolean;
   projectCategories: Set<string>;    // 과제구분(연차상시/정산)
   agencyAssignedAts: Set<string>;    // 전문기관배정일
@@ -486,6 +602,8 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
         projectNames: new Set(), assignedManagers: new Set(), assignedManagersByTerm: new Map(), assignedManagersPrimary: new Set(), researchLeads: new Set(),
         assignedManagersPrimaryByTerm: new Map(),
         researchLeadEmails: new Set(),
+        researchLeadsByTerm: new Map(), researchLeadEmailsByTerm: new Map(),
+        researchLeadConflictTerms: new Set(), researchLeadEmailConflictTerms: new Set(),
         isAutonomyTrack: false, projectCategories: new Set(), agencyAssignedAts: new Set(), internalAssignedAts: new Set(),
         startDates: new Set(),
       };
@@ -535,9 +653,28 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
       // 연구책임자가 아니므로 섞이면 안 된다.
       const roleStr = get("institutionRole", row);
       const lead = get("institutionLead", row);
-      if (lead && roleStr.includes("주관")) info.researchLeads.add(lead);
       const leadEmail = get("researchLeadEmail", row);
-      if (leadEmail && roleStr.includes("주관")) info.researchLeadEmails.add(leadEmail);
+      if (roleStr.includes("주관")) {
+        if (lead) info.researchLeads.add(lead);
+        if (leadEmail) info.researchLeadEmails.add(leadEmail);
+        // 연차 값은 "연차별기관별" 시트에서만 알 수 있다 — "단계기관별" 시트는 연차 구분 없이
+        // 단계 전체의 대표값 하나만 담고 있어 여기 넣으면 잘못된 연차에 고정될 수 있다.
+        if (sheet.def.key === "annual") {
+          const termNumber = parseInt(get("termYear", row), 10) || 0;
+          if (termNumber > 0) {
+            if (lead) {
+              const existingLead = info.researchLeadsByTerm.get(termNumber);
+              if (existingLead !== undefined && existingLead !== lead) info.researchLeadConflictTerms.add(termNumber);
+              else info.researchLeadsByTerm.set(termNumber, lead);
+            }
+            if (leadEmail) {
+              const existingLeadEmail = info.researchLeadEmailsByTerm.get(termNumber);
+              if (existingLeadEmail !== undefined && existingLeadEmail !== leadEmail) info.researchLeadEmailConflictTerms.add(termNumber);
+              else info.researchLeadEmailsByTerm.set(termNumber, leadEmail);
+            }
+          }
+        }
+      }
 
       const category = get("projectCategory", row);
       if (category) info.projectCategories.add(category.includes("정산") && !category.includes("연차") ? "정산" : "연차상시");
@@ -904,29 +1041,50 @@ function computeProjectUpdates(
     // 연구책임자·과제담당자·배정일(과제 레벨)/실무자 메일주소(참여기관 레벨)는 승인 체크박스와 무관하게
     // 항상 반영되는 값이라(아래 등록 단계 로직 참고), 그 값이 실제로 바뀌는지 여기서 미리 감지해 둔다.
     const scalarInfo = scalarAggregates.get(normNum);
-    const researchLead = scalarInfo?.researchLeads.size === 1 ? [...scalarInfo.researchLeads][0] : undefined;
-    const researchLeadEmail = scalarInfo?.researchLeadEmails.size === 1 ? [...scalarInfo.researchLeadEmails][0] : undefined;
+    const researchLead = resolveScalarForTerm(scalarInfo?.researchLeadsByTerm, excelTerm, scalarInfo?.researchLeads);
+    const researchLeadEmail = resolveScalarForTerm(scalarInfo?.researchLeadEmailsByTerm, excelTerm, scalarInfo?.researchLeadEmails);
     const assignedManager = scalarInfo?.assignedManagersByTerm.get(excelTerm)
       ?? (scalarInfo?.assignedManagers.size === 1 ? [...scalarInfo.assignedManagers][0] : undefined);
     const assignedManagerPrimary = scalarInfo?.assignedManagersPrimaryByTerm.get(excelTerm)
       ?? (scalarInfo?.assignedManagersPrimary.size === 1 ? [...scalarInfo.assignedManagersPrimary][0] : undefined);
     const agencyAssignedAt = scalarInfo?.agencyAssignedAts.size === 1 ? [...scalarInfo.agencyAssignedAts][0] : undefined;
     const internalAssignedAt = scalarInfo?.internalAssignedAts.size === 1 ? [...scalarInfo.internalAssignedAts][0] : undefined;
+    // 위 excelTerm 기준 값뿐 아니라, 파일에 담긴 다른 연차에 대한 책임자 정보 변경도 감지한다 —
+    // 연차별 오버라이드(researchLeadOverrides)로 반영되는 값이라 currentTerm 하나만 봐서는 놓친다.
+    const hasResearchLeadTermChange = [
+      ...(scalarInfo?.researchLeadsByTerm.keys() ?? []),
+      ...(scalarInfo?.researchLeadEmailsByTerm.keys() ?? []),
+    ].some((t) => {
+      if (scalarInfo?.researchLeadConflictTerms.has(t) || scalarInfo?.researchLeadEmailConflictTerms.has(t)) return false;
+      const resolved = resolveResearchLeadForTerm(existing, t);
+      const name = scalarInfo?.researchLeadsByTerm.get(t);
+      const email = scalarInfo?.researchLeadEmailsByTerm.get(t);
+      return (name !== undefined && name !== resolved.name) || (email !== undefined && email !== resolved.email);
+    });
     const hasProjectScalarChange =
       (researchLead !== undefined && researchLead !== existing.researchLead) ||
       (researchLeadEmail !== undefined && researchLeadEmail !== existing.researchLeadEmail) ||
+      hasResearchLeadTermChange ||
       (assignedManager !== undefined && assignedManager !== existing.assignedManager) ||
       (assignedManagerPrimary !== undefined && assignedManagerPrimary !== existing.assignedManagerPrimary) ||
       (agencyAssignedAt !== undefined && agencyAssignedAt !== existing.agencyAssignedAt) ||
       (internalAssignedAt !== undefined && internalAssignedAt !== existing.internalAssignedAt);
 
     const hasMemberContactChange = memberAggregates.some((agg) => {
-      if (!agg.contactEmail || normProjectNum(agg.projectNumber) !== normNum) return false;
+      if (normProjectNum(agg.projectNumber) !== normNum) return false;
       const institutionId = institutions.find((i) => normBiz(i.bizNumber) === normBiz(agg.bizNumber))?.id;
       const existingMember = institutionId
         ? projectMembers.find((m) => m.projectId === existing.id && m.institutionId === institutionId)
         : undefined;
-      return agg.contactEmail !== (existingMember?.contactEmail ?? "");
+      if (agg.contactEmail && agg.contactEmail !== (existingMember?.contactEmail ?? "")) return true;
+      if (!existingMember) return false;
+      // 실무자 메일주소도 연차별 오버라이드(recipientOverrides)로 반영되므로, 파일에 담긴 다른
+      // 연차에 대한 변경도 함께 감지한다.
+      for (const [termNumber, email] of agg.contactEmailsByTerm) {
+        if (agg.contactEmailConflictTerms.has(termNumber)) continue;
+        if (email !== resolveMemberRecipientForTerm(existingMember, termNumber).recipientEmail) return true;
+      }
+      return false;
     });
 
     updates.push({
@@ -1380,7 +1538,6 @@ function PreviewStep({
   const newProject = newProjectList.length;
   const newInst = newInstList.length;
   const newMemberCount = newMembers.length;
-
   const dupRows = previewRows.filter((r) => r.duplicates.length > 0);
   // 같은 기관/과제/전담기관이 여러 행(예: 같은 기관이 여러 과제에 참여하거나, 같은 과제에 여러
   // 참여기관이 딸린 경우)에 걸쳐 반복 등장해도, 화면엔 "이미 등록됨" 메시지를 유형+key당 한 번만 보여준다.
@@ -2407,7 +2564,6 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
     }
     return memberAggregates.filter((m) => !existingKeys.has(m.key));
   }, [memberAggregates, projectMembers, projects, institutions]);
-  const newMemberCount = newMembers.length;
 
   // ── 파일 파싱 ───────────────────────────────────────────────
 
@@ -2684,8 +2840,6 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         const scalarInfo = scalarAggregates.get(normNum);
         const assignedManager = scalarInfo?.assignedManagers.size === 1 ? [...scalarInfo.assignedManagers][0] : undefined;
         const assignedManagerPrimaryFallback = scalarInfo?.assignedManagersPrimary.size === 1 ? [...scalarInfo.assignedManagersPrimary][0] : undefined;
-        const researchLead = scalarInfo?.researchLeads.size === 1 ? [...scalarInfo.researchLeads][0] : undefined;
-        const researchLeadEmail = scalarInfo?.researchLeadEmails.size === 1 ? [...scalarInfo.researchLeadEmails][0] : undefined;
         const agencyAssignedAt = scalarInfo?.agencyAssignedAts.size === 1 ? [...scalarInfo.agencyAssignedAts][0] : undefined;
         const internalAssignedAt = scalarInfo?.internalAssignedAts.size === 1 ? [...scalarInfo.internalAssignedAts][0] : undefined;
         const explicitProjectCategory = scalarInfo?.projectCategories.size === 1 ? [...scalarInfo.projectCategories][0] : undefined;
@@ -2706,6 +2860,10 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         // 시트는 항상 현재 진행 중인 연차 하나만 담아 업로드하는 것이 실무 규칙이기 때문. 캘린더 계산은
         // (이 과제의 연차별 행이 파일에 아예 없어 값을 모를 때의) 폴백이자, calendarMismatches 경고·이슈용 참고값이다.
         const currentTerm = projectMaxTerm.get(normNum) ?? computeCurrentTerm(startDateStr, totalTerms, today);
+        // 연구책임자 이름·메일주소 — 연차별로 값이 다를 수 있어(인사이동 등) 진행 연차(currentTerm)
+        // 기준 값을 우선 채택한다. 파일에 담긴 다른 연차의 값은 아래 researchLeadOverrides로 따로 반영된다.
+        const researchLead = resolveScalarForTerm(scalarInfo?.researchLeadsByTerm, currentTerm, scalarInfo?.researchLeads);
+        const researchLeadEmail = resolveScalarForTerm(scalarInfo?.researchLeadEmailsByTerm, currentTerm, scalarInfo?.researchLeadEmails);
 
         // 당해(현재 연차) 정부출연금/민간현금/민간현물 — 참여기관 전체 합산
         const { govGrant, privateCash, privateInKind } = sumTermFinancials(memberAggregates, normNum, currentTerm);
@@ -2752,6 +2910,24 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           const leadChanged =
             (researchLead !== undefined && researchLead !== renamedFrom.researchLead) ||
             (researchLeadEmail !== undefined && researchLeadEmail !== renamedFrom.researchLeadEmail);
+          // 1) 기본값(researchLead/researchLeadEmail) 변경 시 이미 있는 연차를 옛 값으로 고정(소급 방지) —
+          // 2) 그 위에 파일이 실제로 담고 있는 연차별 값을 buildResearchLeadOverridesFromExcel로 정확히 얹는다
+          //    (같은 연차 안에서 서로 다른 값이 동시에 관측된 연차는 건너뛰고 이슈로 안내한다).
+          const backfilledResearchLeadOverrides = leadChanged
+            ? backfillExistingTermOverrides(
+                renamedFrom.researchLeadOverrides,
+                new Set([
+                  ...termFees.filter((f) => f.projectNumber === renamedFrom.projectNumber).map((f) => f.termNumber),
+                  ...memberAggregates.filter((a) => normProjectNum(a.projectNumber) === normNum).flatMap((a) => [...a.budgetsByTerm.keys()]),
+                ]),
+                currentTerm,
+                (termNumber) => ({
+                  termNumber,
+                  name: renamedFrom.researchLead ?? "",
+                  email: renamedFrom.researchLeadEmail ?? "",
+                }),
+              )
+            : renamedFrom.researchLeadOverrides;
           updateProject(renamedFrom.id, {
             projectNumber: row.projectNumber,
             projectName: row.projectName || renamedFrom.projectName,
@@ -2787,21 +2963,12 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             // 미리 입력해둬서 진행 연차보다 나중 연차가 이미 만들어져 있는 경우도 소급되면 안 된다.
             // termFees는 이 컴포넌트 마운트 시점 스냅샷이라 이번 업로드가 처음 만드는 연차는 아직 없다 —
             // 이번 파일이 실제로 값을 담은 연차(참여기관들의 budgetsByTerm)도 함께 합쳐야 빠지지 않는다.
-            researchLeadOverrides: leadChanged
-              ? backfillExistingTermOverrides(
-                  renamedFrom.researchLeadOverrides,
-                  new Set([
-                    ...termFees.filter((f) => f.projectNumber === renamedFrom.projectNumber).map((f) => f.termNumber),
-                    ...memberAggregates.filter((a) => normProjectNum(a.projectNumber) === normNum).flatMap((a) => [...a.budgetsByTerm.keys()]),
-                  ]),
-                  currentTerm,
-                  (termNumber) => ({
-                    termNumber,
-                    name: renamedFrom.researchLead ?? "",
-                    email: renamedFrom.researchLeadEmail ?? "",
-                  }),
-                )
-              : renamedFrom.researchLeadOverrides,
+            researchLeadOverrides: buildResearchLeadOverridesFromExcel(
+              scalarInfo,
+              researchLead ?? renamedFrom.researchLead,
+              researchLeadEmail ?? renamedFrom.researchLeadEmail,
+              backfilledResearchLeadOverrides,
+            ),
             agencyAssignedAt: agencyAssignedAt ?? renamedFrom.agencyAssignedAt,
             internalAssignedAt: internalAssignedAt ?? renamedFrom.internalAssignedAt,
           });
@@ -2844,6 +3011,9 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             assignedManagerPrimaryHistory: assignedManagerPrimaryHistory.length > 0 ? assignedManagerPrimaryHistory : undefined,
             researchLead,
             researchLeadEmail,
+            // 신규 과제도 한 파일에 여러 연차를 한 번에 담아 올릴 수 있어(예: 1~5연차 일괄 등록),
+            // 그 사이 책임자가 바뀐 연차가 있으면 여기서 바로 연차별 오버라이드로 반영한다.
+            researchLeadOverrides: buildResearchLeadOverridesFromExcel(scalarInfo, researchLead, researchLeadEmail, undefined),
             agencyAssignedAt,
             internalAssignedAt,
           });
@@ -2901,6 +3071,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       const existingMember = projectMembers.find(
         (m) => m.projectId === projectId && m.institutionId === institutionId
       );
+      const targetTerm = projectMaxTerm.get(normNum) ?? 1;
+      const contactEmailForTargetTerm = resolveContactEmailForTerm(agg, targetTerm);
 
       if (!existingMember) {
         if (!approved) continue; // 아직 승인되지 않은 연차의 신규 참여기관은 만들지 않는다
@@ -2935,8 +3107,13 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           // "실무자 메일주소" 컬럼 값을 우선 쓰고, 없으면 이미 등록된 기관의 대표 연락처를 기본값으로
           // 채운다 — 그래야 참여기관마다 연락처를 일일이 다시 입력할 필요가 없다.
           contactName: institution?.contactName || undefined,
-          contactEmail: agg.contactEmail || institution?.contactEmail || undefined,
+          contactEmail: contactEmailForTargetTerm || institution?.contactEmail || undefined,
           contactPhone: institution?.contactPhone || undefined,
+          recipientOverrides: buildRecipientOverridesFromExcel(
+            agg,
+            { contactName: institution?.contactName, contactPhone: institution?.contactPhone },
+            undefined,
+          ),
         });
         memberCount++;
       } else {
@@ -2947,9 +3124,9 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         // "실무자 메일주소" 컬럼에 값이 있을 때만 덮어쓴다 — 비어 있으면 화면에서 직접 입력해둔
         // 기존 실무자 이메일을 그대로 보존한다. 값이 실제로 달라지면, 이번 엑셀이 반영하는
         // 연차(targetTerm) 이전 연차는 옛 연락처로 고정해 소급 변경을 막는다.
-        if (agg.contactEmail) {
-          if (agg.contactEmail !== existingMember.contactEmail) {
-            const targetTerm = projectMaxTerm.get(normNum) ?? 1;
+        if (contactEmailForTargetTerm || agg.contactEmailsByTerm.size > 0) {
+          let recipientOverrides = cleanRecipientOverridesForExcelMerge(existingMember.recipientOverrides);
+          if (existingMember.contactEmail && contactEmailForTargetTerm && contactEmailForTargetTerm !== existingMember.contactEmail) {
             // "이전 연차"가 아니라 "이미 TermFee가 있는 연차"를 기준으로 고정한다 — 다년치 사업비를
             // 미리 입력해둬서 진행 연차보다 나중 연차가 이미 만들어져 있는 경우도 소급되면 안 된다.
             // termFees는 이 컴포넌트가 마운트될 때 찍힌 스냅샷이라, 이번 업로드가 "처음으로" 만드는
@@ -2960,7 +3137,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
               ...termFees.filter((f) => f.projectNumber === agg.projectNumber).map((f) => f.termNumber),
               ...agg.budgetsByTerm.keys(),
             ]);
-            updates.recipientOverrides = backfillExistingTermOverrides(
+            recipientOverrides = backfillExistingTermOverrides(
               existingMember.recipientOverrides,
               existingTermNumbers,
               targetTerm,
@@ -2975,7 +3152,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
               }),
             );
           }
-          updates.contactEmail = agg.contactEmail;
+          updates.recipientOverrides = buildRecipientOverridesFromExcel(agg, existingMember, recipientOverrides);
+          if (contactEmailForTargetTerm) updates.contactEmail = contactEmailForTargetTerm;
         }
 
         if (approved) {
@@ -3073,8 +3251,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       const scalarInfo = scalarAggregates.get(info.normNum);
       const assignedManager = scalarInfo?.assignedManagers.size === 1 ? [...scalarInfo.assignedManagers][0] : undefined;
       const assignedManagerPrimaryFallback = scalarInfo?.assignedManagersPrimary.size === 1 ? [...scalarInfo.assignedManagersPrimary][0] : undefined;
-      const researchLead = scalarInfo?.researchLeads.size === 1 ? [...scalarInfo.researchLeads][0] : undefined;
-      const researchLeadEmail = scalarInfo?.researchLeadEmails.size === 1 ? [...scalarInfo.researchLeadEmails][0] : undefined;
+      const researchLead = resolveScalarForTerm(scalarInfo?.researchLeadsByTerm, effectiveCurrentTerm, scalarInfo?.researchLeads);
+      const researchLeadEmail = resolveScalarForTerm(scalarInfo?.researchLeadEmailsByTerm, effectiveCurrentTerm, scalarInfo?.researchLeadEmails);
       const agencyAssignedAt = scalarInfo?.agencyAssignedAts.size === 1 ? [...scalarInfo.agencyAssignedAts][0] : undefined;
       const internalAssignedAt = scalarInfo?.internalAssignedAts.size === 1 ? [...scalarInfo.internalAssignedAts][0] : undefined;
       // 담당자는 연차별 이력이 있으면(연차마다 다른 사람) 이번에 반영되는 연차(effectiveCurrentTerm) 값을
@@ -3105,20 +3283,29 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         // 미리 입력해둬서 진행 연차보다 나중 연차가 이미 만들어져 있는 경우도 소급되면 안 된다.
         // termFees는 이 컴포넌트 마운트 시점 스냅샷이라 이번 업로드가 처음 만드는 연차는 아직 없다 —
         // 이번 파일이 실제로 값을 담은 연차(참여기관들의 budgetsByTerm)도 함께 합쳐야 빠지지 않는다.
-        researchLeadOverrides: leadChanged
-          ? backfillExistingTermOverrides(
-              existingProject.researchLeadOverrides,
-              new Set([
-                ...termFees.filter((f) => f.projectNumber === existingProject.projectNumber).map((f) => f.termNumber),
-                ...memberAggregates.filter((a) => normProjectNum(a.projectNumber) === info.normNum).flatMap((a) => [...a.budgetsByTerm.keys()]),
-              ]),
-              effectiveCurrentTerm,
-              (termNumber) => ({
-              termNumber,
-              name: existingProject.researchLead ?? "",
-              email: existingProject.researchLeadEmail ?? "",
-            }))
-          : existingProject.researchLeadOverrides,
+        // 1) 기본값 변경 시 이미 있는 연차를 옛 값으로 고정(소급 방지) — 2) 그 위에 파일이 실제로
+        // 담고 있는 연차별 값을 buildResearchLeadOverridesFromExcel로 정확히 얹는다(같은 연차 안에서
+        // 서로 다른 값이 동시에 관측된 연차는 건너뛰고 이슈로 안내한다).
+        researchLeadOverrides: buildResearchLeadOverridesFromExcel(
+          scalarInfo,
+          researchLead ?? existingProject.researchLead,
+          researchLeadEmail ?? existingProject.researchLeadEmail,
+          leadChanged
+            ? backfillExistingTermOverrides(
+                existingProject.researchLeadOverrides,
+                new Set([
+                  ...termFees.filter((f) => f.projectNumber === existingProject.projectNumber).map((f) => f.termNumber),
+                  ...memberAggregates.filter((a) => normProjectNum(a.projectNumber) === info.normNum).flatMap((a) => [...a.budgetsByTerm.keys()]),
+                ]),
+                effectiveCurrentTerm,
+                (termNumber) => ({
+                  termNumber,
+                  name: existingProject.researchLead ?? "",
+                  email: existingProject.researchLeadEmail ?? "",
+                }),
+              )
+            : existingProject.researchLeadOverrides,
+        ),
         agencyAssignedAt: agencyAssignedAt ?? existingProject.agencyAssignedAt,
         internalAssignedAt: internalAssignedAt ?? existingProject.internalAssignedAt,
       };
