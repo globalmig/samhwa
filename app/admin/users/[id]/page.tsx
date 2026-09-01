@@ -8,6 +8,7 @@ import { type SystemUser } from "@/lib/mock";
 import { fmtDate } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
 import { useCanWrite } from "@/lib/permissions";
+import { useAuth } from "@/lib/auth";
 
 const ROLE_MAP: Record<SystemUser["role"], { label: string; color: "red" | "blue" | "purple" | "slate"; desc: string }> = {
   ADMIN:      { label: "시스템 관리자", color: "red",    desc: "전체 데이터 조회·수정·삭제 및 사용자 관리" },
@@ -48,9 +49,13 @@ const selectCls = "text-sm border border-slate-200 rounded-lg px-3 py-1.5 bg-whi
 export default function UserDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const canEdit = useCanWrite("users");
+  const { user: currentUser } = useAuth();
   const { users, auditLog } = useStore();
 
   const user = users.find((u) => u.id === id);
+  // 하이웍스 메일 연동 정보는 시스템 관리자뿐 아니라 계정 주인 본인도 등록·수정할 수 있다
+  // (역할·상태 변경은 여전히 canEdit=관리자 전용).
+  const canEditHiworks = canEdit || currentUser?.id === id;
 
   const [editing, setEditing] = useState(false);
   const [draftRole,   setDraftRole]   = useState<SystemUser["role"]>("VIEWER");
@@ -215,7 +220,7 @@ export default function UserDetailPage({ params }: { params: Promise<{ id: strin
               <h3 className="text-xs font-semibold text-slate-700">하이웍스 메일 연동</h3>
               <p className="text-[10px] text-slate-400 mt-0.5">공문 발송 시 이 계정 명의로 하이웍스 메일을 보내기 위한 연동 정보입니다.</p>
             </div>
-            {canEdit && !hiworksEditing && (
+            {canEditHiworks && !hiworksEditing && (
               <button onClick={startHiworksEdit}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
                 <FiEdit2 size={12} /> 연동정보 수정

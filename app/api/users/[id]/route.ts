@@ -1,6 +1,6 @@
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/db";
-import { requireAdmin, SessionError } from "@/lib/session";
+import { requireUser, requireAdmin, SessionError } from "@/lib/session";
 import { toSystemUser } from "@/lib/user-mapper";
 import { appRoleToDb } from "@/lib/role-map";
 import type { SystemUser } from "@/lib/mock";
@@ -26,6 +26,12 @@ export async function PATCH(request: Request, { params }: Params) {
   const isPasswordOnlyReset =
     Object.keys(body).every((k) => ["password", "verifyEmail", "verifyName"].includes(k)) && !!body.password;
 
+  // 하이웍스 메일 연동 정보"만" 바꾸는 요청은 계정 주인 본인이면 관리자가 아니어도 허용한다
+  // (역할·상태 등 다른 필드가 섞여 있으면 아래에서 관리자 검증으로 떨어진다).
+  const isHiworksOnlyUpdate =
+    Object.keys(body).length > 0 &&
+    Object.keys(body).every((k) => k === "hiworksEmail" || k === "hiworksMailPassword");
+
   let actorId: string | null = null;
   if (isPasswordOnlyReset) {
     const emailOk = body.verifyEmail?.trim().toLowerCase() === target.email.toLowerCase();
@@ -35,7 +41,12 @@ export async function PATCH(request: Request, { params }: Params) {
     }
   } else {
     try {
-      actorId = (await requireAdmin()).userId;
+      const actor = await requireUser();
+      const isSelf = actor.userId === id;
+      if (actor.role !== "SYSTEM_ADMIN" && !(isSelf && isHiworksOnlyUpdate)) {
+        throw new SessionError("시스템 관리자만 사용할 수 있습니다.", 403);
+      }
+      actorId = actor.userId;
     } catch (err) {
       if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
       throw err;
