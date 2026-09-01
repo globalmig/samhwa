@@ -552,6 +552,14 @@ function hydrateProjects(): void {
 }
 if (typeof window !== "undefined") hydrateProjects();
 
+// 과제 생성 직후엔 임시 id로 상세화면에 진입하는데, 서버 응답이 도착하면 그 id가 실제 DB GUID로
+// 바뀐다(아래 addProject 참고) — 그 사이 이미 임시 id로 라우팅된 화면이 "찾을 수 없음"에 빠지지
+// 않도록, 상세화면이 이 맵으로 새 id를 찾아 리다이렉트할 수 있게 해준다.
+const _projectIdRemap = new Map<string, string>();
+export function resolveProjectId(id: string): string {
+  return _projectIdRemap.get(id) ?? id;
+}
+
 export function addProject(data: Omit<Project, "id">): Project {
   const projectCode = data.projectCode ?? nextTermCode();
   const termCodes = data.termCodes ?? [{ termNumber: 1, code: projectCode }];
@@ -570,6 +578,7 @@ export function addProject(data: Omit<Project, "id">): Project {
         // projectId도 함께 옮겨줘야 이후 조회/수정이 새 id로 정상 매칭된다. 그 참여기관을 저장하려던
         // persistProjectMember 시도는 이 시점 이전엔 project가 서버에 없어 실패했을 수 있으므로 재시도한다.
         const realId = res.project.id;
+        _projectIdRemap.set(tempId, realId);
         const remapped = _state.projectMembers.filter((m) => m.projectId === tempId);
         _state = {
           ..._state,

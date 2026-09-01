@@ -12,7 +12,7 @@ import {
   useStore, updateProject, addProjectIssue, updateProjectIssue, deleteProjectIssue, addTaxInvoice, updateTaxInvoice,
   addReceivable, updateReceivable, addEmailDispatch, updateTermFee, updateUnclaimedFee,
   updateProjectMember, autoGenerateTermFees, addProjectMember, deleteProjectMember, deleteProject, deleteProjectTerms,
-  setTermOtherFirmHandled, setTermBillingType, setTermDates,
+  setTermOtherFirmHandled, setTermBillingType, setTermDates, resolveProjectId,
 } from "@/lib/store";
 import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type SystemUser, type EmailDispatch, type FeePolicy, type AnnualFinancials, EMPTY_NOTICE_TEMPLATE } from "@/lib/mock";
 import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, type CalcMember } from "@/lib/fee-calculator";
@@ -4618,8 +4618,18 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const project = projects.find((p) => p.id === id);
+  // 방금 등록한 과제는 임시 id로 이 화면에 들어온 직후 서버 응답으로 실제 id로 바뀔 수 있다 —
+  // 그 순간 이 id로는 못 찾게 되므로, 리맵된 새 id가 있으면 그쪽으로 조용히 옮겨간다.
+  const remappedId = !project ? resolveProjectId(id) : id;
+
+  useEffect(() => {
+    if (!project && remappedId !== id) {
+      router.replace(`/projects/${remappedId}`);
+    }
+  }, [project, remappedId, id, router]);
 
   if (!project) {
+    if (remappedId !== id) return null;
     return (
       <div className="flex flex-col items-center justify-center h-60 gap-3">
         <p className="text-sm text-slate-500">과제를 찾을 수 없습니다</p>
