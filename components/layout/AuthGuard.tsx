@@ -66,7 +66,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
 
   // 페이지 접근 권한 체크 (로그인·회원가입 등 인증 관련 페이지 제외)
   if (user && !isPublicAuthPage) {
-    if (!canAccessPage(user.role as "ADMIN" | "ACCOUNTANT" | "SETTLEMENT" | "VIEWER", pathname)) {
+    if (!canAccessPage(user.role as "ADMIN" | "ACCOUNTANT" | "SETTLEMENT" | "VIEWER", pathname, user.id)) {
       return <AccessDenied />;
     }
   }

@@ -89,8 +89,12 @@ function resolvePageAccessKey(pathname: string): string {
   return best ?? `/${pathname.split("/")[1]}`;
 }
 
-export function canAccessPage(role: Role | undefined, pathname: string): boolean {
+export function canAccessPage(role: Role | undefined, pathname: string, currentUserId?: string): boolean {
   if (!role) return false;
+  // 헤더의 "내 계정" 링크(/admin/users/{내 id})는 권한관리 화면(ADMIN 전용)과 별개로,
+  // 로그인한 사용자라면 누구나 자기 자신의 프로필만은 볼 수 있어야 한다.
+  const selfProfileMatch = /^\/admin\/users\/([^/]+)$/.exec(pathname);
+  if (selfProfileMatch && currentUserId && selfProfileMatch[1] === currentUserId) return true;
   const base = resolvePageAccessKey(pathname);
   const allowed = getPageAccess()[base];
   if (!allowed) return true; // 명시되지 않은 페이지는 허용
