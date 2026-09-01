@@ -2,12 +2,13 @@
 
 import { useRef, useState } from "react";
 import { addInstitution } from "@/lib/store";
-import { type Institution, type InstitutionType } from "@/lib/mock";
+import { type Institution } from "@/lib/mock";
 
 const inputCls = "w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400";
 const selectCls = `${inputCls} bg-white`;
 
-const INSTITUTION_TYPES: InstitutionType[] = ["대기업", "중견기업", "중소기업", "스타트업", "대학", "정부출연연구소", "공공기관"];
+type Grade = NonNullable<Institution["referenceGrade"]>;
+const GRADE_OPTIONS: Grade[] = ["최우수(S)", "우수(A)", "우수(B)", "우수(C)", "일반"];
 
 // 등록된 기관이 수천 곳 이상이라 드롭다운 전체 나열은 비현실적 — 검색어로 걸러진 결과만
 // 최대 이 개수만큼 보여준다.
@@ -29,7 +30,7 @@ export default function InstitutionQuickAdd({
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [bizNumber, setBizNumber] = useState("");
-  const [type, setType] = useState<InstitutionType>("중소기업");
+  const [grade, setGrade] = useState<Grade>("일반");
   const [representativeName, setRepresentativeName] = useState("");
   const [contactName, setContactName] = useState("");
   const [contactEmail, setContactEmail] = useState("");
@@ -65,7 +66,7 @@ export default function InstitutionQuickAdd({
   }
 
   function reset() {
-    setName(""); setBizNumber(""); setType("중소기업");
+    setName(""); setBizNumber(""); setGrade("일반");
     setRepresentativeName(""); setContactName(""); setContactEmail(""); setContactPhone("");
     setError("");
   }
@@ -81,7 +82,8 @@ export default function InstitutionQuickAdd({
     }
     const created = addInstitution({
       name: name.trim(),
-      type,
+      type: "중소기업",
+      referenceGrade: grade,
       bizNumber: bizNumber.trim(),
       representativeName,
       contactName,
@@ -150,9 +152,9 @@ export default function InstitutionQuickAdd({
               <input className={inputCls} value={bizNumber} onChange={(e) => setBizNumber(e.target.value)} placeholder="000-00-00000" />
             </div>
             <div>
-              <label className="block text-[11px] font-medium text-slate-500 mb-1">기관유형</label>
-              <select className={selectCls} value={type} onChange={(e) => setType(e.target.value as InstitutionType)}>
-                {INSTITUTION_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+              <label className="block text-[11px] font-medium text-slate-500 mb-1">등급</label>
+              <select className={selectCls} value={grade} onChange={(e) => setGrade(e.target.value as Grade)}>
+                {GRADE_OPTIONS.map((g) => <option key={g} value={g}>{g}</option>)}
               </select>
             </div>
           </div>
