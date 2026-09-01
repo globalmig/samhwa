@@ -3,7 +3,7 @@
 import { useState, useMemo, useRef, useEffect, type CSSProperties } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { FiPlus, FiChevronDown, FiChevronUp, FiSend, FiDownload, FiSearch, FiSliders, FiCalendar } from "react-icons/fi";
+import { FiPlus, FiChevronDown, FiChevronUp, FiSend, FiDownload, FiSearch, FiSliders, FiCalendar, FiTrash2 } from "react-icons/fi";
 import ExcelUploadModal, { downloadExcelTemplate, downloadCurrentDataAsUploadTemplate } from "@/components/common/ExcelUploadModal";
 import {
   useStore,
@@ -19,6 +19,7 @@ import {
   addUnclaimedFee,
   updateUnclaimedFee,
   addProject,
+  addProjectMember,
   updateStandardAttachment,
 } from "@/lib/store";
 import {
@@ -41,6 +42,7 @@ import AgreementStructureEditor, { type Stage } from "@/components/common/Agreem
 import NoticeLetterPreview, { type NoticeStatusRow } from "@/components/common/NoticeLetterPreview";
 import SimpleNoticeModal, { fillTokens, SIMPLE_NOTICE_LABEL, type SimpleNoticeTarget, type SimpleNoticeKind } from "@/components/common/SimpleNoticeModal";
 import DispatchModal, { DispatchDropdown, generateBatchId, generateDocNumber, parseEmails, type DispatchChoice, type DispatchTarget } from "@/components/common/DispatchModal";
+import ManagerPickerModal from "@/components/common/ManagerPickerModal";
 import { buildNoticeEmailHtml } from "@/lib/notice-email-html";
 import { applyManagerContactRows } from "@/lib/notice-contacts";
 import { useCanWrite } from "@/lib/permissions";
@@ -877,6 +879,14 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
 }
 
 // ── ProjectAddForm (새 과제 개별 등록 — 엑셀 없이 직접 입력) ───
+type NewMemberDraft = {
+  key: string;
+  institutionId: string;
+  role: "PARTICIPANT" | "ENTRUSTED";
+  cashBudget: number;
+  inKindBudget: number;
+};
+
 type NewProjectDraft = {
   projectNumber: string;
   projectName: string;
@@ -884,6 +894,8 @@ type NewProjectDraft = {
   leadInstitutionId: string;
   startDate: string;
   endDate: string;
+  firstStartDate: string;
+  finalEndDate: string;
   totalTerms: number;
   currentTerm: number;
   status: Project["status"];
@@ -893,11 +905,18 @@ type NewProjectDraft = {
   projectType: "GENERAL" | "AUTONOMY_TRACK";
   programType: "GENERAL" | "ICT_FUND";
   researchLead: string;
+  researchLeadEmail: string;
   assignedManager: string;
+  assignedManagerUserId: string;
   assignedManagerPrimary: string;
+  assignedManagerPrimaryUserId: string;
+  usageReportDeadline: string;
+  agencyAssignedAt: string;
+  internalAssignedAt: string;
   projectDivision: "주관" | "위탁" | "공동";
   agreementType: "BATCH" | "STAGED";
   stages: Stage[] | undefined;
+  members: NewMemberDraft[];
 };
 
 const EMPTY_NEW_PROJECT: NewProjectDraft = {
@@ -907,6 +926,8 @@ const EMPTY_NEW_PROJECT: NewProjectDraft = {
   leadInstitutionId: "",
   startDate: "",
   endDate: "",
+  firstStartDate: "",
+  finalEndDate: "",
   totalTerms: 1,
   currentTerm: 1,
   status: "ACTIVE",
@@ -916,17 +937,26 @@ const EMPTY_NEW_PROJECT: NewProjectDraft = {
   projectType: "GENERAL",
   programType: "GENERAL",
   researchLead: "",
+  researchLeadEmail: "",
   assignedManager: "",
+  assignedManagerUserId: "",
   assignedManagerPrimary: "",
+  assignedManagerPrimaryUserId: "",
+  usageReportDeadline: "",
+  agencyAssignedAt: "",
+  internalAssignedAt: "",
   projectDivision: "주관",
   agreementType: "BATCH",
   stages: undefined,
+  members: [],
 };
 
 function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) {
-  const { fundingAgencies, institutions, projects } = useStore();
+  const { fundingAgencies, institutions, projects, users } = useStore();
   const [form, setForm] = useState<NewProjectDraft>(EMPTY_NEW_PROJECT);
   const [error, setError] = useState("");
+  const [managerPicker, setManagerPicker] = useState<"primary" | "deputy" | null>(null);
+  const selectableUsers = users.filter((u) => u.status === "ACTIVE");
   const s = <K extends keyof NewProjectDraft>(k: K, v: NewProjectDraft[K]) => setForm((p) => ({ ...p, [k]: v }));
 
   const totalBudget = form.govGrant + form.privateCash + form.privateInKind;
@@ -965,12 +995,62 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
       programType: resolvedAgencyId === "fa-003" ? form.programType : undefined,
       researchLead: form.researchLead || undefined,
       assignedManager: form.assignedManager || undefined,
+      assignedManagerUserId: form.assignedManagerUserId || undefined,
       assignedManagerPrimary: form.assignedManagerPrimary || undefined,
+      assignedManagerPrimaryUserId: form.assignedManagerPrimaryUserId || undefined,
       projectDivision: form.projectDivision,
       agreementType: form.agreementType,
       stages: form.agreementType === "STAGED" ? form.stages : undefined,
+      researchLeadEmail: form.researchLeadEmail || undefined,
+      firstStartDate: form.firstStartDate || undefined,
+      finalEndDate: form.finalEndDate || undefined,
+      usageReportDeadline: form.usageReportDeadline || undefined,
+      agencyAssignedAt: form.agencyAssignedAt || undefined,
+      internalAssignedAt: form.internalAssignedAt || undefined,
     });
+
+    // 공동/위탁 참여기관 — 여기서 예산까지 함께 등록해두면 상세 화면을 다시 열어 채우지 않아도 된다.
+    const termYear = new Date(form.startDate).getFullYear();
+    form.members.forEach((m) => {
+      const inst = institutions.find((i) => i.id === m.institutionId);
+      if (!inst) return;
+      addProjectMember({
+        projectId: created.id,
+        projectNumber: created.projectNumber,
+        institutionId: m.institutionId,
+        institutionName: inst.name,
+        institutionType: inst.type,
+        role: m.role,
+        budget: m.cashBudget + m.inKindBudget,
+        feeRate: 0,
+        calculatedFee: 0,
+        institutionGrade: inst.referenceGrade ?? "일반",
+        contactName: inst.contactName,
+        contactEmail: inst.contactEmail,
+        contactPhone: inst.contactPhone,
+        settlementType: "위탁정산",
+        cashBudget: m.cashBudget,
+        inKindBudget: m.inKindBudget,
+        annualBudgets: (m.cashBudget > 0 || m.inKindBudget > 0)
+          ? [{ termYear, termNumber: form.currentTerm, cashBudget: m.cashBudget, inKindBudget: m.inKindBudget }]
+          : undefined,
+      });
+    });
+
     onClose(created.id);
+  }
+
+  function addMemberRow() {
+    setForm((p) => ({
+      ...p,
+      members: [...p.members, { key: `${Date.now()}-${p.members.length}`, institutionId: "", role: "PARTICIPANT", cashBudget: 0, inKindBudget: 0 }],
+    }));
+  }
+  function updateMemberRow<K extends keyof NewMemberDraft>(key: string, field: K, value: NewMemberDraft[K]) {
+    setForm((p) => ({ ...p, members: p.members.map((m) => (m.key === key ? { ...m, [field]: value } : m)) }));
+  }
+  function removeMemberRow(key: string) {
+    setForm((p) => ({ ...p, members: p.members.filter((m) => m.key !== key) }));
   }
 
   return (
@@ -1036,6 +1116,20 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
           <input className={inputCls} type="number" min={1} value={form.currentTerm} onChange={(e) => s("currentTerm", Number(e.target.value))} />
         </div>
       </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">
+            최초시작일 <span className="text-slate-400 font-normal">· 과제 전체 기간(미입력시 당해시작일 사용)</span>
+          </label>
+          <DateInput value={form.firstStartDate} onChange={(v) => s("firstStartDate", v)} className="w-full" />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">
+            최종종료일 <span className="text-slate-400 font-normal">· 과제 전체 기간(미입력시 당해종료일 사용)</span>
+          </label>
+          <DateInput value={form.finalEndDate} onChange={(v) => s("finalEndDate", v)} className="w-full" />
+        </div>
+      </div>
       <AgreementStructureEditor
         agreementType={form.agreementType}
         stages={form.stages}
@@ -1082,15 +1176,40 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
           <input className={inputCls} value={form.researchLead} onChange={(e) => s("researchLead", e.target.value)} placeholder="담당자명" />
         </div>
         <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">과제담당자(부)</label>
-          <input className={inputCls} value={form.assignedManager} onChange={(e) => s("assignedManager", e.target.value)} placeholder="담당자명" />
+          <label className="block text-xs font-medium text-slate-600 mb-1">
+            책임자이메일 <span className="text-slate-400 font-normal">· 정산절차 안내 공문만 실무자와 함께 수신</span>
+          </label>
+          <input className={inputCls} value={form.researchLeadEmail} onChange={(e) => s("researchLeadEmail", e.target.value)}
+            placeholder="email@example.com (여러 명은 콤마로 구분)" />
         </div>
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">과제담당자(정)</label>
-          <input className={inputCls} value={form.assignedManagerPrimary} onChange={(e) => s("assignedManagerPrimary", e.target.value)} placeholder="담당자명" />
+          <label className="block text-xs font-medium text-slate-600 mb-1">과제담당자(부)</label>
+          <button type="button" onClick={() => setManagerPicker("deputy")}
+            className={`${inputCls} bg-white text-left flex items-center justify-between gap-2`}>
+            <span className={form.assignedManager ? "text-slate-700" : "text-slate-400"}>
+              {form.assignedManager || "담당자 선택"}
+            </span>
+            <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400 shrink-0">
+              <path fillRule="evenodd" d="M10 3a1 1 0 01.707.293l5 5a1 1 0 01-1.414 1.414L10 5.414 5.707 9.707a1 1 0 01-1.414-1.414l5-5A1 1 0 0110 3zm-5.707 9.293a1 1 0 011.414 0L10 16.586l4.293-4.293a1 1 0 011.414 1.414l-5 5a1 1 0 01-1.414 0l-5-5a1 1 0 010-1.414z" clipRule="evenodd" />
+            </svg>
+          </button>
         </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">과제담당자(정)</label>
+          <button type="button" onClick={() => setManagerPicker("primary")}
+            className={`${inputCls} bg-white text-left flex items-center justify-between gap-2`}>
+            <span className={form.assignedManagerPrimary ? "text-slate-700" : "text-slate-400"}>
+              {form.assignedManagerPrimary || "담당자 선택"}
+            </span>
+            <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400 shrink-0">
+              <path fillRule="evenodd" d="M10 3a1 1 0 01.707.293l5 5a1 1 0 01-1.414 1.414L10 5.414 5.707 9.707a1 1 0 01-1.414-1.414l5-5A1 1 0 0110 3zm-5.707 9.293a1 1 0 011.414 0L10 16.586l4.293-4.293a1 1 0 011.414 1.414l-5 5a1 1 0 01-1.414 0l-5-5a1 1 0 010-1.414z" clipRule="evenodd" />
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">자율성트랙 여부</label>
           <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-medium">
@@ -1112,11 +1231,91 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
           </div>
         )}
       </div>
-      <p className="text-xs text-slate-400">등록 후 과제 상세 화면에서 참여기관(주관·공동)과 연차별 사업비를 추가하면 수수료가 자동 산정됩니다.</p>
+      <div className="rounded-lg border border-slate-100 bg-slate-50/50 px-4 py-3 space-y-3">
+        <p className="text-xs font-semibold text-slate-600">행정 정보</p>
+        <div className="grid grid-cols-3 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">사용실적 제출기한</label>
+            <DateInput value={form.usageReportDeadline} onChange={(v) => s("usageReportDeadline", v)} className="w-full" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">전담기관 배정일자</label>
+            <DateInput value={form.agencyAssignedAt} onChange={(v) => s("agencyAssignedAt", v)} className="w-full" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">내부 배정일</label>
+            <DateInput value={form.internalAssignedAt} onChange={(v) => s("internalAssignedAt", v)} className="w-full" />
+          </div>
+        </div>
+      </div>
+
+      {/* 공동/위탁 참여기관 — 주관기관 외 나머지 참여기관을 등록 시점에 함께 넣을 수 있게 한다.
+          연차별 예산은 여기 입력한 현재연차분만 반영되고, 다른 연차분은 등록 후 상세화면에서 추가한다. */}
+      <div className="rounded-lg border border-slate-100 bg-slate-50/50 px-4 py-3 space-y-3">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-semibold text-slate-600">참여기관 (공동·위탁) <span className="text-slate-400 font-normal">· {form.currentTerm}연차 사업비 기준</span></p>
+          <button type="button" onClick={addMemberRow} className="flex items-center gap-1 text-[11px] font-medium text-blue-600 hover:underline">
+            <FiPlus size={11} /> 참여기관 추가
+          </button>
+        </div>
+        {form.members.length === 0 ? (
+          <p className="text-xs text-slate-400">주관기관 외 참여기관이 있으면 추가하세요. 없으면 비워두어도 됩니다.</p>
+        ) : (
+          <div className="space-y-3">
+            {form.members.map((m) => (
+              <div key={m.key} className="rounded-lg border border-slate-200 bg-white p-3 space-y-2">
+                <div className="flex items-start gap-2">
+                  <div className="flex-1">
+                    <InstitutionQuickAdd
+                      label="참여기관"
+                      value={m.institutionId}
+                      onChange={(id) => updateMemberRow(m.key, "institutionId", id)}
+                      institutions={institutions}
+                    />
+                  </div>
+                  <button type="button" onClick={() => removeMemberRow(m.key)}
+                    className="mt-6 p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors">
+                    <FiTrash2 size={13} />
+                  </button>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-500 mb-1">역할</label>
+                    <select className={selectCls} value={m.role} onChange={(e) => updateMemberRow(m.key, "role", e.target.value as NewMemberDraft["role"])}>
+                      <option value="PARTICIPANT">공동</option>
+                      <option value="ENTRUSTED">위탁</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-500 mb-1">현금사업비</label>
+                    <MoneyInput className={inputCls} value={m.cashBudget} onChange={(v) => updateMemberRow(m.key, "cashBudget", v)} />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-500 mb-1">현물사업비</label>
+                    <MoneyInput className={inputCls} value={m.inKindBudget} onChange={(v) => updateMemberRow(m.key, "inKindBudget", v)} />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <p className="text-xs text-slate-400">등록 후에도 과제 상세 화면에서 참여기관과 연차별 사업비를 계속 추가·수정할 수 있습니다.</p>
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
         <button onClick={() => onClose()} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
         <button onClick={handleSubmit} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">등록</button>
       </div>
+      {managerPicker && (
+        <ManagerPickerModal
+          title={managerPicker === "primary" ? "과제담당자(정) 선택" : "과제담당자(부) 선택"}
+          users={selectableUsers}
+          onSelect={(user) => {
+            if (managerPicker === "primary") setForm((p) => ({ ...p, assignedManagerPrimary: user.name, assignedManagerPrimaryUserId: user.id }));
+            else setForm((p) => ({ ...p, assignedManager: user.name, assignedManagerUserId: user.id }));
+          }}
+          onClose={() => setManagerPicker(null)}
+        />
+      )}
     </div>
   );
 }

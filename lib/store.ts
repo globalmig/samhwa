@@ -503,7 +503,12 @@ function ensureLeadMember(project: Project): void {
     budget: 0,
     feeRate: 0,
     calculatedFee: 0,
-    institutionGrade: "일반",
+    // 기관 등록 시 입력해둔 담당자·등급을 그대로 물려받는다 — 안 그러면 매 과제마다 실무자
+    // 연락처를 처음부터 다시 입력해야 한다(등급도 항상 "일반"으로 시작해 매번 다시 골라야 했다).
+    institutionGrade: inst?.referenceGrade ?? "일반",
+    contactName: inst?.contactName,
+    contactEmail: inst?.contactEmail,
+    contactPhone: inst?.contactPhone,
     settlementType: "위탁정산",
     cashBudget: 0,
     inKindBudget: 0,
