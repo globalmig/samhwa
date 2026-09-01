@@ -177,6 +177,13 @@ export function buildNoticeEmailHtml({
       <p style="text-align:center;margin-top:16px;">"끝."</p>`
       : "";
 
+  // 발신 서명의 대표이사 직인 — NoticeLetterPreview/FeeInvoiceLetterPreview 미리보기 화면엔 항상
+  // 나오는데, 이메일 클라이언트는 next/image를 못 쓰니 이 함수가 발송 본문을 따로 만들면서 이
+  // 이미지를 빠뜨리면 "미리보기엔 직인이 있는데 실제로 온 메일엔 없다"가 된다. companyInfo에
+  // 등록된 직인이 없으면 기본 이미지(public/CEO_stamp.png)를 절대경로로 참조한다(fee-invoice-pdf.ts와 동일).
+  const stampSrc = companyInfo.stampDataUrl
+    || `${typeof window !== "undefined" ? window.location.origin : ""}/CEO_stamp.png`;
+
   return `
 <div style="font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif;font-size:14px;color:#1e293b;max-width:720px;margin:0 auto;">
   <div style="padding-bottom:12px;border-bottom:4px double #1e293b;">
@@ -199,7 +206,14 @@ export function buildNoticeEmailHtml({
   ${attachmentsHtml}
   <div style="margin-top:24px;padding-top:20px;border-top:1px dashed #cbd5e1;text-align:right;">
     <p style="font-size:18px;font-weight:700;letter-spacing:4px;margin:0 0 8px;">${esc(companyInfo.name)}</p>
-    <p style="font-size:18px;font-weight:700;margin:0;">대표이사 ${esc(companyInfo.ceoName)}</p>
+    <table style="margin-left:auto;border-collapse:collapse;">
+      <tr>
+        <td style="font-size:18px;font-weight:700;padding:0;vertical-align:middle;white-space:nowrap;">대표이사 ${esc(companyInfo.ceoName)}</td>
+        <td style="padding:0 0 0 8px;vertical-align:middle;">
+          <img src="${stampSrc}" alt="대표이사 인" style="width:64px;height:64px;object-fit:contain;" />
+        </td>
+      </tr>
+    </table>
   </div>
 </div>`;
 }
