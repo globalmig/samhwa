@@ -1,6 +1,6 @@
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/db";
-import { requireUser, SessionError } from "@/lib/session";
+import { requireAdmin, SessionError } from "@/lib/session";
 import { toSystemUser } from "@/lib/user-mapper";
 import { appRoleToDb } from "@/lib/role-map";
 import type { SystemUser } from "@/lib/mock";
@@ -35,7 +35,7 @@ export async function PATCH(request: Request, { params }: Params) {
     }
   } else {
     try {
-      actorId = (await requireUser()).userId;
+      actorId = (await requireAdmin()).userId;
     } catch (err) {
       if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
       throw err;
@@ -80,7 +80,7 @@ export async function DELETE(_request: Request, { params }: Params) {
   const { id } = await params;
   let actor;
   try {
-    actor = await requireUser();
+    actor = await requireAdmin();
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;

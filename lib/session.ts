@@ -62,6 +62,16 @@ export async function requireUser(): Promise<SessionPayload> {
   return user;
 }
 
+/** 사용자 계정 생성·수정·삭제 등 시스템 관리자 전용 API에서 사용 — 로그인은 했지만 관리자가
+ *  아니면 403을 던진다. role은 세션에 DB 표기(SYSTEM_ADMIN)로 저장돼 있다(lib/role-map.ts 참고). */
+export async function requireAdmin(): Promise<SessionPayload> {
+  const user = await requireUser();
+  if (user.role !== "SYSTEM_ADMIN") {
+    throw new SessionError("시스템 관리자만 사용할 수 있습니다.", 403);
+  }
+  return user;
+}
+
 export class SessionError extends Error {
   status: number;
   constructor(message: string, status: number) {

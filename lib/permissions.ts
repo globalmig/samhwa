@@ -72,10 +72,26 @@ export function defaultLandingPath(role: Role | undefined): string {
   return "/";
 }
 
+// 동적/중첩 경로를 pageAccess 카탈로그 키에 맞춰 매핑한다. 대부분의 키는 한 단계
+// (/projects, /fees 등)라 첫 세그먼트만 봐도 되지만, "/admin/users"·"/admin/permissions"처럼
+// 두 단계짜리 키도 있다 — 첫 세그먼트만 잘라 "/admin"으로 보면 카탈로그에 없는 키가 되어
+// "명시되지 않은 페이지는 허용" 규칙에 걸려 아무 역할이나 통과해버린다(/admin/users/[id] 같은
+// 하위 경로도 마찬가지). 그래서 실제 등록된 키 중 가장 길게(가장 구체적으로) 일치하는 것을 찾는다.
+function resolvePageAccessKey(pathname: string): string {
+  if (pathname === "/") return "/";
+  let best: string | null = null;
+  for (const key of Object.keys(getPageAccess())) {
+    if (key === "/") continue;
+    if (pathname === key || pathname.startsWith(`${key}/`)) {
+      if (!best || key.length > best.length) best = key;
+    }
+  }
+  return best ?? `/${pathname.split("/")[1]}`;
+}
+
 export function canAccessPage(role: Role | undefined, pathname: string): boolean {
   if (!role) return false;
-  // 동적 경로 처리: /projects/xxx → /projects 기준 체크
-  const base = pathname === "/" ? "/" : `/${pathname.split("/")[1]}`;
+  const base = resolvePageAccessKey(pathname);
   const allowed = getPageAccess()[base];
   if (!allowed) return true; // 명시되지 않은 페이지는 허용
   return allowed.includes(role);
@@ -90,7 +106,7 @@ export function canWriteDomain(role: Role | undefined, domain: string): boolean 
 
 // 사이드바 필터용: 해당 href에 접근 가능한 역할 목록
 export function allowedRolesForPath(pathname: string): Role[] {
-  const base = pathname === "/" ? "/" : `/${pathname.split("/")[1]}`;
+  const base = resolvePageAccessKey(pathname);
   return getPageAccess()[base] ?? (["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"] as Role[]);
 }
 

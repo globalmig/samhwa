@@ -1,6 +1,6 @@
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/db";
-import { requireUser, SessionError } from "@/lib/session";
+import { requireAdmin, SessionError } from "@/lib/session";
 import { toSystemUser } from "@/lib/user-mapper";
 import { appRoleToDb } from "@/lib/role-map";
 import type { SystemUser } from "@/lib/mock";
@@ -30,12 +30,12 @@ export async function POST(request: Request) {
   }
 
   // 회원가입(로그인 안 된 상태)은 role=VIEWER, status=PENDING 자기등록만 허용한다 (app/signup/page.tsx).
-  // 그 외(관리자가 admin/users 화면에서 직접 계정을 만드는 경우)는 로그인된 관리자여야 한다.
+  // 그 외(관리자가 admin/users 화면에서 직접 계정을 만드는 경우)는 시스템 관리자여야 한다.
   const isSelfRegistration = body.role === "VIEWER" && body.status === "PENDING";
   let actorId: string | null = null;
   if (!isSelfRegistration) {
     try {
-      actorId = (await requireUser()).userId;
+      actorId = (await requireAdmin()).userId;
     } catch (err) {
       if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
       throw err;
