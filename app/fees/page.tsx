@@ -11,6 +11,7 @@ import {
   updateReceivable,
   updateProject,
   updateProjectMember,
+  getProjectMembers,
   updateTermFee,
   setTermBillingType,
   addTaxInvoice,
@@ -902,6 +903,8 @@ type NewProjectDraft = {
   govGrant: number;
   privateCash: number;
   privateInKind: number;
+  leadCashBudget: number;
+  leadInKindBudget: number;
   projectType: "GENERAL" | "AUTONOMY_TRACK";
   programType: "GENERAL" | "ICT_FUND";
   researchLead: string;
@@ -934,6 +937,8 @@ const EMPTY_NEW_PROJECT: NewProjectDraft = {
   govGrant: 0,
   privateCash: 0,
   privateInKind: 0,
+  leadCashBudget: 0,
+  leadInKindBudget: 0,
   projectType: "GENERAL",
   programType: "GENERAL",
   researchLead: "",
@@ -1011,6 +1016,22 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
 
     // 공동/위탁 참여기관 — 여기서 예산까지 함께 등록해두면 상세 화면을 다시 열어 채우지 않아도 된다.
     const termYear = new Date(form.startDate).getFullYear();
+
+    // addProject는 주관기관을 예산 0원짜리 참여기관(LEAD)으로 자동 등록해둔다(ensureLeadMember,
+    // lib/store.ts) — 여기서 입력한 사업비로 그 레코드를 바로 채워야, 참여기관 목록의 산정기준액과
+    // 연차별 수수료 계산에 반영된다(안 채우면 상세 화면에서 다시 입력해야 함).
+    if (form.leadCashBudget > 0 || form.leadInKindBudget > 0) {
+      const leadMember = getProjectMembers().find((m) => m.projectId === created.id && m.institutionId === form.leadInstitutionId);
+      if (leadMember) {
+        updateProjectMember(leadMember.id, {
+          budget: form.leadCashBudget + form.leadInKindBudget,
+          cashBudget: form.leadCashBudget,
+          inKindBudget: form.leadInKindBudget,
+          annualBudgets: [{ termYear, termNumber: form.currentTerm, cashBudget: form.leadCashBudget, inKindBudget: form.leadInKindBudget }],
+        });
+      }
+    }
+
     form.members.forEach((m) => {
       const inst = institutions.find((i) => i.id === m.institutionId);
       if (!inst) return;
@@ -1245,6 +1266,20 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">내부 배정일</label>
             <DateInput value={form.internalAssignedAt} onChange={(v) => s("internalAssignedAt", v)} className="w-full" />
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-slate-100 bg-slate-50/50 px-4 py-3 space-y-3">
+        <p className="text-xs font-semibold text-slate-600">주관기관 사업비 <span className="text-slate-400 font-normal">· {form.currentTerm}연차 기준, 산정기준액에 반영</span></p>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">현금사업비</label>
+            <MoneyInput className={inputCls} value={form.leadCashBudget} onChange={(v) => s("leadCashBudget", v)} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">현물사업비</label>
+            <MoneyInput className={inputCls} value={form.leadInKindBudget} onChange={(v) => s("leadInKindBudget", v)} />
           </div>
         </div>
       </div>

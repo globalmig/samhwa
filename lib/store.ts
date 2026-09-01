@@ -2128,6 +2128,13 @@ export function getUsers(): SystemUser[] {
   return _state.users;
 }
 
+/** addProject 직후 자동 생성되는 주관기관(LEAD) 참여기관 레코드를 훅 바깥에서 바로 찾아
+ *  사업비를 채워 넣을 수 있도록 하는 동기 getter — ensureLeadMember가 addProject 내부에서
+ *  이미 _state를 동기적으로 갱신해두므로, addProject가 반환하자마자 바로 조회할 수 있다. */
+export function getProjectMembers(): ProjectMember[] {
+  return _state.projectMembers;
+}
+
 let _usersHydrated = false;
 /** 앱이 브라우저에서 처음 로드될 때 한 번, 실제 DB의 사용자 목록으로 _state.users를 교체한다. */
 function hydrateUsers(): void {
