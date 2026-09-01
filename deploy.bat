@@ -1,4 +1,5 @@
 @echo off
+REM GitHub Actions(.github/workflows/deploy.yml)가 main push 시 이 스크립트를 그대로 실행한다.
 cd /d C:\project\samhwa
 
 echo === Stopping SamhwaApp ===
