@@ -18,6 +18,7 @@ export interface SimpleNoticeTarget {
   leadInstitutionName: string;
   termStart: string; // YYYY-MM-DD
   termEnd: string;
+  termNumber?: number;
   researchLead: string;
   participantCount: number;
   recipientEmail: string;
@@ -117,6 +118,8 @@ export default function SimpleNoticeModal({ target, onClose }: { target: SimpleN
       recipientEmail: toEmail.trim(),
       subject,
       emailType: target.kind,
+      projectNumber: target.projectNumber,
+      termNumber: target.termNumber,
       attachments: [],
       status,
       body,

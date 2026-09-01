@@ -1870,6 +1870,7 @@ function govFiscalQuarterRange(q: 1 | 2 | 3 | 4): [string, string] {
 interface BulkNoticeTarget {
   projectId: string;
   projectNumber: string;
+  termNumber: number;
   projectName: string;
   agencyShortName: string;
   leadInstitutionName: string;
@@ -1980,6 +1981,8 @@ function BulkSettlementNoticeModal({
         recipientEmail: t.recipientEmail,
         subject,
         emailType: "SETTLEMENT_NOTICE",
+        projectNumber: t.projectNumber,
+        termNumber: t.termNumber,
         attachments: template.attachments.map((a) => a.name),
         status,
         noticeSnapshot: { template, statusRows: t.statusRows, feeRows: t.feeRows, docNumber, issuedDate },
@@ -2218,6 +2221,8 @@ function BulkSimpleNoticeModal({
         recipientEmail: t.recipientEmail,
         subject,
         emailType: kind,
+        projectNumber: t.projectNumber,
+        termNumber: t.termNumber,
         attachments: [],
         status,
         body,
@@ -2605,6 +2610,7 @@ export default function FeesPage() {
       return {
         projectId,
         projectNumber: project.projectNumber,
+        termNumber: project.currentTerm,
         projectName: project.projectName,
         agencyShortName: agency?.shortName ?? "",
         leadInstitutionName: project.leadInstitutionName,
@@ -2640,6 +2646,7 @@ export default function FeesPage() {
           leadInstitutionName: row.billedInstitutionName,
           termStart: row.startDate,
           termEnd: row.endDate,
+          termNumber: row.termNumber,
           researchLead: row.researchLead,
           participantCount: projectMembers.filter((m) => m.projectId === row.projectId && m.role !== "LEAD").length,
           recipientEmail: row.recipientEmail,

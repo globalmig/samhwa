@@ -2798,6 +2798,11 @@ export interface EmailDispatch {
   recipientInstitution: string;
   recipientEmail: string;
   subject: string;
+  // 이 발송이 어느 과제·연차 건인지 — 예전엔 subject의 "[과제번호]" 접두사로만 추정했는데(정확하지
+  // 않고 연차 정보가 아예 없었음), 발송 시점에 명시적으로 남겨서 전체변경이력·발송이력에서 "몇 연차/
+  // 몇 단계에 보낸 공문인지" 태그로 보여줄 수 있게 한다. 이 필드가 생기기 전 발송 이력엔 없을 수 있다.
+  projectNumber?: string;
+  termNumber?: number;
   emailType: "TAX_INVOICE" | "FEE_DETAIL" | "SETTLEMENT_NOTICE" | "DOC_REQUEST" | "PAYMENT_REMINDER" | "OTHER";
   feeCategory?: "ANNUAL" | "SETTLEMENT";
   isReverseRequest?: boolean;

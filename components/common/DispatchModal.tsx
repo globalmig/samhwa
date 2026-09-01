@@ -451,6 +451,8 @@ ${companyInfo.name} 드림`;
       recipientEmail:       emails.join(", "),
       subject,
       emailType:            isOther ? "OTHER" : "TAX_INVOICE",
+      projectNumber:        target.projectNumber,
+      termNumber:           target.termNumber,
       feeCategory:          isOther ? undefined : feeCategory,
       isReverseRequest:     target.kind === "REVERSE" ? true : undefined,
       attachments:          checkedAttachments.map((a) => a.name),

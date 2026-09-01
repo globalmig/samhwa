@@ -121,6 +121,14 @@ export function isSettlementTerm(project: Pick<Project, "agreementType" | "stage
   return stage ? termNumber === stage.endTermNumber : termNumber === project.totalTerms;
 }
 
+// ─── 연차 → 단계 번호 ────────────────────────────────────────────
+// 일괄협약이거나 단계 정보가 없으면 "단계" 개념 자체가 없는 과제다(undefined). 공문 발송이력·
+// 전체변경이력에서 "몇 연차 · 몇 단계에 보낸 공문인지" 태그를 붙일 때 쓴다.
+export function resolveStageNumberForTerm(project: Pick<Project, "agreementType" | "stages">, termNumber: number): number | undefined {
+  if (!project.agreementType || project.agreementType === "BATCH") return undefined;
+  return project.stages?.find((s) => termNumber >= s.startTermNumber && termNumber <= s.endTermNumber)?.stageNumber;
+}
+
 // ─── 단계-연차 날짜 불일치 판정 ───────────────────────────────────
 // 담당자가 특정 연차에 실제 날짜(TermFee.termStartDate/termEndDate)를 직접 지정해뒀는데, 그 뒤 단계
 // 날짜가 바뀌면서(계약변경 등) 그 연차가 더 이상 자기 단계의 기간 안에 들지 않게 된 경우를 찾는다.

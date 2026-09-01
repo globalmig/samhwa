@@ -6,7 +6,24 @@ import { FiChevronDown, FiChevronUp, FiExternalLink } from "react-icons/fi";
 import { useStore, AuditEntry, ENTITY_NAMES } from "@/lib/store";
 import type { Project } from "@/lib/mock";
 import { fmtValue, fieldLabel, describeOverrideChange } from "@/lib/audit-log-format";
+import { resolveStageNumberForTerm } from "@/lib/fee-calculator";
 import StatusBadge from "@/components/common/StatusBadge";
+
+// 공문 발송(emailDispatch) 기록은 EmailDispatch.projectNumber/termNumber로 어느 과제·연차 건인지
+// 알 수 있다 — 그 필드가 생기기 전 옛 기록은 제목의 "[과제번호]" 접두사로 대신 추정한다
+// (app/emails/page.tsx getEmailProject와 동일한 방식).
+function resolveEmailDispatchTerm(
+  entry: AuditEntry,
+  store: ReturnType<typeof useStore>
+): { project: Project; termNumber: number; stageNumber?: number } | undefined {
+  if (entry.entityType !== "emailDispatch") return undefined;
+  const dispatch = store.emailDispatches.find((e) => e.id === entry.entityId);
+  if (!dispatch) return undefined;
+  const projectNumber = dispatch.projectNumber ?? dispatch.subject.match(/\[([^\]]+)\]/)?.[1];
+  const project = projectNumber ? store.projects.find((p) => p.projectNumber === projectNumber) : undefined;
+  if (!project || dispatch.termNumber === undefined) return undefined;
+  return { project, termNumber: dispatch.termNumber, stageNumber: resolveStageNumberForTerm(project, dispatch.termNumber) };
+}
 
 const ACTION_MAP: Record<AuditEntry["action"], { label: string; color: "blue" | "amber" | "red" }> = {
   CREATE: { label: "생성", color: "blue" },
@@ -66,6 +83,8 @@ function getEntityUrl(
       const p = store.projects.find((x) => x.projectNumber === s.projectNumber);
       return p ? `/projects/${p.id}` : null;
     }
+    case "emailDispatch":
+      return `/emails/${entityId}`;
     default:
       return null;
   }
@@ -102,6 +121,8 @@ function getRelatedProject(
       return byNumber(store.settlements.find((x) => x.id === entry.entityId)?.projectNumber);
     case "projectIssue":
       return byNumber(store.projectIssues.find((x) => x.id === entry.entityId)?.projectNumber);
+    case "emailDispatch":
+      return resolveEmailDispatchTerm(entry, store)?.project;
     default:
       return undefined;
   }
@@ -207,6 +228,7 @@ export default function AuditLogPage() {
     const navUrl = getEntityUrl(entry.entityType, entry.entityId, store);
     const relatedProject = getRelatedProject(entry, store);
     const relatedAgency = store.fundingAgencies.find((a) => a.id === relatedProject?.agencyId);
+    const emailTerm = resolveEmailDispatchTerm(entry, store);
 
     return (
       <React.Fragment key={entry.id}>
@@ -242,6 +264,14 @@ export default function AuditLogPage() {
               </Link>
             ) : (
               <p className="font-medium text-slate-800 text-sm">{entry.entityLabel}</p>
+            )}
+            {emailTerm && (
+              <span className="inline-flex items-center gap-1 mt-1">
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-blue-50 text-blue-600">{emailTerm.termNumber}연차</span>
+                {emailTerm.stageNumber !== undefined && (
+                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">{emailTerm.stageNumber}단계</span>
+                )}
+              </span>
             )}
             {summary && (
               <p className="text-xs text-slate-400 mt-0.5">{summary}</p>
