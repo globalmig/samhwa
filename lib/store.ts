@@ -2093,7 +2093,28 @@ export function addStandardAttachment(name: string): StandardAttachment {
     .then((res) => res.json())
     .then((res: { ok: boolean; attachment?: StandardAttachment; error?: string }) => {
       if (res.ok && res.attachment) {
-        _state = { ..._state, standardAttachments: _state.standardAttachments.map((a) => (a.id === tempId ? res.attachment! : a)) };
+        // "파일 추가" 클릭 직후 곧바로 "파일 선택"까지 이어지면, 서버가 아직 이 임시 id를 모르는
+        // 상태라 그 파일 저장(updateStandardAttachment) 요청이 404로 조용히 실패한다 — 그리고 여기서
+        // 이 생성 응답(파일 없는 상태)으로 로컬 행을 통째로 덮어써버리면 방금 고른 파일이 통째로
+        // 사라진다. id만 실제 DB id로 바꾸고 로컬에 이미 반영된 값(파일/이름 등)은 그대로 유지한 뒤,
+        // 그 값을 실제 id로 다시 한번 저장 시도한다.
+        const realId = res.attachment.id;
+        const current = _state.standardAttachments.find((a) => a.id === tempId);
+        _state = {
+          ..._state,
+          standardAttachments: _state.standardAttachments.map((a) =>
+            a.id === tempId ? { ...res.attachment!, ...current, id: realId } : a
+          ),
+        };
+        notify();
+        if (current && (current.fileDataUrl || current.name !== name || current.enabledByCategory)) {
+          updateStandardAttachment(realId, {
+            name: current.name,
+            fileDataUrl: current.fileDataUrl,
+            enabledByCategory: current.enabledByCategory,
+          });
+        }
+        return;
       } else {
         _state = { ..._state, standardAttachments: _state.standardAttachments.filter((a) => a.id !== tempId) };
         console.error("표준 첨부서류 생성 실패:", res.error);
