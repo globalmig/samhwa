@@ -268,10 +268,6 @@ export default function UserDetailPage({ params }: { params: Promise<{ id: strin
               </div>
             </div>
           )}
-
-          <p className="text-[10px] text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
-            현재 이 정보는 조회·기록 용도로만 저장됩니다. 실제 메일 발송 연동(SMTP 서버 연결)은 아직 준비 중입니다.
-          </p>
         </div>
       )}
 
