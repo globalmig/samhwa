@@ -112,32 +112,6 @@ export default function LoginPage() {
             <Link href="/signup" className="hover:text-blue-600 hover:underline transition-colors">회원가입</Link>
           </div>
         </div>
-
-        {/* 데모 계정 안내 */}
-        <div className="mt-4 bg-white rounded-xl border border-slate-200 p-4">
-          <p className="text-xs font-medium text-slate-600 mb-3">데모 계정</p>
-          <div className="space-y-2">
-            {[
-              { label: "시스템 관리자", email: "admin@samhwa.co.kr", pw: "admin1234" },
-              { label: "회계 담당자", email: "lee.acc@samhwa.co.kr", pw: "samhwa1234" },
-              { label: "전담기관 담당자", email: "park.set@samhwa.co.kr", pw: "samhwa1234" },
-              { label: "조회 전용", email: "choi.view@samhwa.co.kr", pw: "samhwa1234" },
-            ].map((acc) => (
-              <button
-                key={acc.email}
-                type="button"
-                onClick={() => { setEmail(acc.email); setPassword(acc.pw); setError(""); }}
-                className="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-50 transition-colors border border-slate-100 group"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-slate-700">{acc.label}</span>
-                  <span className="text-xs text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity">선택</span>
-                </div>
-                <p className="text-xs text-slate-400 mt-0.5">{acc.email}</p>
-              </button>
-            ))}
-          </div>
-        </div>
       </div>
     </div>
   );
