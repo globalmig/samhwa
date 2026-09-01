@@ -493,6 +493,12 @@ function ensureLeadMember(project: Project): void {
   );
   if (alreadyMember) return;
   const inst = _state.institutions.find((i) => i.id === project.leadInstitutionId);
+  // 과제 등록 시 입력한 "당해 정부출연금/민간현금/민간현물"은 과제 단위 합계일 뿐, 실제 수수료
+  // 산정과 참여기관 목록의 사업비 표시는 참여기관(ProjectMember)별 cashBudget/inKindBudget을
+  // 본다 — 아직 공동기관을 등록하지 않은 시점엔 그 합계 전부가 주관기관 몫이므로 여기로 그대로
+  // 넘겨준다. 안 그러면 상세 화면 사업비 구분 카드엔 값이 보이는데 참여기관 목록은 0원으로 남는다.
+  const cashBudget = (project.govGrant ?? 0) + (project.privateCash ?? 0);
+  const inKindBudget = project.privateInKind ?? 0;
   addProjectMember({
     projectId: project.id,
     projectNumber: project.projectNumber,
@@ -500,7 +506,7 @@ function ensureLeadMember(project: Project): void {
     institutionName: project.leadInstitutionName || inst?.name || "",
     institutionType: inst?.type ?? "중소기업",
     role: "LEAD",
-    budget: 0,
+    budget: cashBudget + inKindBudget,
     feeRate: 0,
     calculatedFee: 0,
     // 기관 등록 시 입력해둔 담당자·등급을 그대로 물려받는다 — 안 그러면 매 과제마다 실무자
@@ -510,8 +516,11 @@ function ensureLeadMember(project: Project): void {
     contactEmail: inst?.contactEmail,
     contactPhone: inst?.contactPhone,
     settlementType: "위탁정산",
-    cashBudget: 0,
-    inKindBudget: 0,
+    cashBudget,
+    inKindBudget,
+    annualBudgets: (cashBudget > 0 || inKindBudget > 0)
+      ? [{ termYear: new Date(project.startDate).getFullYear(), termNumber: project.currentTerm, cashBudget, inKindBudget }]
+      : undefined,
   });
 }
 

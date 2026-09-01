@@ -905,6 +905,9 @@ type NewProjectDraft = {
   privateInKind: number;
   leadCashBudget: number;
   leadInKindBudget: number;
+  leadContactName: string;
+  leadContactEmail: string;
+  leadContactPhone: string;
   projectType: "GENERAL" | "AUTONOMY_TRACK";
   programType: "GENERAL" | "ICT_FUND";
   researchLead: string;
@@ -939,6 +942,9 @@ const EMPTY_NEW_PROJECT: NewProjectDraft = {
   privateInKind: 0,
   leadCashBudget: 0,
   leadInKindBudget: 0,
+  leadContactName: "",
+  leadContactEmail: "",
+  leadContactPhone: "",
   projectType: "GENERAL",
   programType: "GENERAL",
   researchLead: "",
@@ -1018,16 +1024,26 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
     const termYear = new Date(form.startDate).getFullYear();
 
     // addProject는 주관기관을 예산 0원짜리 참여기관(LEAD)으로 자동 등록해둔다(ensureLeadMember,
-    // lib/store.ts) — 여기서 입력한 사업비로 그 레코드를 바로 채워야, 참여기관 목록의 산정기준액과
-    // 연차별 수수료 계산에 반영된다(안 채우면 상세 화면에서 다시 입력해야 함).
-    if (form.leadCashBudget > 0 || form.leadInKindBudget > 0) {
+    // lib/store.ts) — 등록된 기관에 담당자 정보가 없으면 이 LEAD 레코드의 실무자명/이메일/연락처도
+    // 빈 값으로 시작해, 공문·계산서발행 서류요청 일괄발송 시 "수신 이메일 없음"으로 조용히 빠진다.
+    // 여기서 입력한 사업비·실무자 정보로 그 레코드를 바로 채워야 상세 화면을 다시 열지 않아도 된다.
+    const hasLeadBudget = form.leadCashBudget > 0 || form.leadInKindBudget > 0;
+    const hasLeadContact = !!(form.leadContactName || form.leadContactEmail || form.leadContactPhone);
+    if (hasLeadBudget || hasLeadContact) {
       const leadMember = getProjectMembers().find((m) => m.projectId === created.id && m.institutionId === form.leadInstitutionId);
       if (leadMember) {
         updateProjectMember(leadMember.id, {
-          budget: form.leadCashBudget + form.leadInKindBudget,
-          cashBudget: form.leadCashBudget,
-          inKindBudget: form.leadInKindBudget,
-          annualBudgets: [{ termYear, termNumber: form.currentTerm, cashBudget: form.leadCashBudget, inKindBudget: form.leadInKindBudget }],
+          ...(hasLeadBudget ? {
+            budget: form.leadCashBudget + form.leadInKindBudget,
+            cashBudget: form.leadCashBudget,
+            inKindBudget: form.leadInKindBudget,
+            annualBudgets: [{ termYear, termNumber: form.currentTerm, cashBudget: form.leadCashBudget, inKindBudget: form.leadInKindBudget }],
+          } : {}),
+          ...(hasLeadContact ? {
+            contactName: form.leadContactName || leadMember.contactName,
+            contactEmail: form.leadContactEmail || leadMember.contactEmail,
+            contactPhone: form.leadContactPhone || leadMember.contactPhone,
+          } : {}),
         });
       }
     }
@@ -1280,6 +1296,26 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">현물사업비</label>
             <MoneyInput className={inputCls} value={form.leadInKindBudget} onChange={(v) => s("leadInKindBudget", v)} />
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-slate-100 bg-slate-50/50 px-4 py-3 space-y-3">
+        <p className="text-xs font-semibold text-slate-600">
+          주관기관 실무자 <span className="text-slate-400 font-normal">· 비워두면 선택한 기관에 등록된 담당자 정보를 그대로 씁니다. 공문·계산서발행 서류요청 발송 대상 이메일로 쓰입니다</span>
+        </p>
+        <div className="grid grid-cols-3 gap-4">
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">담당자명</label>
+            <input className={inputCls} value={form.leadContactName} onChange={(e) => s("leadContactName", e.target.value)} placeholder="담당자명" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">이메일</label>
+            <input className={inputCls} value={form.leadContactEmail} onChange={(e) => s("leadContactEmail", e.target.value)} placeholder="email@example.com" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">연락처</label>
+            <input className={inputCls} value={form.leadContactPhone} onChange={(e) => s("leadContactPhone", e.target.value)} placeholder="02-0000-0000" />
           </div>
         </div>
       </div>
