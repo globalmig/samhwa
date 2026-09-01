@@ -35,6 +35,7 @@ export async function PATCH(request: Request, { params }: Params) {
     "stages", "autonomySettlementType", "programType", "assignedManagerPrimary", "assignedManagerPrimaryHistory",
     "assignedManagerPrimaryUserId", "assignedManager", "assignedManagerHistory", "assignedManagerUserId",
     "currentTerm", "leadInstitutionId", "leadInstitutionName", "totalBudget",
+    "govGrant", "privateCash", "privateInKind",
   ] as const;
   const nextExtra = { ...prevExtra };
   for (const key of extraKeys) {

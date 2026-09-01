@@ -62,6 +62,7 @@ export async function POST(request: Request) {
         assignedManagerUserId: body.assignedManagerUserId,
         currentTerm: body.currentTerm ?? 1, leadInstitutionId: body.leadInstitutionId,
         leadInstitutionName: body.leadInstitutionName, totalBudget: body.totalBudget ?? 0,
+        govGrant: body.govGrant, privateCash: body.privateCash, privateInKind: body.privateInKind,
       }),
     },
   });
