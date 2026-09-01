@@ -1,5 +1,7 @@
 @echo off
 REM GitHub Actions(.github/workflows/deploy.yml)가 main push 시 이 스크립트를 그대로 실행한다.
+REM origin은 SSH 배포 키로 인증한다(HTTPS+Credential Manager는 비대화형 세션에서 프롬프트가
+REM 필요해 실패했었음) - C:\Users\shcpa8f\.ssh\config, samhwa_deploy_key 참고.
 cd /d C:\project\samhwa
 
 echo === Stopping SamhwaApp ===
