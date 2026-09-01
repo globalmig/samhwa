@@ -145,7 +145,10 @@ export default function InstitutionQuickAdd({
       ) : (
         <div className="rounded-lg border border-blue-100 bg-blue-50/40 p-3 space-y-2">
           {error && <p className="text-[11px] text-red-600">{error}</p>}
-          <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="기관명 *" />
+          <div>
+            <label className="block text-[11px] font-medium text-slate-500 mb-1">기관명 *</label>
+            <input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="(주)기관명" />
+          </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="block text-[11px] font-medium text-slate-500 mb-1">사업자등록번호 *</label>
@@ -158,11 +161,23 @@ export default function InstitutionQuickAdd({
               </select>
             </div>
           </div>
-          <input className={inputCls} value={representativeName} onChange={(e) => setRepresentativeName(e.target.value)} placeholder="대표자명" />
+          <div>
+            <label className="block text-[11px] font-medium text-slate-500 mb-1">대표자명</label>
+            <input className={inputCls} value={representativeName} onChange={(e) => setRepresentativeName(e.target.value)} />
+          </div>
           <div className="grid grid-cols-3 gap-2">
-            <input className={inputCls} value={contactName} onChange={(e) => setContactName(e.target.value)} placeholder="담당자명" />
-            <input className={inputCls} value={contactPhone} onChange={(e) => setContactPhone(e.target.value)} placeholder="연락처" />
-            <input className={inputCls} type="email" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} placeholder="이메일" />
+            <div>
+              <label className="block text-[11px] font-medium text-slate-500 mb-1">담당자명</label>
+              <input className={inputCls} value={contactName} onChange={(e) => setContactName(e.target.value)} />
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-slate-500 mb-1">연락처</label>
+              <input className={inputCls} value={contactPhone} onChange={(e) => setContactPhone(e.target.value)} placeholder="02-0000-0000" />
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-slate-500 mb-1">이메일</label>
+              <input className={inputCls} type="email" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} placeholder="contact@institution.kr" />
+            </div>
           </div>
           <div className="flex justify-end">
             <button type="button" onClick={register}
