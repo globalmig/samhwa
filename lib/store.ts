@@ -2288,8 +2288,14 @@ function ensureAdminIncluded(roles: Role[]): Role[] {
   return roles.includes("ADMIN") ? roles : ["ADMIN", ...roles];
 }
 
+// 권한관리(/admin/users)·권한 설정(/admin/permissions) 자체는 항상 시스템 관리자(ADMIN)만
+// 접근해야 한다 — [권한 설정] 화면에서 다른 역할을 이 두 페이지에 슬쩍 추가해버리면 그 역할이
+// 권한 체계 자체를 바꿀 수 있게 되는 권한 상승 구멍이 생기므로, 화면 조작과 무관하게 여기서
+// 원천 차단한다.
+export const ADMIN_ONLY_LOCKED_PAGES = ["/admin/users", "/admin/permissions"];
+
 export function updatePageAccess(path: string, roles: Role[]): void {
-  const safeRoles = ensureAdminIncluded(roles);
+  const safeRoles = ADMIN_ONLY_LOCKED_PAGES.includes(path) ? ["ADMIN"] as Role[] : ensureAdminIncluded(roles);
   const before = _state.pageAccess[path] ?? [];
   _state = { ..._state, pageAccess: { ..._state.pageAccess, [path]: safeRoles } };
   record("permission", `page:${path}`, path, "UPDATE", { roles: { before, after: safeRoles } });

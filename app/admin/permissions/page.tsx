@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useMemo } from "react";
-import { useStore, updatePageAccess, updateWriteAccess } from "@/lib/store";
+import { useStore, updatePageAccess, updateWriteAccess, ADMIN_ONLY_LOCKED_PAGES } from "@/lib/store";
 import { PAGE_ACCESS_CATALOG, WRITE_ACCESS_CATALOG, type Role } from "@/lib/permissions";
 
 const ROLES: { key: Role; label: string }[] = [
@@ -74,14 +74,18 @@ export default function AdminPermissionsPage() {
             <tbody>
               {PAGE_ACCESS_CATALOG.map((item) => {
                 const roles = pageAccess[item.key] ?? [];
+                const isLocked = ADMIN_ONLY_LOCKED_PAGES.includes(item.key);
                 return (
                   <tr key={item.key} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/60 transition-colors">
-                    <td className="px-5 py-2.5 text-slate-700 whitespace-nowrap">{item.label}</td>
+                    <td className="px-5 py-2.5 text-slate-700 whitespace-nowrap">
+                      {item.label}
+                      {isLocked && <span className="ml-1.5 text-[10px] text-slate-400">(시스템 관리자 전용 · 변경 불가)</span>}
+                    </td>
                     {ROLES.map((r) => (
                       <td key={r.key} className="text-center px-3 py-2.5">
                         <RoleCheckbox
-                          checked={r.key === "ADMIN" ? true : roles.includes(r.key)}
-                          disabled={r.key === "ADMIN"}
+                          checked={r.key === "ADMIN" ? true : !isLocked && roles.includes(r.key)}
+                          disabled={isLocked || r.key === "ADMIN"}
                           onChange={(checked) => updatePageAccess(item.key, toggleRole(roles, r.key, checked))}
                         />
                       </td>
