@@ -121,10 +121,10 @@ function InstitutionForm({
         <Field label="대표자명"><input className={inputCls} value={form.representativeName} onChange={(e) => s("representativeName", e.target.value)} /></Field>
       </div>
       <div className="grid grid-cols-2 gap-4">
-        <Field label="회계담당자명"><input className={inputCls} value={form.contactName} onChange={(e) => s("contactName", e.target.value)} /></Field>
-        <Field label="회계담당자 연락처"><input className={inputCls} value={form.contactPhone} onChange={(e) => s("contactPhone", e.target.value)} placeholder="02-0000-0000" /></Field>
+        <Field label="담당자명"><input className={inputCls} value={form.contactName} onChange={(e) => s("contactName", e.target.value)} /></Field>
+        <Field label="담당자 연락처"><input className={inputCls} value={form.contactPhone} onChange={(e) => s("contactPhone", e.target.value)} placeholder="02-0000-0000" /></Field>
       </div>
-      <Field label="회계담당자 이메일">
+      <Field label="담당자 이메일">
         <input className={inputCls} type="email" value={form.contactEmail} onChange={(e) => s("contactEmail", e.target.value)} placeholder="contact@institution.kr" />
         <p className="text-[10px] text-slate-400 mt-1">세금계산서·공문 발송 시 이 이메일로 전송됩니다</p>
       </Field>
@@ -315,7 +315,7 @@ export default function InstitutionsPage() {
           {[
             { label: "기관명",    value: filterName,        onChange: setFilterName        },
             { label: "사업자번호", value: filterBizNumber,   onChange: setFilterBizNumber   },
-            { label: "회계담당자", value: filterContactName, onChange: setFilterContactName  },
+            { label: "담당자", value: filterContactName, onChange: setFilterContactName  },
           ].map(({ label, value, onChange }) => (
             <div key={label}>
               <p className="text-[10px] font-medium text-slate-400 mb-1">{label}</p>
@@ -349,7 +349,7 @@ export default function InstitutionsPage() {
               <th className="text-left px-5 py-3 text-xs font-medium text-slate-500">기관명</th>
               <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">구분 내용</th>
               <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">사업자번호</th>
-              <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">회계담당자</th>
+              <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">담당자</th>
               <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">이메일</th>
               <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">과제 수</th>
               <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">등록일</th>

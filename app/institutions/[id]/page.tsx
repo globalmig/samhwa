@@ -52,6 +52,8 @@ export default function InstitutionDetailPage({ params }: { params: Promise<{ id
   const canEdit = useCanWrite('institutions');
   const [editingNote, setEditingNote] = useState(false);
   const [noteDraft, setNoteDraft] = useState("");
+  const [editingContact, setEditingContact] = useState(false);
+  const [contactDraft, setContactDraft] = useState({ contactName: "", contactPhone: "", contactEmail: "" });
 
   const inst = institutions.find((i) => i.id === id);
 
@@ -128,6 +130,18 @@ export default function InstitutionDetailPage({ params }: { params: Promise<{ id
     updateInstitution(id, { note: noteDraft });
     setEditingNote(false);
   }
+  function startContactEdit() {
+    setContactDraft({
+      contactName: inst!.contactName ?? "",
+      contactPhone: inst!.contactPhone ?? "",
+      contactEmail: inst!.contactEmail ?? "",
+    });
+    setEditingContact(true);
+  }
+  function saveContact() {
+    updateInstitution(id, contactDraft);
+    setEditingContact(false);
+  }
   function handleSettlementTypeChange(memberId: string, value: "위탁정산" | "자체정산") {
     updateProjectMember(memberId, { settlementType: value });
   }
@@ -153,23 +167,63 @@ export default function InstitutionDetailPage({ params }: { params: Promise<{ id
           </div>
           <StatusBadge label={inst.status === "ACTIVE" ? "활성" : "비활성"} color={inst.status === "ACTIVE" ? "green" : "slate"} />
         </div>
-        <div className="grid grid-cols-4 gap-4 pt-4 border-t border-slate-100">
-          <div>
-            <p className="text-xs text-slate-400">사업자번호</p>
-            <p className="text-sm font-mono text-slate-700 mt-0.5">{inst.bizNumber}</p>
+        <div className="pt-4 border-t border-slate-100">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs text-slate-400">사업자번호 <span className="font-mono text-slate-700">{inst.bizNumber}</span></p>
+            {canEdit && !editingContact && (
+              <button onClick={startContactEdit} className="text-xs text-blue-600 hover:underline">담당자 정보 수정</button>
+            )}
           </div>
-          <div>
-            <p className="text-xs text-slate-400">회계담당자</p>
-            <p className="text-sm text-slate-700 mt-0.5">{inst.contactName}</p>
-          </div>
-          <div>
-            <p className="text-xs text-slate-400">연락처</p>
-            <p className="text-sm text-slate-700 mt-0.5">{inst.contactPhone}</p>
-          </div>
-          <div>
-            <p className="text-xs text-slate-400">이메일</p>
-            <p className="text-sm text-slate-700 mt-0.5">{inst.contactEmail}</p>
-          </div>
+          {editingContact ? (
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <p className="text-xs text-slate-400 mb-1">담당자</p>
+                <input
+                  className="w-full text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                  value={contactDraft.contactName}
+                  onChange={(e) => setContactDraft((p) => ({ ...p, contactName: e.target.value }))}
+                />
+              </div>
+              <div>
+                <p className="text-xs text-slate-400 mb-1">연락처</p>
+                <input
+                  className="w-full text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                  value={contactDraft.contactPhone}
+                  onChange={(e) => setContactDraft((p) => ({ ...p, contactPhone: e.target.value }))}
+                  placeholder="02-0000-0000"
+                />
+              </div>
+              <div>
+                <p className="text-xs text-slate-400 mb-1">이메일</p>
+                <input
+                  className="w-full text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                  type="email"
+                  value={contactDraft.contactEmail}
+                  onChange={(e) => setContactDraft((p) => ({ ...p, contactEmail: e.target.value }))}
+                  placeholder="contact@institution.kr"
+                />
+              </div>
+              <div className="col-span-3 flex justify-end gap-2">
+                <button onClick={() => setEditingContact(false)} className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
+                <button onClick={saveContact} className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">저장</button>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <p className="text-xs text-slate-400">담당자</p>
+                <p className="text-sm text-slate-700 mt-0.5">{inst.contactName || "-"}</p>
+              </div>
+              <div>
+                <p className="text-xs text-slate-400">연락처</p>
+                <p className="text-sm text-slate-700 mt-0.5">{inst.contactPhone || "-"}</p>
+              </div>
+              <div>
+                <p className="text-xs text-slate-400">이메일</p>
+                <p className="text-sm text-slate-700 mt-0.5">{inst.contactEmail || "-"}</p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
