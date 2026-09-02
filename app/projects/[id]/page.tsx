@@ -4475,6 +4475,11 @@ function SettlementNoticeModal({
     setSendError("");
     const subject = `[${project.projectNumber}] ${template.title || "정산절차 안내 및 수수료 청구"}`;
     const html = buildNoticeEmailHtml({ template, statusRows, feeRows, docNumber, issuedDate, companyInfo });
+    // template.attachments는 본문의 "[붙임]" 목록에 이름만 나열될 뿐, 실제 파일(dataUrl)을 함께
+    // 넘겨주지 않으면 메일에 파일이 붙지 않는다 — DispatchModal과 동일하게 dataUrl이 있는 것만 첨부한다.
+    const mailAttachments = template.attachments
+      .filter((a): a is { name: string; dataUrl: string } => !!a.dataUrl)
+      .map((a) => ({ filename: a.name, dataUrl: a.dataUrl }));
 
     let status: "SUCCESS" | "FAILED" = "SUCCESS";
     try {
@@ -4488,6 +4493,7 @@ function SettlementNoticeModal({
           to: [toEmail],
           subject,
           html,
+          attachments: mailAttachments,
         }),
       });
       const json = await res.json();
