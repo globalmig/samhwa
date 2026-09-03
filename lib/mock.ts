@@ -353,6 +353,11 @@ export interface FundingAgency {
   contactName: string;
   contactEmail: string;
   contactPhone: string;
+  // 정산절차 안내 공문 발송 전용 계정(하이웍스 공용메일) — 개인 계정(SystemUser.hiworksEmail)과 달리
+  // 전담기관마다 달라(예: keit_samhwa@shcpa.co.kr) 여기(전담기관)에 귀속시켜 관리한다.
+  // 발신자명은 계정과 무관하게 항상 회사명(CompanyInfo.name)을 쓴다.
+  noticeSenderEmail?: string;
+  noticeSenderMailPassword?: string;
   status: "ACTIVE" | "INACTIVE";
   registeredAt: string;
   website?: string;
@@ -378,6 +383,7 @@ export const fundingAgencies: FundingAgency[] = [
     contactName: "홍담당",
     contactEmail: "info@keit.re.kr",
     contactPhone: "042-714-0114",
+    noticeSenderEmail: "keit_samhwa@shcpa.co.kr",
     status: "ACTIVE",
     registeredAt: "2022-01-01",
     website: "https://www.keit.re.kr",
@@ -395,6 +401,7 @@ export const fundingAgencies: FundingAgency[] = [
     contactName: "김에너",
     contactEmail: "info@ketep.re.kr",
     contactPhone: "02-3469-8000",
+    noticeSenderEmail: "ketep_samhwa@shcpa.co.kr",
     status: "ACTIVE",
     registeredAt: "2022-01-01",
     website: "https://www.ketep.re.kr",
@@ -413,6 +420,7 @@ export const fundingAgencies: FundingAgency[] = [
     contactName: "박정보",
     contactEmail: "info@iitp.kr",
     contactPhone: "02-6131-1000",
+    noticeSenderEmail: "iitp_samhwa@shcpa.co.kr",
     status: "ACTIVE",
     registeredAt: "2022-03-01",
     website: "https://www.iitp.kr",
@@ -433,6 +441,7 @@ export const fundingAgencies: FundingAgency[] = [
     contactName: "이임업",
     contactEmail: "info@kofpi.or.kr",
     contactPhone: "02-6311-1500",
+    noticeSenderEmail: "kofpi_samhwa@shcpa.co.kr",
     status: "ACTIVE",
     registeredAt: "2022-01-01",
     website: "https://www.kofpi.or.kr",
@@ -451,6 +460,7 @@ export const fundingAgencies: FundingAgency[] = [
     contactName: "최농촌",
     contactEmail: "info@rda.go.kr",
     contactPhone: "063-238-0114",
+    noticeSenderEmail: "rda_samhwa@shcpa.co.kr",
     status: "ACTIVE",
     registeredAt: "2022-07-01",
     website: "https://www.rda.go.kr",
@@ -470,6 +480,7 @@ export const fundingAgencies: FundingAgency[] = [
     contactName: "송농업",
     contactEmail: "info@rda.go.kr",
     contactPhone: "063-238-0114",
+    noticeSenderEmail: "rda_samhwa@shcpa.co.kr",
     status: "ACTIVE",
     registeredAt: "2023-09-01",
     website: "https://www.rda.go.kr",

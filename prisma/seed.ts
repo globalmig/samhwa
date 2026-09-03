@@ -196,6 +196,8 @@ async function main() {
         contactName: fa.contactName,
         contactEmail: fa.contactEmail,
         contactPhone: fa.contactPhone,
+        noticeSenderEmail: fa.noticeSenderEmail ?? null,
+        noticeSenderMailPassword: fa.noticeSenderMailPassword ?? null,
         status: fa.status,
         registeredAt: toDateOrNow(fa.registeredAt),
         website: fa.website ?? null,

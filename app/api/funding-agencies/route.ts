@@ -37,6 +37,8 @@ export async function POST(request: Request) {
       contactName: body.contactName ?? "",
       contactEmail: body.contactEmail ?? "",
       contactPhone: body.contactPhone ?? "",
+      noticeSenderEmail: body.noticeSenderEmail ?? null,
+      noticeSenderMailPassword: body.noticeSenderMailPassword ?? null,
       status: body.status ?? "ACTIVE",
       registeredAt: body.registeredAt ? new Date(body.registeredAt) : new Date(),
       website: body.website ?? null,

@@ -14,7 +14,7 @@ import {
   updateProjectMember, autoGenerateTermFees, addProjectMember, deleteProjectMember, deleteProject, deleteProjectTerms,
   setTermOtherFirmHandled, setTermBillingType, setTermDates, resolveProjectId,
 } from "@/lib/store";
-import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type SystemUser, type EmailDispatch, type FeePolicy, type AnnualFinancials, EMPTY_NOTICE_TEMPLATE } from "@/lib/mock";
+import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type EmailDispatch, type FeePolicy, type AnnualFinancials, type FundingAgency, EMPTY_NOTICE_TEMPLATE } from "@/lib/mock";
 import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, type CalcMember } from "@/lib/fee-calculator";
 import { fmtWonFull, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange, nowKST, todayKST } from "@/lib/utils";
 import { fmtValue, fieldLabel, describeOverrideChange } from "@/lib/audit-log-format";
@@ -32,7 +32,6 @@ import InstitutionQuickAdd from "@/components/common/InstitutionQuickAdd";
 import UserMultiSelect from "@/components/common/UserMultiSelect";
 import AgreementStructureEditor from "@/components/common/AgreementStructureEditor";
 import { useCanWrite } from "@/lib/permissions";
-import { getCurrentUser } from "@/lib/auth";
 
 // ─── Shared styles ───────────────────────────────────────────
 const inp = "text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400";
@@ -4448,24 +4447,24 @@ function FeeManagementTab({ projectId }: { projectId: string }) {
 function SettlementNoticeModal({
   project,
   agencyLabel,
+  agency,
   templates,
   statusRows,
   feeRows,
   recipientEmail,
   docNumber,
   issuedDate,
-  senderUser,
   onClose,
 }: {
   project: Project;
   agencyLabel: string;
+  agency: FundingAgency;
   templates: AgencyNoticeTemplateEntry[];
   statusRows: NoticeStatusRow[];
   feeRows: NoticeStatusRow[];
   recipientEmail: string;
   docNumber: string;
   issuedDate: string;
-  senderUser: SystemUser | null;
   onClose: () => void;
 }) {
   const { companyInfo, users } = useStore();
@@ -4483,11 +4482,13 @@ function SettlementNoticeModal({
     return { ...base, contactRows: applyManagerContactRows(base.contactRows, project, users) };
   }, [selectedTemplate, project, users]);
 
-  const canSendMail = !!senderUser?.hiworksEmail && !!senderUser?.hiworksMailPassword;
+  // 정산절차 안내 공문은 담당자 개인 하이웍스 계정이 아니라, 전담기관별로 등록된 공용메일 계정으로
+  // "삼화회계법인" 명의 발송한다 (funding-agencies 관리 화면에서 등록).
+  const canSendMail = !!agency.noticeSenderEmail && !!agency.noticeSenderMailPassword;
 
   async function send() {
-    if (!senderUser?.hiworksEmail || !senderUser?.hiworksMailPassword) {
-      setSendError("발신 계정(하이웍스)이 등록되어 있지 않습니다. 관리자 > 사용자 관리에서 먼저 등록해주세요.");
+    if (!agency.noticeSenderEmail || !agency.noticeSenderMailPassword) {
+      setSendError("발신 계정(하이웍스 공용메일)이 등록되어 있지 않습니다. 전담기관 관리에서 먼저 등록해주세요.");
       return;
     }
     setSending(true);
@@ -4506,9 +4507,9 @@ function SettlementNoticeModal({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          senderEmail: senderUser.hiworksEmail,
-          senderPassword: senderUser.hiworksMailPassword,
-          senderName: senderUser.name,
+          senderEmail: agency.noticeSenderEmail,
+          senderPassword: agency.noticeSenderMailPassword,
+          senderName: companyInfo.name,
           to: [toEmail],
           subject,
           html,
@@ -4528,7 +4529,7 @@ function SettlementNoticeModal({
     addEmailDispatch({
       batchId: `BATCH-${Date.now()}`,
       sentAt: nowKST(),
-      senderName: senderUser.name,
+      senderName: companyInfo.name,
       recipientInstitution: project.leadInstitutionName,
       recipientEmail: toEmail,
       subject,
@@ -4615,7 +4616,7 @@ function SettlementNoticeModal({
       </div>
 
       <p className="text-[11px] text-slate-400">
-        발신 계정: {canSendMail ? senderUser!.hiworksEmail : <span className="text-red-500">등록된 하이웍스 계정이 없습니다 (관리자 &gt; 사용자 관리에서 등록)</span>}
+        발신 계정: {canSendMail ? `${companyInfo.name} <${agency.noticeSenderEmail}>` : <span className="text-red-500">등록된 발신 계정이 없습니다 (전담기관 관리에서 등록)</span>}
       </p>
       {sendError && <p className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{sendError}</p>}
 
@@ -4638,7 +4639,7 @@ function SettlementNoticeModal({
 export default function ProjectDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
-  const { projects, fundingAgencies, agencyNoticeTemplates, projectMembers, emailDispatches, users, termFees, companyInfo } = useStore();
+  const { projects, fundingAgencies, agencyNoticeTemplates, projectMembers, emailDispatches, termFees, companyInfo } = useStore();
   const canDeleteProject = useCanWrite('projects-delete');
   const canSendNotice = useCanWrite('emails');
   const [activeTab, setActiveTab] = useState<"info" | "fees">("info");
@@ -4691,9 +4692,6 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const noticeSeq = emailDispatches.filter((e) => e.emailType === "SETTLEMENT_NOTICE").length + 1;
   const noticeDocNumber = `${companyInfo.docNumberPrefix} ${new Date().getFullYear()}-${String(noticeSeq).padStart(4, "0")}`;
   const noticeIssuedDate = todayKST().replace(/-/g, ".");
-  // getCurrentUser()는 로그인 시점의 스냅샷이라 이후 등록된 하이웍스 계정 정보가 반영되지 않으므로,
-  // 실시간 store에서 같은 id의 사용자 레코드를 다시 찾아 발신 계정으로 사용한다.
-  const senderUser = users.find((u) => u.id === getCurrentUser()?.id) ?? null;
   const projectTermFees = termFees.filter((tf) => tf.projectNumber === project.projectNumber);
   // 정산절차 안내 공문 "■ 수수료" 섹션에 자동으로 채워 넣을, 지금 진행 중인 연차의 산정·청구 요약.
   const noticeFeeRows: NoticeStatusRow[] = buildNoticeFeeRows(project, projectTermFees, project.currentTerm);
@@ -4806,6 +4804,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           <SettlementNoticeModal
             project={project}
             agencyLabel={`${noticeAgency.name} (${noticeAgency.shortName})`}
+            agency={noticeAgency}
             templates={noticeAgencyTemplates}
             statusRows={noticeStatusRows}
             feeRows={noticeFeeRows}
@@ -4815,7 +4814,6 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
             )}
             docNumber={noticeDocNumber}
             issuedDate={noticeIssuedDate}
-            senderUser={senderUser}
             onClose={() => setShowNotice(false)}
           />
         </Modal>

@@ -1887,20 +1887,26 @@ interface BulkNoticeTarget {
 function BulkSettlementNoticeModal({
   targets,
   startSeq,
-  senderUser,
   onClose,
 }: {
   targets: BulkNoticeTarget[];
   startSeq: number;
-  senderUser: SystemUser | null;
   onClose: () => void;
 }) {
-  const { companyInfo, users } = useStore();
-  // 공문 양식이 없는 전담기관 과제는 보낼 방법이 없어 건너뛰고, 수신 이메일이 없는 과제도 자동 제외한다
-  // (참여기관 목록에 담당자 이메일이 등록돼 있어야 함 — 과제 상세에서 확인 가능).
+  const { companyInfo, users, fundingAgencies } = useStore();
+  // 정산절차 안내 공문은 담당자 개인 하이웍스 계정이 아니라, 전담기관별로 등록된 공용메일 계정
+  // (FundingAgency.noticeSenderEmail/noticeSenderMailPassword)으로 "삼화회계법인" 명의 발송한다.
+  const agencyByShortName = useMemo(() => new Map(fundingAgencies.map((a) => [a.shortName, a])), [fundingAgencies]);
+  const hasSenderAccount = (shortName: string) => {
+    const a = agencyByShortName.get(shortName);
+    return !!a?.noticeSenderEmail && !!a?.noticeSenderMailPassword;
+  };
+  // 공문 양식이 없는 전담기관 과제는 보낼 방법이 없어 건너뛰고, 수신 이메일이 없는 과제/발신 계정이
+  // 등록되지 않은 전담기관 과제도 자동 제외한다.
   const noTemplate = targets.filter((t) => t.templates.length === 0);
   const noEmail = targets.filter((t) => t.templates.length > 0 && !t.recipientEmail);
-  const eligible = targets.filter((t) => t.templates.length > 0 && t.recipientEmail);
+  const noSenderAccount = targets.filter((t) => t.templates.length > 0 && t.recipientEmail && !hasSenderAccount(t.agencyShortName));
+  const eligible = targets.filter((t) => t.templates.length > 0 && t.recipientEmail && hasSenderAccount(t.agencyShortName));
 
   const agencyGroups = useMemo(() => {
     const map = new Map<string, BulkNoticeTarget[]>();
@@ -1922,7 +1928,6 @@ function BulkSettlementNoticeModal({
   const [done, setDone] = useState(false);
   const [results, setResults] = useState<{ projectName: string; email: string; status: "SUCCESS" | "FAILED"; error?: string }[]>([]);
 
-  const canSendMail = !!senderUser?.hiworksEmail && !!senderUser?.hiworksMailPassword;
   const toSend = eligible.filter((t) => !excluded.has(t.projectId));
 
   function toggleExclude(projectId: string) {
@@ -1934,7 +1939,6 @@ function BulkSettlementNoticeModal({
   }
 
   async function sendAll() {
-    if (!senderUser?.hiworksEmail || !senderUser?.hiworksMailPassword) return;
     setSending(true);
     const now = new Date();
     const issuedDate = now.toISOString().slice(0, 10).replace(/-/g, ".");
@@ -1943,6 +1947,8 @@ function BulkSettlementNoticeModal({
     const newResults: typeof results = [];
 
     for (const t of toSend) {
+      const senderAgency = agencyByShortName.get(t.agencyShortName);
+      if (!senderAgency?.noticeSenderEmail || !senderAgency?.noticeSenderMailPassword) continue;
       const templateId = templateChoices[t.agencyShortName] ?? t.templates[0]?.id;
       const rawTemplate = t.templates.find((x) => x.id === templateId)?.content ?? t.templates[0]?.content ?? EMPTY_NOTICE_TEMPLATE;
       // 문의사항 연락처의 "과제담당(정)/(부)" 행을 이 과제의 실제 담당자로 바꿔치기한다.
@@ -1964,9 +1970,9 @@ function BulkSettlementNoticeModal({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            senderEmail: senderUser.hiworksEmail,
-            senderPassword: senderUser.hiworksMailPassword,
-            senderName: senderUser.name,
+            senderEmail: senderAgency.noticeSenderEmail,
+            senderPassword: senderAgency.noticeSenderMailPassword,
+            senderName: companyInfo.name,
             to: [t.recipientEmail],
             subject,
             html,
@@ -1982,7 +1988,7 @@ function BulkSettlementNoticeModal({
       addEmailDispatch({
         batchId,
         sentAt: nowKST(),
-        senderName: senderUser.name,
+        senderName: companyInfo.name,
         recipientInstitution: t.leadInstitutionName,
         recipientEmail: t.recipientEmail,
         subject,
@@ -2032,7 +2038,7 @@ function BulkSettlementNoticeModal({
 
   return (
     <div className="p-6 space-y-4">
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-4 gap-3">
         <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-center">
           <p className="text-2xl font-bold text-emerald-700">{toSend.length}</p>
           <p className="text-xs text-slate-500 mt-0.5">발송 대상</p>
@@ -2045,6 +2051,10 @@ function BulkSettlementNoticeModal({
           <p className="text-2xl font-bold text-slate-500">{noEmail.length}</p>
           <p className="text-xs text-slate-500 mt-0.5">수신 이메일 없음 (건너뜀)</p>
         </div>
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-center">
+          <p className="text-2xl font-bold text-slate-500">{noSenderAccount.length}</p>
+          <p className="text-xs text-slate-500 mt-0.5">발신 계정 미등록 (건너뜀)</p>
+        </div>
       </div>
 
       {agencyGroups.length > 0 && (
@@ -2052,7 +2062,10 @@ function BulkSettlementNoticeModal({
           {agencyGroups.map(([agency, items]) => (
             <div key={agency} className="border border-slate-200 rounded-xl overflow-hidden">
               <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-3">
-                <span className="text-xs font-semibold text-slate-700">{agency} · {items.length}건</span>
+                <span className="text-xs font-semibold text-slate-700">
+                  {agency} · {items.length}건
+                  <span className="ml-2 font-normal text-slate-400">발신 {agencyByShortName.get(agency)?.noticeSenderEmail}</span>
+                </span>
                 <div className="flex items-center gap-2">
                   {items[0].templates.length > 1 && (
                     <select
@@ -2109,7 +2122,7 @@ function BulkSettlementNoticeModal({
         </div>
       )}
 
-      {(noTemplate.length > 0 || noEmail.length > 0) && (
+      {(noTemplate.length > 0 || noEmail.length > 0 || noSenderAccount.length > 0) && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700 space-y-1.5">
           {/* 대상이 많아지면 목록이 모달을 밀어 늘리지 않고 이 영역 안에서만 스크롤되게 높이를 제한한다. */}
           {noTemplate.length > 0 && (
@@ -2122,6 +2135,11 @@ function BulkSettlementNoticeModal({
               주관기관 담당자 이메일이 없는 과제: {noEmail.map((t) => t.projectName).join(", ")}
             </div>
           )}
+          {noSenderAccount.length > 0 && (
+            <div className="max-h-24 overflow-y-auto leading-relaxed">
+              전담기관에 발신 계정이 등록되지 않은 과제 (전담기관 관리에서 등록): {noSenderAccount.map((t) => t.projectName).join(", ")}
+            </div>
+          )}
         </div>
       )}
 
@@ -2131,15 +2149,11 @@ function BulkSettlementNoticeModal({
         </div>
       )}
 
-      <p className="text-[11px] text-slate-400">
-        발신 계정: {canSendMail ? senderUser!.hiworksEmail : <span className="text-red-500">등록된 하이웍스 계정이 없습니다 (관리자 &gt; 사용자 관리에서 등록)</span>}
-      </p>
-
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
         <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
         <button
           onClick={sendAll}
-          disabled={toSend.length === 0 || sending || !canSendMail}
+          disabled={toSend.length === 0 || sending}
           className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           <FiSend size={14} />
@@ -3670,7 +3684,6 @@ export default function FeesPage() {
           <BulkSettlementNoticeModal
             targets={bulkNoticeTargets}
             startSeq={bulkNoticeStartSeq}
-            senderUser={bulkNoticeSenderUser}
             onClose={() => setShowBulkNotice(false)}
           />
         </Modal>

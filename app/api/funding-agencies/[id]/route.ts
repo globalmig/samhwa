@@ -37,6 +37,8 @@ export async function PATCH(request: Request, { params }: Params) {
       contactName: body.contactName ?? undefined,
       contactEmail: body.contactEmail ?? undefined,
       contactPhone: body.contactPhone ?? undefined,
+      noticeSenderEmail: body.noticeSenderEmail ?? undefined,
+      noticeSenderMailPassword: body.noticeSenderMailPassword ?? undefined,
       status: body.status ?? undefined,
       website: body.website !== undefined ? body.website : undefined,
       noticeRecipientScope: body.noticeRecipientScope ?? undefined,

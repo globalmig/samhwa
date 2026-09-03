@@ -857,6 +857,10 @@ model FundingAgency {
   contactName                   String   @map("contact_name") @db.NVarChar(100)
   contactEmail                  String   @map("contact_email") @db.NVarChar(255)
   contactPhone                  String   @map("contact_phone") @db.NVarChar(30)
+  // 정산절차 안내 공문 발송 전용 계정 — 전담기관별로 하이웍스 공용메일 주소가 달라(예: keit_samhwa@shcpa.co.kr)
+  // 개인 계정(User.hiworksEmail)이 아니라 여기(전담기관)에 귀속시켜 관리한다.
+  noticeSenderEmail             String?  @map("notice_sender_email") @db.NVarChar(255)
+  noticeSenderMailPassword      String?  @map("notice_sender_mail_password") @db.NVarChar(255)
   status                        String   @default("ACTIVE") @db.NVarChar(20) // ACTIVE | INACTIVE
   registeredAt                  DateTime @map("registered_at") @db.Date
   website                       String?  @db.NVarChar(255)

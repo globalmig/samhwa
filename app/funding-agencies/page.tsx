@@ -226,6 +226,8 @@ const EMPTY: Omit<FundingAgency, "id"> = {
   contactName: "",
   contactEmail: "",
   contactPhone: "",
+  noticeSenderEmail: "",
+  noticeSenderMailPassword: "",
   status: "ACTIVE",
   registeredAt: todayKST(),
   website: "",
@@ -262,7 +264,9 @@ function AgencyForm({
   onSubmit: (d: Omit<FundingAgency, "id">) => void;
   onClose: () => void;
 }) {
-  const [form, setForm] = useState(initial);
+  // noticeSenderMailPassword는 평문 비밀번호라 폼을 열 때마다 화면에 그대로 보여주지 않는다 —
+  // 항상 빈 값으로 시작하고, 저장 시 비워두면(handleSubmit 아래) 기존 값을 그대로 유지한다.
+  const [form, setForm] = useState({ ...initial, noticeSenderMailPassword: "" });
   const s = (k: keyof typeof form, v: unknown) => setForm((p) => ({ ...p, [k]: v }));
 
   const activePolicy = agencyId
@@ -296,6 +300,23 @@ function AgencyForm({
           <input className={inputCls} value={form.contactPhone} onChange={(e) => s("contactPhone", e.target.value)} placeholder="042-000-0000" />
         </Field>
       </div>
+      {/* 정산절차 안내 공문 발송 전용 계정 — 담당자 개인 하이웍스 계정이 아니라 전담기관별 공용메일
+          주소를 발신자로 쓴다(예: keit_samhwa@shcpa.co.kr). 발신자명은 항상 회사명으로 고정되며
+          여기서 따로 설정하지 않는다. */}
+      <div className="space-y-2 border border-slate-200 rounded-lg p-3 bg-slate-50/50">
+        <p className="text-xs font-medium text-slate-600">정산절차 안내 공문 발신 계정 (하이웍스 공용메일)</p>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="발신 이메일">
+            <input className={inputCls} type="email" value={form.noticeSenderEmail ?? ""} onChange={(e) => s("noticeSenderEmail", e.target.value)} placeholder="keit_samhwa@shcpa.co.kr" />
+          </Field>
+          <Field label="메일 전용 비밀번호">
+            <input className={inputCls} type="password" value={form.noticeSenderMailPassword ?? ""} onChange={(e) => s("noticeSenderMailPassword", e.target.value)}
+              placeholder={initial.noticeSenderMailPassword ? "변경하려면 새 값을 입력..." : "미등록"} />
+          </Field>
+        </div>
+        <p className="text-[10px] text-slate-400">하이웍스 로그인 비밀번호가 아닌, 해당 계정의 개인설정 &gt; 보안설정에서 발급하는 메일 전용 비밀번호를 입력하세요. 비워두면 기존 값이 유지됩니다.</p>
+      </div>
+
       <div className="grid grid-cols-2 gap-4">
         <Field label="수수료 정책 (진행중인 정책 자동 적용)">
           <div className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 flex items-center justify-between gap-2">
@@ -371,7 +392,11 @@ function AgencyForm({
 
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
         <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
-        <button onClick={() => onSubmit(form)} disabled={!form.name || !form.shortName} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40 transition-colors">저장</button>
+        <button
+          onClick={() => onSubmit({ ...form, noticeSenderMailPassword: form.noticeSenderMailPassword || initial.noticeSenderMailPassword })}
+          disabled={!form.name || !form.shortName}
+          className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40 transition-colors"
+        >저장</button>
       </div>
     </div>
   );
@@ -411,6 +436,13 @@ function DetailModal({ agency, projects, termFees, feePolicies, onClose }: {
         <div><span className="text-xs text-slate-400">이메일</span><p className="text-slate-700 mt-0.5">{agency.contactEmail}</p></div>
         <div><span className="text-xs text-slate-400">수수료 정책</span><p className="text-slate-700 mt-0.5">{ownPolicy ? `${ownPolicy.name} (${ownPolicy.version}) — 자체 정책` : "공통 정책 사용"}</p></div>
         <div><span className="text-xs text-slate-400">공문·세금계산서 발송 대상</span><p className="text-slate-700 mt-0.5">{NOTICE_SCOPE_LABEL[agency.noticeRecipientScope]}</p></div>
+        <div>
+          <span className="text-xs text-slate-400">정산절차 안내 발신 계정</span>
+          <p className="text-slate-700 mt-0.5 flex items-center gap-1.5">
+            {agency.noticeSenderEmail ? agency.noticeSenderEmail : <span className="text-slate-300">미등록</span>}
+            <StatusBadge label={agency.noticeSenderMailPassword ? "발송 가능" : "비밀번호 미등록"} color={agency.noticeSenderMailPassword ? "green" : "amber"} />
+          </p>
+        </div>
         <div><span className="text-xs text-slate-400">웹사이트</span>
           {agency.website ? (
             <a href={agency.website} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-blue-600 hover:underline mt-0.5 text-sm">

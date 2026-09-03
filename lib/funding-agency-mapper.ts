@@ -10,6 +10,8 @@ export function toFundingAgency(a: PrismaFundingAgency): FundingAgency {
     contactName: a.contactName,
     contactEmail: a.contactEmail,
     contactPhone: a.contactPhone,
+    noticeSenderEmail: a.noticeSenderEmail ?? undefined,
+    noticeSenderMailPassword: a.noticeSenderMailPassword ?? undefined,
     status: a.status as FundingAgency["status"],
     registeredAt: a.registeredAt.toISOString().slice(0, 10),
     website: a.website ?? undefined,
