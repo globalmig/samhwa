@@ -1643,14 +1643,21 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">이슈 발생 기관명</label>
                 <div className="flex items-center gap-2">
-                  <input value={issueInstitutionName} onChange={(e) => setIssueInstitutionName(e.target.value)}
-                    disabled={issueNoInstitution} placeholder="기관명을 입력하세요"
-                    className={`${inp} flex-1 disabled:bg-slate-50 disabled:text-slate-400`} />
-                  <label className="flex items-center gap-1.5 cursor-pointer shrink-0 whitespace-nowrap">
+                  <select value={issueInstitutionName} onChange={(e) => setIssueInstitutionName(e.target.value)}
+                    disabled={issueNoInstitution}
+                    className={`${sel} flex-1 disabled:bg-slate-50 disabled:text-slate-400`}>
+                    <option value="">기관을 선택하세요</option>
+                    {members.map((m) => (
+                      <option key={m.id} value={m.institutionName}>{m.institutionName}</option>
+                    ))}
+                  </select>
+                  <label className={`flex items-center gap-1.5 cursor-pointer shrink-0 whitespace-nowrap px-2.5 py-1.5 rounded-lg border transition-colors ${
+                    issueNoInstitution ? "bg-blue-50 border-blue-300" : "bg-white border-slate-200 hover:bg-slate-50"
+                  }`}>
                     <input type="checkbox" checked={issueNoInstitution}
                       onChange={(e) => { setIssueNoInstitution(e.target.checked); if (e.target.checked) setIssueInstitutionName(""); }}
-                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30" />
-                    <span className="text-xs text-slate-600">선택 필요 없음</span>
+                      className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500/30" />
+                    <span className={`text-xs font-medium ${issueNoInstitution ? "text-blue-700" : "text-slate-600"}`}>선택 필요 없음</span>
                   </label>
                 </div>
               </div>
@@ -1754,15 +1761,27 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                     </div>
                     <div className="flex items-center gap-2">
                       <label className="text-xs text-slate-500 mr-1.5 shrink-0">이슈 발생 기관</label>
-                      <input value={editIssueDraft.institutionName}
+                      <select value={editIssueDraft.institutionName}
                         onChange={(e) => setEditIssueDraft((d) => ({ ...d, institutionName: e.target.value }))}
-                        disabled={editIssueDraft.noInstitution} placeholder="기관명을 입력하세요"
-                        className={`${sel} w-40 py-1 disabled:bg-slate-50 disabled:text-slate-400`} />
-                      <label className="flex items-center gap-1.5 cursor-pointer shrink-0">
+                        disabled={editIssueDraft.noInstitution}
+                        className={`${sel} w-40 py-1 disabled:bg-slate-50 disabled:text-slate-400`}>
+                        <option value="">기관을 선택하세요</option>
+                        {/* 참여기관에서 빠졌거나 이름이 바뀐 뒤에도, 그 이슈에 기록돼 있던 예전 기관명이
+                            선택지에서 사라져 빈 값으로 보이지 않도록 목록에 없으면 맨 앞에 그대로 추가한다. */}
+                        {editIssueDraft.institutionName && !members.some((m) => m.institutionName === editIssueDraft.institutionName) && (
+                          <option value={editIssueDraft.institutionName}>{editIssueDraft.institutionName}</option>
+                        )}
+                        {members.map((m) => (
+                          <option key={m.id} value={m.institutionName}>{m.institutionName}</option>
+                        ))}
+                      </select>
+                      <label className={`flex items-center gap-1.5 cursor-pointer shrink-0 px-2 py-1 rounded-lg border transition-colors ${
+                        editIssueDraft.noInstitution ? "bg-blue-50 border-blue-300" : "bg-white border-slate-200 hover:bg-slate-50"
+                      }`}>
                         <input type="checkbox" checked={editIssueDraft.noInstitution}
                           onChange={(e) => setEditIssueDraft((d) => ({ ...d, noInstitution: e.target.checked, institutionName: e.target.checked ? "" : d.institutionName }))}
-                          className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30" />
-                        <span className="text-xs text-slate-600">선택 필요 없음</span>
+                          className="w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500/30" />
+                        <span className={`text-xs font-medium ${editIssueDraft.noInstitution ? "text-blue-700" : "text-slate-600"}`}>선택 필요 없음</span>
                       </label>
                     </div>
                     <div className="flex items-center gap-3 flex-wrap">
