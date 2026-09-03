@@ -1,6 +1,6 @@
 import Image from "next/image";
 import type { ReactNode } from "react";
-import { FiPlus, FiX } from "react-icons/fi";
+import { FiPlus, FiX, FiArrowUp, FiArrowDown } from "react-icons/fi";
 import { type AgencyNoticeTemplate } from "@/lib/mock";
 import { useStore, updateCompanyInfo } from "@/lib/store";
 import { sanitizeRichText } from "@/lib/notice-email-html";
@@ -37,6 +37,16 @@ function fileToDataUrl(file: File): Promise<string> {
 function insertAt<T>(arr: T[], index: number, item: T): T[] {
   const next = [...arr];
   next.splice(index + 1, 0, item);
+  return next;
+}
+
+// index번째 항목을 한 칸 위/아래(index + delta)로 옮긴다 — 배열 끝을 벗어나면 그대로 둔다.
+function moveItem<T>(arr: T[], index: number, delta: number): T[] {
+  const target = index + delta;
+  if (target < 0 || target >= arr.length) return arr;
+  const next = [...arr];
+  const [item] = next.splice(index, 1);
+  next.splice(target, 0, item);
   return next;
 }
 
@@ -119,6 +129,20 @@ function InsertDot({ onClick, title = "아래에 행 추가" }: { onClick: () =>
       className="shrink-0 p-1 text-slate-300 hover:text-blue-500 hover:bg-blue-50 rounded transition-colors"
     >
       <FiPlus size={12} />
+    </button>
+  );
+}
+
+function MoveDot({ direction, onClick, disabled }: { direction: "up" | "down"; onClick: () => void; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={direction === "up" ? "위로 이동" : "아래로 이동"}
+      className="shrink-0 p-1 text-slate-300 hover:text-blue-500 hover:bg-blue-50 rounded transition-colors disabled:opacity-30 disabled:pointer-events-none"
+    >
+      {direction === "up" ? <FiArrowUp size={12} /> : <FiArrowDown size={12} />}
     </button>
   );
 }
@@ -563,29 +587,62 @@ export default function NoticeLetterPreview({
                     }
                     className="flex-1"
                   />
-                  <label
-                    className={`shrink-0 text-xs font-medium rounded px-2 py-1 cursor-pointer whitespace-nowrap transition-colors ${
-                      f.dataUrl ? "text-emerald-700 bg-emerald-50 hover:bg-emerald-100" : "text-blue-600 border border-blue-200 hover:bg-blue-50"
-                    }`}
-                  >
-                    {f.dataUrl ? "파일 등록됨" : "파일 선택"}
-                    <input
-                      type="file"
-                      className="hidden"
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        e.target.value = "";
-                        if (!file) return;
-                        const dataUrl = await fileToDataUrl(file);
-                        setField(
-                          "attachments",
-                          template.attachments.map((it, j) => (j === i ? { ...it, dataUrl } : it))
-                        );
-                      }}
-                    />
-                  </label>
+                  {f.dataUrl ? (
+                    <span className="shrink-0 flex items-center gap-1 text-xs font-medium rounded px-2 py-1 whitespace-nowrap bg-emerald-50 text-emerald-700">
+                      <label className="cursor-pointer hover:underline">
+                        파일 등록됨
+                        <input
+                          type="file"
+                          className="hidden"
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0];
+                            e.target.value = "";
+                            if (!file) return;
+                            const dataUrl = await fileToDataUrl(file);
+                            setField(
+                              "attachments",
+                              template.attachments.map((it, j) => (j === i ? { ...it, dataUrl } : it))
+                            );
+                          }}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        title="첨부파일만 제거 (붙임 항목은 유지)"
+                        onClick={() =>
+                          setField(
+                            "attachments",
+                            template.attachments.map((it, j) => (j === i ? { ...it, dataUrl: undefined } : it))
+                          )
+                        }
+                        className="text-emerald-500 hover:text-red-500 transition-colors"
+                      >
+                        <FiX size={11} />
+                      </button>
+                    </span>
+                  ) : (
+                    <label className="shrink-0 text-xs font-medium rounded px-2 py-1 cursor-pointer whitespace-nowrap transition-colors text-blue-600 border border-blue-200 hover:bg-blue-50">
+                      파일 선택
+                      <input
+                        type="file"
+                        className="hidden"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          e.target.value = "";
+                          if (!file) return;
+                          const dataUrl = await fileToDataUrl(file);
+                          setField(
+                            "attachments",
+                            template.attachments.map((it, j) => (j === i ? { ...it, dataUrl } : it))
+                          );
+                        }}
+                      />
+                    </label>
+                  )}
+                  <MoveDot direction="up" disabled={i === 0} onClick={() => setField("attachments", moveItem(template.attachments, i, -1))} />
+                  <MoveDot direction="down" disabled={i === template.attachments.length - 1} onClick={() => setField("attachments", moveItem(template.attachments, i, 1))} />
                   <InsertDot onClick={() => setField("attachments", insertAt(template.attachments, i, { name: "" }))} />
-                  <RemoveDot onClick={() => setField("attachments", template.attachments.filter((_, j) => j !== i))} />
+                  <RemoveDot title="붙임 항목 삭제" onClick={() => setField("attachments", template.attachments.filter((_, j) => j !== i))} />
                 </>
               ) : (
                 <p>{f.name}</p>
