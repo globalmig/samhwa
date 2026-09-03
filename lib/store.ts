@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { getCurrentUser } from "./auth";
 import { nowKST, todayKST } from "./utils";
+import { ADMIN_ONLY_LOCKED_PAGES } from "./permission-constants";
 import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveProjectCodeForTerm, type CalcMember } from "./fee-calculator";
 import {
   institutions as initialInstitutions,
@@ -2340,11 +2341,26 @@ function ensureAdminIncluded(roles: Role[]): Role[] {
   return roles.includes("ADMIN") ? roles : ["ADMIN", ...roles];
 }
 
-// 권한관리(/admin/users)·권한 설정(/admin/permissions) 자체는 항상 시스템 관리자(ADMIN)만
-// 접근해야 한다 — [권한 설정] 화면에서 다른 역할을 이 두 페이지에 슬쩍 추가해버리면 그 역할이
-// 권한 체계 자체를 바꿀 수 있게 되는 권한 상승 구멍이 생기므로, 화면 조작과 무관하게 여기서
-// 원천 차단한다.
-export const ADMIN_ONLY_LOCKED_PAGES = ["/admin/users", "/admin/permissions"];
+export { ADMIN_ONLY_LOCKED_PAGES };
+
+// [권한 설정] 화면에서 바꾼 값은 DB(role_permissions)에도 반영해야 다른 사용자·다음 접속에도
+// 유지된다 — 이전엔 이 저장 호출이 아예 없어서 화면에서 바꾼 즉시는 반영된 것처럼 보이지만
+// 새로고침하거나 다른 사람이 접속하면 lib/mock.ts의 초기값으로 되돌아가 있었다.
+let _permissionsHydrated = false;
+function hydratePermissions(): void {
+  if (_permissionsHydrated || typeof window === "undefined") return;
+  _permissionsHydrated = true;
+  fetch("/api/role-permissions")
+    .then((res) => res.json())
+    .then((data: { ok: boolean; pageAccess?: Record<string, Role[]>; writeAccess?: Record<string, Role[]> }) => {
+      if (data.ok && data.pageAccess && data.writeAccess) {
+        _state = { ..._state, pageAccess: data.pageAccess, writeAccess: data.writeAccess };
+        notify();
+      }
+    })
+    .catch((err) => { console.error("권한 설정을 불러오지 못했습니다.", err); _permissionsHydrated = false; });
+}
+if (typeof window !== "undefined") hydratePermissions();
 
 export function updatePageAccess(path: string, roles: Role[]): void {
   const safeRoles = ADMIN_ONLY_LOCKED_PAGES.includes(path) ? ["ADMIN"] as Role[] : ensureAdminIncluded(roles);
@@ -2352,6 +2368,15 @@ export function updatePageAccess(path: string, roles: Role[]): void {
   _state = { ..._state, pageAccess: { ..._state.pageAccess, [path]: safeRoles } };
   record("permission", `page:${path}`, path, "UPDATE", { roles: { before, after: safeRoles } });
   notify();
+
+  fetch("/api/role-permissions", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ resourceType: "MENU", resourceKey: path, roles: safeRoles }),
+  })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; error?: string }) => { if (!res.ok) console.error("페이지 접근 권한 저장 실패:", res.error); })
+    .catch((err) => console.error("페이지 접근 권한 저장 실패:", err));
 }
 
 export function updateWriteAccess(domain: string, roles: Role[]): void {
@@ -2360,6 +2385,15 @@ export function updateWriteAccess(domain: string, roles: Role[]): void {
   _state = { ..._state, writeAccess: { ..._state.writeAccess, [domain]: safeRoles } };
   record("permission", `write:${domain}`, domain, "UPDATE", { roles: { before, after: safeRoles } });
   notify();
+
+  fetch("/api/role-permissions", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ resourceType: "FEATURE", resourceKey: domain, roles: safeRoles }),
+  })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; error?: string }) => { if (!res.ok) console.error("기능 쓰기 권한 저장 실패:", res.error); })
+    .catch((err) => console.error("기능 쓰기 권한 저장 실패:", err));
 }
 
 // ============================================================
