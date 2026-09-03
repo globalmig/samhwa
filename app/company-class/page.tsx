@@ -18,7 +18,7 @@ import StatusBadge from "@/components/common/StatusBadge";
 import DateInput from "@/components/common/DateInput";
 import MoneyInput from "@/components/common/MoneyInput";
 import { useCanWrite } from "@/lib/permissions";
-import { fmtDate, fmtWonFull } from "@/lib/utils";
+import { fmtDate, fmtWonFull, todayKST } from "@/lib/utils";
 
 // ─── 공통 스타일 ────────────────────────────────────────────────
 const inputCls = "w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400";
@@ -120,12 +120,12 @@ function makePolicyEmpty(agencyId: string | null, templatePolicy: FeePolicy | nu
     agencyId,
     name: "",
     version: "",
-    effectiveFrom: new Date().toISOString().slice(0, 10),
+    effectiveFrom: todayKST(),
     effectiveTo: null,
     status: "DRAFT",
     standardRate: 3.0,
     description: "",
-    createdAt: new Date().toISOString().slice(0, 10),
+    createdAt: todayKST(),
     createdBy: "김관리",
     feeRateBrackets: templatePolicy?.feeRateBrackets ?? KEIT_BRACKETS,
     coInstAddonMethod: templatePolicy?.coInstAddonMethod ?? "TIERED",
@@ -741,7 +741,7 @@ function StringListEditor({
 // ─── 전담기관 폼 ────────────────────────────────────────────────
 const EMPTY_AGENCY: Omit<FundingAgency, "id"> = {
   name: "", shortName: "", code: "", contactName: "", contactEmail: "",
-  contactPhone: "", status: "ACTIVE", registeredAt: new Date().toISOString().slice(0, 10), website: "",
+  contactPhone: "", status: "ACTIVE", registeredAt: todayKST(), website: "",
   noticeRecipientScope: "LEAD_ONLY",
   autoDetectByLeadInstitution: false,
   affiliatedInstitutionNames: [],

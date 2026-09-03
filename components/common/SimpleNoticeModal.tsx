@@ -4,6 +4,7 @@ import { useState } from "react";
 import Modal from "./Modal";
 import { useStore, addEmailDispatch } from "@/lib/store";
 import { getCurrentUser } from "@/lib/auth";
+import { nowKST } from "@/lib/utils";
 
 // 세금계산서 공문(첨부파일·서식 있음)과 달리 "메일 본문 하나만" 보내면 되는 간단한 안내 메일 —
 // 계산서발행 서류 요청(세금계산서를 발행하기 전에 사업자등록증 등을 요청)과 입금 확인 요청
@@ -112,7 +113,7 @@ export default function SimpleNoticeModal({ target, onClose }: { target: SimpleN
 
     addEmailDispatch({
       batchId: `BATCH-${Date.now()}`,
-      sentAt: new Date().toISOString().replace("T", " ").slice(0, 16),
+      sentAt: nowKST(),
       senderName: senderUser.name,
       recipientInstitution: target.leadInstitutionName,
       recipientEmail: toEmail.trim(),

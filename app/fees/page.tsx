@@ -34,7 +34,7 @@ import {
   type Receivable,
   EMPTY_NOTICE_TEMPLATE,
 } from "@/lib/mock";
-import { fmtWon, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange } from "@/lib/utils";
+import { fmtWon, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange, nowKST, todayKST } from "@/lib/utils";
 import Modal from "@/components/common/Modal";
 import DateInput from "@/components/common/DateInput";
 import InstitutionQuickAdd from "@/components/common/InstitutionQuickAdd";
@@ -591,7 +591,7 @@ function SalesCancelModal({ target, onClose }: { target: SalesTarget; onClose: (
 // ── CollectionModal ───────────────────────────────────────────
 function CollectionModal({ target, onClose }: { target: CollectionTarget; onClose: () => void }) {
   const [inputAmount, setInputAmount] = useState(0);
-  const [paidAtInput, setPaidAtInput] = useState(target.paidAt ?? new Date().toISOString().slice(0, 10));
+  const [paidAtInput, setPaidAtInput] = useState(target.paidAt ?? todayKST());
   const remaining = target.billedAmount - target.paidAmount;
 
   function calcStatus(paid: number): "PENDING" | "PARTIAL" | "PAID" | "OVERDUE" {
@@ -1698,7 +1698,7 @@ function UnclaimedAmountCell({ row, canEdit }: { row: FeeRow; canEdit: boolean }
         termYear: row.termYear,
         termNumber: row.termNumber,
         amount: value,
-        occurredAt: new Date().toISOString().slice(0, 10),
+        occurredAt: todayKST(),
         carriedOver: false,
         status: "PENDING",
       });
@@ -1981,7 +1981,7 @@ function BulkSettlementNoticeModal({
 
       addEmailDispatch({
         batchId,
-        sentAt: new Date().toISOString().replace("T", " ").slice(0, 16),
+        sentAt: nowKST(),
         senderName: senderUser.name,
         recipientInstitution: t.leadInstitutionName,
         recipientEmail: t.recipientEmail,
@@ -2085,7 +2085,7 @@ function BulkSettlementNoticeModal({
                       statusRows={items[0].statusRows}
                       feeRows={items[0].feeRows}
                       docNumber={`${companyInfo.docNumberPrefix} ${new Date().getFullYear()}-미리보기`}
-                      issuedDate={new Date().toISOString().slice(0, 10).replace(/-/g, ".")}
+                      issuedDate={todayKST().replace(/-/g, ".")}
                     />
                   </div>
                 );
@@ -2221,7 +2221,7 @@ function BulkSimpleNoticeModal({
 
       addEmailDispatch({
         batchId,
-        sentAt: new Date().toISOString().replace("T", " ").slice(0, 16),
+        sentAt: nowKST(),
         senderName: senderUser.name,
         recipientInstitution: t.leadInstitutionName,
         recipientEmail: t.recipientEmail,

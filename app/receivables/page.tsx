@@ -4,7 +4,7 @@ import { useState, useMemo } from "react";
 import { FiEdit2 } from "react-icons/fi";
 import { useStore, addReceivable, updateReceivable } from "@/lib/store";
 import { type Receivable } from "@/lib/mock";
-import { fmtWon, fmtDate, addMonths } from "@/lib/utils";
+import { fmtWon, fmtDate, addMonths, todayKST } from "@/lib/utils";
 import Link from "next/link";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
@@ -37,7 +37,7 @@ function effectiveDisplayStatus(r: Pick<Receivable, "status" | "dueDate">): Disp
 type ModalState = { mode: "add" } | { mode: "edit"; target: Receivable };
 
 function makeEmpty(): Omit<Receivable, "id"> {
-  const billedAt = new Date().toISOString().slice(0, 10);
+  const billedAt = todayKST();
   return {
     invoiceNumber: "",
     projectNumber: "",

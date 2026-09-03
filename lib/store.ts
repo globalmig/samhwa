@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { getCurrentUser } from "./auth";
+import { nowKST, todayKST } from "./utils";
 import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveProjectCodeForTerm, type CalcMember } from "./fee-calculator";
 import {
   institutions as initialInstitutions,
@@ -215,7 +216,7 @@ function record(
     action,
     changedFields,
     performedBy: getCurrentUser()?.name ?? "시스템",
-    performedAt: new Date().toISOString().replace("T", " ").slice(0, 19),
+    performedAt: nowKST(true),
   };
   _state = { ..._state, auditLog: [entry, ..._state.auditLog] };
 }
@@ -573,7 +574,7 @@ export function addProject(data: Omit<Project, "id">): Project {
   const projectCode = data.projectCode ?? nextTermCode();
   const termCodes = data.termCodes ?? [{ termNumber: 1, code: projectCode }];
   const tempId = genId("p");
-  const item: Project = { registeredAt: new Date().toISOString().slice(0, 10), ...data, projectCode, termCodes, id: tempId };
+  const item: Project = { registeredAt: todayKST(), ...data, projectCode, termCodes, id: tempId };
   _state = { ..._state, projects: [..._state.projects, item] };
   record("project", tempId, item.projectName, "CREATE");
   ensureLeadMember(item);
@@ -869,7 +870,7 @@ function logMemberChangeMemo(before: ProjectMember, content: string) {
     projectNumber: before.projectNumber,
     content,
     author: getCurrentUser()?.name ?? "시스템",
-    createdAt: new Date().toISOString().replace("T", " ").slice(0, 16),
+    createdAt: nowKST(),
     priority: "MEDIUM",
     status: "OPEN",
     institutionName: before.institutionName,
@@ -1063,7 +1064,7 @@ export function applyInstitutionGradeToProjects(
   if (lockedMismatches.size > 0) {
     const institutionName = _state.institutions.find((i) => i.id === institutionId)?.name ?? "";
     const authorName = getCurrentUser()?.name ?? "시스템";
-    const now = new Date().toISOString().replace("T", " ").slice(0, 16);
+    const now = nowKST();
     for (const [projectId, info] of lockedMismatches) {
       const termList = info.entries
         .sort((a, b) => a.termNumber - b.termNumber)
@@ -1297,7 +1298,7 @@ function persistTermFeeCalc(id: string, data: Partial<TermFeeCalc>): void {
 export function updateTermFeeCalc(id: string, data: Partial<TermFeeCalc>): void {
   const before = _state.termFeeCalcs.find((f) => f.id === id);
   if (!before) return;
-  const after = { ...before, ...data, updatedAt: new Date().toISOString().slice(0, 10) };
+  const after = { ...before, ...data, updatedAt: todayKST() };
   _state = { ..._state, termFeeCalcs: _state.termFeeCalcs.map((f) => (f.id === id ? after : f)) };
   record("termFeeCalc", id, `${after.projectNumber} · ${after.termYear}년 ${after.termNumber}연차`, "UPDATE",
     diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
@@ -1311,7 +1312,7 @@ export function addTermFeeCalcOverride(
 ): void {
   const before = _state.termFeeCalcs.find((f) => f.id === id);
   if (!before) return;
-  const after = { ...before, overrides: [...before.overrides, override], updatedAt: new Date().toISOString().slice(0, 10) };
+  const after = { ...before, overrides: [...before.overrides, override], updatedAt: todayKST() };
   _state = { ..._state, termFeeCalcs: _state.termFeeCalcs.map((f) => (f.id === id ? after : f)) };
   record("termFeeCalc", id, `${after.projectNumber} 오버라이드 추가`, "UPDATE");
   notify();
@@ -2084,7 +2085,7 @@ export function updateStandardAttachment(id: string, data: Partial<Omit<Standard
 
 export function addStandardAttachment(name: string): StandardAttachment {
   const tempId = genId("sa");
-  const item: StandardAttachment = { id: tempId, name, updatedAt: new Date().toISOString().slice(0, 10) };
+  const item: StandardAttachment = { id: tempId, name, updatedAt: todayKST() };
   _state = { ..._state, standardAttachments: [..._state.standardAttachments, item] };
   record("standardAttachment", tempId, name, "CREATE");
   notify();
@@ -2685,7 +2686,7 @@ export function autoGenerateTermFees(projectId: string): void {
   const policy = resolvePolicy(project.agencyId, _state.feePolicies, project.programType ?? "GENERAL");
   if (!policy) return;
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayKST();
   const startDate = new Date(project.startDate);
 
   // 협약 유형 파악
@@ -3065,7 +3066,7 @@ export function autoGenerateTermFees(projectId: string): void {
       totalBillingFee: result.totalBillingFee + exemptCarryoverBilledThisTerm + departedCarryoverBilledThisTerm,
       overrides: [],
       status: "DRAFT",
-      createdAt: new Date().toISOString().slice(0, 10),
+      createdAt: todayKST(),
     });
 
     // 다음 연차로 단계 내 미청구 누적 (정산 연차면 해당 단계 미청구 리셋)
@@ -3135,7 +3136,7 @@ export function autoGenerateTermFees(projectId: string): void {
         `${termList}\n` +
         `이미 발행된 세금계산서 금액과 다르니, 재발행이 필요한지 확인해주세요.`,
       author: getCurrentUser()?.name ?? "시스템",
-      createdAt: new Date().toISOString().replace("T", " ").slice(0, 16),
+      createdAt: nowKST(),
       priority: "HIGH",
       status: "OPEN",
       recipientGroups: ["MANAGER", "MANAGER_DEPUTY", "ACCOUNTANT"],

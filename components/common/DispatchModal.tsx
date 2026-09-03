@@ -8,6 +8,7 @@ import { EMPTY_FEE_INVOICE_TEMPLATE } from "@/lib/mock";
 import Modal from "@/components/common/Modal";
 import { getCurrentUser } from "@/lib/auth";
 import { generateFeeInvoicePdfDataUrl, buildFeeInvoiceHtml, type FeeInvoiceTarget } from "@/lib/fee-invoice-pdf";
+import { nowKST, todayKST } from "@/lib/utils";
 
 // 수수료 공문 발송(연차상시/위탁정산/역발행/기타) — 청구서 PDF·첨부파일까지 갖춰 실제 메일을 보낸다.
 // 수수료청구관리 목록과 과제 상세 페이지 양쪽에서 똑같이 쓸 수 있도록 공용 컴포넌트로 뺐다.
@@ -24,11 +25,11 @@ export function parseEmails(raw: string): string[] {
 }
 
 export function generateBatchId(): string {
-  return `BATCH-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.floor(Math.random() * 9000) + 1000}`;
+  return `BATCH-${todayKST().replace(/-/g, "")}-${Math.floor(Math.random() * 9000) + 1000}`;
 }
 
 export function generateDocNumber(): string {
-  const yyyymm = new Date().toISOString().slice(0, 7).replace(/-/g, "");
+  const yyyymm = todayKST().slice(0, 7).replace(/-/g, "");
   const seq = String(Math.floor(Math.random() * 9000) + 1000);
   return `E${yyyymm}-${seq}`;
 }
@@ -169,7 +170,7 @@ function StandardAttachmentsPanel() {
     const file = files?.[0];
     if (!file) return;
     const fileDataUrl = await fileToDataUrl(file);
-    updateStandardAttachment(id, { fileDataUrl, updatedAt: new Date().toISOString().slice(0, 10) });
+    updateStandardAttachment(id, { fileDataUrl, updatedAt: todayKST() });
   }
 
   return (
@@ -445,7 +446,7 @@ ${companyInfo.name} 드림`;
 
     addEmailDispatch({
       batchId: generateBatchId(),
-      sentAt:               new Date().toISOString().replace("T", " ").slice(0, 16),
+      sentAt:               nowKST(),
       senderName:           senderUser.name,
       recipientInstitution: target.leadInstitutionName,
       recipientEmail:       emails.join(", "),

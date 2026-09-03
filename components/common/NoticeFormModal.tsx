@@ -4,6 +4,7 @@ import { useState } from "react";
 import Modal from "./Modal";
 import { useAuth } from "@/lib/auth";
 import { addNotice } from "@/lib/store";
+import { nowKST } from "@/lib/utils";
 
 export default function NoticeFormModal({ onClose }: { onClose: () => void }) {
   const { user } = useAuth();
@@ -17,7 +18,7 @@ export default function NoticeFormModal({ onClose }: { onClose: () => void }) {
       content: content.trim(),
       authorName: user.name,
       authorRole: user.role,
-      createdAt: new Date().toISOString().replace("T", " ").slice(0, 16),
+      createdAt: nowKST(),
     });
     onClose();
   }

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { FiEdit2, FiTrash2 } from "react-icons/fi";
 import { useStore, addUser, updateUser, deleteUser } from "@/lib/store";
 import { type SystemUser } from "@/lib/mock";
-import { fmtDate } from "@/lib/utils";
+import { fmtDate, todayKST } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
 import DateInput from "@/components/common/DateInput";
@@ -27,7 +27,7 @@ const EMPTY: Omit<SystemUser, "id"> = {
   role: "VIEWER",
   status: "ACTIVE",
   lastLoginAt: null,
-  registeredAt: new Date().toISOString().slice(0, 10),
+  registeredAt: todayKST(),
 };
 
 const inputCls = "w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400";

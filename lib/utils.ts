@@ -23,6 +23,33 @@ export function fmtDatetime(s: string | null | undefined): string {
   return s.slice(0, 16).replace("T", " ");
 }
 
+// new Date().toISOString()은 실행 환경(브라우저/서버)의 시간대와 무관하게 항상 UTC 문자열을
+// 돌려주는데, 코드 곳곳에서 이걸 그대로 "지금" 시각으로 기록해와서 화면에는 실제 한국 시각보다
+// 9시간 느린 시각이 찍히는 문제가 있었다(전체 변경이력의 "일시" 등). 시스템 시간대에 상관없이
+// 항상 한국 표준시(KST, UTC+9) 기준 "YYYY-MM-DD HH:mm[:ss]" 문자열을 돌려주는 대체 함수.
+function kstParts(d: Date) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "00";
+  return { y: get("year"), mo: get("month"), da: get("day"), h: get("hour"), mi: get("minute"), s: get("second") };
+}
+
+export function nowKST(withSeconds = false): string {
+  const { y, mo, da, h, mi, s } = kstParts(new Date());
+  return `${y}-${mo}-${da} ${h}:${mi}${withSeconds ? `:${s}` : ""}`;
+}
+
+// 날짜만 필요한 자리(등록일·발행일·오늘 날짜 비교 등)도 같은 이유로 자정~오전 9시 사이엔
+// 하루 전 날짜로 밀리는 문제가 있었다 — 위 nowKST()와 같은 기준으로 "YYYY-MM-DD"만 반환.
+export function todayKST(): string {
+  const { y, mo, da } = kstParts(new Date());
+  return `${y}-${mo}-${da}`;
+}
+
 export function fmtRate(r: number): string {
   return `${r}%`;
 }

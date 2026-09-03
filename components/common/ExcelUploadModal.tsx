@@ -37,7 +37,7 @@ import {
   resolveMemberRecipientForTerm,
   resolveResearchLeadForTerm,
 } from "@/lib/fee-calculator";
-import { resolveTermDateRange } from "@/lib/utils";
+import { resolveTermDateRange, nowKST, todayKST } from "@/lib/utils";
 import ManagerPickerModal from "@/components/common/ManagerPickerModal";
 
 type InstitutionGrade = NonNullable<ProjectMember["institutionGrade"]>;
@@ -2309,7 +2309,7 @@ export async function downloadCurrentDataAsUploadTemplate(
   stageRows.forEach((r) => stageWs.addRow(r));
   styleStageSheet(stageWs);
 
-  await downloadWorkbook(wb, `RCMS_업로드_양식_현재데이터_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  await downloadWorkbook(wb, `RCMS_업로드_양식_현재데이터_${todayKST()}.xlsx`);
 }
 
 export async function downloadExcelTemplate() {
@@ -2492,7 +2492,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
   // 엑셀 연차값과 총개발시작일자 기준 캘린더 계산값이 다른 과제 — 등록 자체는 막지 않고 미리보기에서
   // 경고로 보여준 뒤, 등록 후 담당자·회계담당자에게 확인 이슈를 남긴다.
   const calendarMismatches = useMemo(
-    () => computeTermCalendarMismatches(projects, scalarAggregates, projectMaxTerm, stageAggregates, new Date().toISOString().slice(0, 10)),
+    () => computeTermCalendarMismatches(projects, scalarAggregates, projectMaxTerm, stageAggregates, todayKST()),
     [projects, scalarAggregates, projectMaxTerm, stageAggregates]
   );
 
@@ -2749,7 +2749,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
     // 것으로 나가거나 아예 연동되지 않을 수 있다.
     if (unresolvedManagerAmbiguities.length > 0 || unresolvedManagerNotFound.length > 0) return;
     setLoading(true);
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayKST();
 
     const registeredAgencies = new Map<string, string>(); // name → id
     const registeredProjects = new Map<string, string>(); // normProjectNum → id
@@ -3043,7 +3043,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
 
     let memberUpdatedCount = 0;
     const touchedProjectIds = new Set<string>();
-    const now = new Date().toISOString().replace("T", " ").slice(0, 16);
+    const now = nowKST();
     const authorName = getCurrentUser()?.name ?? "시스템";
     let stageAlertCount = 0;
 

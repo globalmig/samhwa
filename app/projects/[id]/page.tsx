@@ -16,7 +16,7 @@ import {
 } from "@/lib/store";
 import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type SystemUser, type EmailDispatch, type FeePolicy, type AnnualFinancials, EMPTY_NOTICE_TEMPLATE } from "@/lib/mock";
 import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, type CalcMember } from "@/lib/fee-calculator";
-import { fmtWonFull, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange } from "@/lib/utils";
+import { fmtWonFull, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange, nowKST, todayKST } from "@/lib/utils";
 import { fmtValue, fieldLabel, describeOverrideChange } from "@/lib/audit-log-format";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
@@ -764,7 +764,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       projectNumber: project!.projectNumber,
       content: issueContent.trim(),
       author: "김관리",
-      createdAt: new Date().toISOString().replace("T", " ").slice(0, 16),
+      createdAt: nowKST(),
       priority: issuePriority,
       status: issueStatus,
       recipientGroups: issueRecipients,
@@ -3039,7 +3039,7 @@ function BillingBlock({
   const { fundingAgencies } = useStore();
   const [issuingInvoice, setIssuingInvoice] = useState(false);
   const [invForm, setInvForm] = useState({
-    issuedAt: new Date().toISOString().slice(0, 10),
+    issuedAt: todayKST(),
     ...splitVatInclusive(unit.amount),
     totalAmount: unit.amount,
   });
@@ -3135,13 +3135,13 @@ function BillingBlock({
     setInvForm(
       unit.invoice
         ? {
-            issuedAt: unit.invoice.issuedAt || new Date().toISOString().slice(0, 10),
+            issuedAt: unit.invoice.issuedAt || todayKST(),
             supplyAmount: unit.invoice.supplyAmount,
             taxAmount: unit.invoice.taxAmount,
             totalAmount: unit.invoice.totalAmount,
           }
         : {
-            issuedAt: new Date().toISOString().slice(0, 10),
+            issuedAt: todayKST(),
             ...splitVatInclusive(unit.amount),
             totalAmount: unit.amount,
           }
@@ -4527,7 +4527,7 @@ function SettlementNoticeModal({
 
     addEmailDispatch({
       batchId: `BATCH-${Date.now()}`,
-      sentAt: new Date().toISOString().replace("T", " ").slice(0, 16),
+      sentAt: nowKST(),
       senderName: senderUser.name,
       recipientInstitution: project.leadInstitutionName,
       recipientEmail: toEmail,
@@ -4690,7 +4690,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   ];
   const noticeSeq = emailDispatches.filter((e) => e.emailType === "SETTLEMENT_NOTICE").length + 1;
   const noticeDocNumber = `${companyInfo.docNumberPrefix} ${new Date().getFullYear()}-${String(noticeSeq).padStart(4, "0")}`;
-  const noticeIssuedDate = new Date().toISOString().slice(0, 10).replace(/-/g, ".");
+  const noticeIssuedDate = todayKST().replace(/-/g, ".");
   // getCurrentUser()는 로그인 시점의 스냅샷이라 이후 등록된 하이웍스 계정 정보가 반영되지 않으므로,
   // 실시간 store에서 같은 id의 사용자 레코드를 다시 찾아 발신 계정으로 사용한다.
   const senderUser = users.find((u) => u.id === getCurrentUser()?.id) ?? null;

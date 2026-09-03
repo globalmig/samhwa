@@ -5,7 +5,7 @@ import Link from "next/link";
 import { FiEdit2, FiTrash2 } from "react-icons/fi";
 import { useStore, addInstitution, updateInstitution, deleteInstitution } from "@/lib/store";
 import { type Institution } from "@/lib/mock";
-import { fmtDate, formatBizNumber, isValidBizNumber } from "@/lib/utils";
+import { fmtDate, formatBizNumber, isValidBizNumber, todayKST } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
 import DateInput from "@/components/common/DateInput";
@@ -30,7 +30,7 @@ const EMPTY: Omit<Institution, "id"> = {
   contactName: "",
   contactEmail: "",
   contactPhone: "",
-  registeredAt: new Date().toISOString().slice(0, 10),
+  registeredAt: todayKST(),
   status: "ACTIVE",
   note: "",
 };

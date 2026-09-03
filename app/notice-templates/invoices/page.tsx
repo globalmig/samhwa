@@ -31,7 +31,7 @@ import {
   type TaxInvoice,
 } from "@/lib/mock";
 import { useCanWrite } from "@/lib/permissions";
-import { splitVatInclusive, resolveTermDateRange } from "@/lib/utils";
+import { splitVatInclusive, resolveTermDateRange, todayKST } from "@/lib/utils";
 import FeeInvoiceLetterPreview, { type FeeInvoiceStatusData } from "@/components/common/FeeInvoiceLetterPreview";
 import { fillTokens, type SimpleNoticeTarget } from "@/components/common/SimpleNoticeModal";
 import Modal from "@/components/common/Modal";
@@ -477,7 +477,7 @@ export default function NoticeInvoiceTemplatesPage() {
     const file = files?.[0];
     if (!file) return;
     const fileDataUrl = await fileToDataUrl(file);
-    updateStandardAttachment(id, { fileDataUrl, updatedAt: new Date().toISOString().slice(0, 10) });
+    updateStandardAttachment(id, { fileDataUrl, updatedAt: todayKST() });
   }
   function renameStandardAttachment(id: string, name: string) {
     updateStandardAttachment(id, { name });

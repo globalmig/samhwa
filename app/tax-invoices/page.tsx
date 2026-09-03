@@ -5,7 +5,7 @@ import Link from "next/link";
 import { FiEdit2 } from "react-icons/fi";
 import { useStore, addTaxInvoice, updateTaxInvoice } from "@/lib/store";
 import { type TaxInvoice } from "@/lib/mock";
-import { fmtWon, fmtDate } from "@/lib/utils";
+import { fmtWon, fmtDate, todayKST } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
 import DateInput from "@/components/common/DateInput";
@@ -28,7 +28,7 @@ const EMPTY: Omit<TaxInvoice, "id"> = {
   termNumber: 1,
   leadInstitutionId: "",
   leadInstitutionName: "",
-  issuedAt: new Date().toISOString().slice(0, 10),
+  issuedAt: todayKST(),
   supplyAmount: 0,
   taxAmount: 0,
   totalAmount: 0,

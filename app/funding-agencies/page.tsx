@@ -6,7 +6,7 @@ import { FiEdit2, FiExternalLink } from "react-icons/fi";
 import { useStore, addFundingAgency, updateFundingAgency, updateAgencyGuide } from "@/lib/store";
 import { type FundingAgency, type FeePolicy, type AgencyGuideRow as GuideRow, type AgencyGuideTab as GuideTab } from "@/lib/mock";
 import { AGENCY_GUIDE } from "@/lib/agency-guide";
-import { fmtDate, fmtWon } from "@/lib/utils";
+import { fmtDate, fmtWon, todayKST } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
 import DateInput from "@/components/common/DateInput";
@@ -227,7 +227,7 @@ const EMPTY: Omit<FundingAgency, "id"> = {
   contactEmail: "",
   contactPhone: "",
   status: "ACTIVE",
-  registeredAt: new Date().toISOString().slice(0, 10),
+  registeredAt: todayKST(),
   website: "",
   noticeRecipientScope: "LEAD_ONLY",
 };

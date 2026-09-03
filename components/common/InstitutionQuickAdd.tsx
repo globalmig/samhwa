@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { addInstitution } from "@/lib/store";
 import { type Institution } from "@/lib/mock";
+import { todayKST } from "@/lib/utils";
 
 const inputCls = "w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400";
 const selectCls = `${inputCls} bg-white`;
@@ -89,7 +90,7 @@ export default function InstitutionQuickAdd({
       contactName,
       contactEmail,
       contactPhone,
-      registeredAt: new Date().toISOString().slice(0, 10),
+      registeredAt: todayKST(),
       status: "ACTIVE",
     });
     onChange(created.id);

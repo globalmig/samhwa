@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useStore, addUser } from "@/lib/store";
+import { todayKST } from "@/lib/utils";
 
 const inputCls = "w-full text-sm border border-slate-200 rounded-lg px-3 py-2.5 text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-colors";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -54,7 +55,7 @@ export default function SignupPage() {
       role: "VIEWER",
       status: "PENDING",
       lastLoginAt: null,
-      registeredAt: new Date().toISOString().slice(0, 10),
+      registeredAt: todayKST(),
     });
     setSubmitting(false);
     setDone(true);

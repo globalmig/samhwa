@@ -8,6 +8,7 @@ import { useStore, addProjectIssue, updateProjectIssue, deleteProjectIssue } fro
 import { useCanWrite } from "@/lib/permissions";
 import type { ProjectIssue, IssueRecipientGroup } from "@/lib/mock";
 import UserMultiSelect from "@/components/common/UserMultiSelect";
+import { nowKST, todayKST } from "@/lib/utils";
 
 const PRIORITY_STYLE: Record<string, string> = {
   HIGH:   "bg-red-100 text-red-700",
@@ -115,7 +116,7 @@ export default function IssuesPage() {
       projectNumber: project.projectNumber,
       content: formContent.trim(),
       author: "김관리",
-      createdAt: new Date().toISOString().replace("T", " ").slice(0, 16),
+      createdAt: nowKST(),
       priority: formPriority,
       status: formStatus,
       recipientGroups: formRecipients,
@@ -182,7 +183,7 @@ export default function IssuesPage() {
     ws["!cols"] = Object.keys(data[0] ?? {}).map(() => ({ wch: 18 }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "이슈현황");
-    XLSX.writeFile(wb, `이슈현황_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    XLSX.writeFile(wb, `이슈현황_${todayKST()}.xlsx`);
   }
 
   function confirmDelete(id: string) {
