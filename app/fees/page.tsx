@@ -1467,8 +1467,12 @@ function useFeeRows(): FeeRow[] {
         );
 
         // 이 행의 청구 대상 기관 — 분리행이면 그 참여기관, 아니면 지금까지처럼 주관기관.
-        const billedInstitutionId   = isSplit ? primary.institutionId   : (project?.leadInstitutionId ?? primary.institutionId);
-        const billedInstitutionName = isSplit ? primary.institutionName : (project?.leadInstitutionName ?? primary.institutionName);
+        // project.leadInstitutionId/-Name은 엑셀 업로드 시 참여기관 중 "주관" 행을 못 찾으면 빈 문자열
+        // ""로 남을 수 있는데(수정 6), ??는 ""를 유효값으로 보고 넘어가버려 세금계산서 발행 시 존재하지
+        // 않는 기관(institutionId="")을 참조하려다 서버에서 실패하는 문제가 있었다 — ||로 바꿔 빈
+        // 문자열도 "값 없음"으로 취급해 primary(이 연차 첫 참여기관)로 폴백하게 한다.
+        const billedInstitutionId   = isSplit ? primary.institutionId   : (project?.leadInstitutionId || primary.institutionId);
+        const billedInstitutionName = isSplit ? primary.institutionName : (project?.leadInstitutionName || primary.institutionName);
 
         // 수신자 담당자 — 분리행이면 그 기관의 참여기관 레코드, 아니면 지금까지처럼 주관기관(LEAD) 레코드.
         const recipientMember = isSplit
@@ -2663,11 +2667,11 @@ export default function FeesPage() {
       const currentStageStartDate = currentStage?.stageStartDate ?? project.stageStartDate ?? project.startDate;
       const currentStageEndDate = currentStage?.stageEndDate ?? project.stageEndDate ?? project.endDate;
       const statusRows: NoticeStatusRow[] = [
-        { label: "과제번호 (RCMS)", value: resolveProjectCodeForTerm(project, project.currentTerm) || project.projectNumber },
+        { label: "과제번호 (RCMS)", value: project.projectNumber },
         { label: "과제명", value: project.projectName },
         { label: "단계연구개발기간", value: `${fmtDate(currentStageStartDate)} ~ ${fmtDate(currentStageEndDate)}` },
         { label: "대상기간", value: `${fmtDate(project.firstStartDate ?? project.startDate)} ~ ${fmtDate(project.finalEndDate ?? project.endDate)}` },
-        { label: "정산구분", value: leadMember?.settlementType ?? "위탁정산" },
+        { label: "정산구분", value: isSettlementTerm(project, project.currentTerm) ? "정산" : "연차상시" },
         { label: "주관연구개발기관", value: project.leadInstitutionName },
         { label: "연구책임자", value: resolveResearchLeadForTerm(project, project.currentTerm).name || "—" },
         { label: "공동연구개발기관수", value: `${coInstitutionCount}개` },

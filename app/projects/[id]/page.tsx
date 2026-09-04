@@ -3615,7 +3615,13 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
   function toggleOtherFirmHandled(checked: boolean) {
     setTermOtherFirmHandled(projectNumber, group.termYear, group.termNumber, checked);
   }
-  const leadInst = institutions.find((i) => i.id === leadInstitutionId);
+  // leadInstitutionId/-Name은 엑셀 업로드 시 참여기관 중 "주관" 행을 못 찾으면 빈 문자열로 남을 수
+  // 있는데(수정 6), 그 상태로 청구 대상 기관을 비워두면 매출발행 시 존재하지 않는 기관(institutionId="")을
+  // 참조하려다 서버에서 실패해 아무 것도 만들어지지 않는다(발행구분만 바뀌고 세금계산서·수금은 조용히
+  // 롤백됨) — 수수료청구관리 목록(useFeeRows)과 동일하게 이 연차의 첫 참여기관으로 대신 청구한다.
+  const resolvedLeadInstitutionId = leadInstitutionId || group.fees[0]?.institutionId || "";
+  const resolvedLeadInstitutionName = leadInstitutionName || group.fees[0]?.institutionName || "";
+  const leadInst = institutions.find((i) => i.id === resolvedLeadInstitutionId);
   // 전담기관 설정에 따라 공문을 주관기관만 받을지, 참여기관까지 다 받을지 결정
   const sendToAllInstitutions = fundingAgencies.find((a) => a.id === agencyId)?.noticeRecipientScope === "LEAD_AND_PARTICIPANTS";
 
@@ -3744,19 +3750,19 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
     : [{
         key: `${group.key}|combined`,
         institutionId: null,
-        billingInstitutionId: leadInstitutionId,
-        billingLabel: leadInstitutionName,
+        billingInstitutionId: resolvedLeadInstitutionId,
+        billingLabel: resolvedLeadInstitutionName,
         // 주관기관만 발송 대상인 전담기관은 주관기관 앞으로만 공문을 보내고, 아니면 참여기관까지 전부 보낸다.
         recipients: sendToAllInstitutions
           ? group.fees.map((f) => ({
               institutionName: f.institutionName,
               email: institutions.find((i) => i.id === f.institutionId)?.contactEmail ?? "",
             }))
-          : [{ institutionName: leadInstitutionName, email: leadInst?.contactEmail ?? "" }],
+          : [{ institutionName: resolvedLeadInstitutionName, email: leadInst?.contactEmail ?? "" }],
         amount: group.totalApplied,
         // 실제로 청구서를 받는 기관(주관, 혹은 전체)만 BILLED, 나머지는 CONFIRMED까지만.
-        billedFees: (sendToAllInstitutions ? group.fees : group.fees.filter((f) => f.institutionId === leadInstitutionId)).map(feeRef),
-        confirmedFees: (sendToAllInstitutions ? [] : group.fees.filter((f) => f.institutionId !== leadInstitutionId)).map(feeRef),
+        billedFees: (sendToAllInstitutions ? group.fees : group.fees.filter((f) => f.institutionId === resolvedLeadInstitutionId)).map(feeRef),
+        confirmedFees: (sendToAllInstitutions ? [] : group.fees.filter((f) => f.institutionId !== resolvedLeadInstitutionId)).map(feeRef),
         billingType: group.fees[0]?.billingType,
         invoice: group.invoice,
         receivable: group.receivable,
@@ -4681,11 +4687,11 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const currentStageStartDate = currentStage?.stageStartDate ?? project.stageStartDate ?? project.startDate;
   const currentStageEndDate = currentStage?.stageEndDate ?? project.stageEndDate ?? project.endDate;
   const noticeStatusRows: NoticeStatusRow[] = [
-    { label: "과제번호 (RCMS)", value: resolveProjectCodeForTerm(project, project.currentTerm) || project.projectNumber },
+    { label: "과제번호 (RCMS)", value: project.projectNumber },
     { label: "과제명", value: project.projectName },
     { label: "단계연구개발기간", value: `${fmtDate(currentStageStartDate)} ~ ${fmtDate(currentStageEndDate)}` },
     { label: "대상기간", value: `${fmtDate(project.firstStartDate ?? project.startDate)} ~ ${fmtDate(project.finalEndDate ?? project.endDate)}` },
-    { label: "정산구분", value: leadMember?.settlementType ?? "위탁정산" },
+    { label: "정산구분", value: isSettlementTerm(project, project.currentTerm) ? "정산" : "연차상시" },
     { label: "주관연구개발기관", value: project.leadInstitutionName },
     { label: "연구책임자", value: resolveResearchLeadForTerm(project, project.currentTerm).name || "—" },
     { label: "공동연구개발기관수", value: `${coInstitutionCount}개` },
