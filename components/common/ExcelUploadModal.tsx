@@ -2037,16 +2037,16 @@ const ANNUAL_SHEET_NOTES = [
   "※필수 (YYYY-MM-DD)", "※필수 (YYYY-MM-DD)",
   "선택", "※필수 (이 행의 사업비가 몇 연차 것인지 — 비면 1연차로 잘못 등록됨)", "선택",
   "※필수", "※필수 (하이픈 없이 숫자만 입력해도 등록 시 000-00-00000 형식으로 자동 변환됨)",
-  "선택 (주관/공동/위탁)", "선택 (최우수/우수(A)/우수(B)/우수(C)/일반, 미입력시 등급 없음)", "선택 (위탁정산/자체정산)",
+  "선택 (주관/공동/위탁)", "선택 (최우수(S)/우수(A)/우수(B)/우수(C)/일반, 미입력시 등급 없음)", "선택 (위탁정산/자체정산)",
   "선택 (삼화가 아니면 이 연차를 타회계법인 진행으로 자동 표시)",
-  "선택 (연차상시/정산, 미입력시 협약구조로 자동판정 — \"정산형태\"와는 다른 값)",
+  "※필수 (연차상시/정산 — \"정산형태\"와는 다른 값)",
   "선택 (주관기관 행에만, 없으면 단계기관별 시트의 값을 사용)",
   "선택 (주관기관 행에만 — 여러 명이면 콤마(,)로 구분, 정산절차 안내 공문에 실무자와 함께 수신)",
   "선택 (이 행 기관의 담당자 — 여러 명이면 콤마(,)로 구분, 정산절차 안내 공문 외 모든 공문 수신)",
   "선택 (YYYY-MM-DD)", "선택 (YYYY-MM-DD)",
-  "선택 (YYYY-MM-DD, 이 연차의 실제 시작일 — 있으면 자동계산 대신 사용)",
-  "선택 (YYYY-MM-DD, 이 연차의 실제 종료일 — 있으면 자동계산 대신 사용)",
-  "선택 (YYYY-MM-DD, 단계기관별 시트가 없을 때의 보조 수단)", "선택 (YYYY-MM-DD, 단계기관별 시트가 없을 때의 보조 수단)",
+  "※필수 (YYYY-MM-DD, 이 연차의 실제 시작일 — 빈칸이면 공동기관을 인식하지 못할 수 있음)",
+  "※필수 (YYYY-MM-DD, 이 연차의 실제 종료일 — 빈칸이면 공동기관을 인식하지 못할 수 있음)",
+  "※필수 (YYYY-MM-DD, 이 단계의 실제 시작일 — 빈칸이면 공동기관을 인식하지 못할 수 있음)", "※필수 (YYYY-MM-DD, 이 단계의 실제 종료일 — 빈칸이면 공동기관을 인식하지 못할 수 있음)",
   "※필수 (이 연차 현금사업비 — 참여기관별·연차별 사업비. 비면 이 연차엔 참여 안 함으로 처리됨)",
   "선택 (이 연차 현물사업비 — 있으면 아래 \"현물사업비총액\"보다 우선)",
   "선택 (이 연차 정부출연금 — 과제의 당해 정부출연금 합산에 사용)",
@@ -2079,7 +2079,7 @@ function styleAnnualSheet(ws: ExcelJS.Worksheet) {
   styleTemplateDataRows(ws, 3, 2 + TEMPLATE_BLANK_ROWS, ANNUAL_SHEET_HEADERS.length);
   applyDropdown(ws, ANNUAL_SHEET_HEADERS.indexOf("자율성트랙") + 1, ["", "자율성트랙"], 3, 2 + TEMPLATE_BLANK_ROWS);
   applyDropdown(ws, ANNUAL_SHEET_HEADERS.indexOf("기관역할구분") + 1, ["주관", "공동", "위탁"], 3, 2 + TEMPLATE_BLANK_ROWS);
-  applyDropdown(ws, ANNUAL_SHEET_HEADERS.indexOf("등급") + 1, ["최우수", "우수(A)", "우수(B)", "우수(C)", "일반", ""], 3, 2 + TEMPLATE_BLANK_ROWS);
+  applyDropdown(ws, ANNUAL_SHEET_HEADERS.indexOf("등급") + 1, ["최우수(S)", "우수(A)", "우수(B)", "우수(C)", "일반", ""], 3, 2 + TEMPLATE_BLANK_ROWS);
   applyDropdown(ws, ANNUAL_SHEET_HEADERS.indexOf("정산형태") + 1, ["위탁정산", "자체정산"], 3, 2 + TEMPLATE_BLANK_ROWS);
   applyDropdown(ws, ANNUAL_SHEET_HEADERS.indexOf("과제구분") + 1, ["", "연차상시", "정산"], 3, 2 + TEMPLATE_BLANK_ROWS);
 }
@@ -2087,10 +2087,10 @@ function styleAnnualSheet(ws: ExcelJS.Worksheet) {
 const STAGE_SHEET_NOTES = [
   "※필수", "선택", "※필수", "※필수",
   "※필수 (YYYY-MM-DD)", "※필수 (YYYY-MM-DD)",
-  "선택 (0=일괄협약, 1 이상=단계협약)", "선택 (연차 숫자)", "선택 (시작단계와 동일해야 함)", "선택 (연차 숫자)",
+  "※필수 (0=일괄협약, 1 이상=단계협약)", "※필수 (연차 숫자)", "※필수 (시작단계와 동일해야 함)", "※필수 (연차 숫자)",
   "선택 (YYYY-MM-DD, 이 단계의 실제 시작일)", "선택 (YYYY-MM-DD, 이 단계의 실제 종료일)",
   "선택",
-  "※필수", "※필수 (하이픈 없이 숫자만 입력해도 등록 시 000-00-00000 형식으로 자동 변환됨)", "선택 (주관/공동/위탁)", "선택 (최우수/우수(A)/우수(B)/우수(C)/일반)", "선택 (주관기관 행에만)",
+  "※필수", "※필수 (하이픈 없이 숫자만 입력해도 등록 시 000-00-00000 형식으로 자동 변환됨)", "※필수 (주관/공동/위탁)", "선택 (최우수(S)/우수(A)/우수(B)/우수(C)/일반)", "선택 (주관기관 행에만)",
   "※필수 (원 단위)", "선택 (원 단위)",
 ];
 const STAGE_SHEET_HEADERS = [
@@ -2111,7 +2111,7 @@ function styleStageSheet(ws: ExcelJS.Worksheet) {
   styleTemplateDataRows(ws, 3, 2 + TEMPLATE_BLANK_ROWS, STAGE_SHEET_HEADERS.length);
   applyDropdown(ws, STAGE_SHEET_HEADERS.indexOf("정산형태구분") + 1, ["위탁정산", "자체정산"], 3, 2 + TEMPLATE_BLANK_ROWS);
   applyDropdown(ws, STAGE_SHEET_HEADERS.indexOf("기관역할구분") + 1, ["주관", "공동", "위탁"], 3, 2 + TEMPLATE_BLANK_ROWS);
-  applyDropdown(ws, STAGE_SHEET_HEADERS.indexOf("기관등급") + 1, ["최우수", "우수(A)", "우수(B)", "우수(C)", "일반"], 3, 2 + TEMPLATE_BLANK_ROWS);
+  applyDropdown(ws, STAGE_SHEET_HEADERS.indexOf("기관등급") + 1, ["최우수(S)", "우수(A)", "우수(B)", "우수(C)", "일반", ""], 3, 2 + TEMPLATE_BLANK_ROWS);
 }
 
 // 참여기관 소속 여부와 무관하게, 이 과제의 절대 연차(termNumber)가 속한 단계 번호를 구한다 —
@@ -2353,7 +2353,7 @@ export async function downloadExcelTemplate() {
       "박정담", "김담당", "자율성트랙",
       "2024-06-01", "2026-05-31", "0", "1", "2024",
       "에너지연구소", "345-67-89012",
-      "주관", "최우수", "자체정산", "",
+      "주관", "최우수(S)", "자체정산", "",
       "연차상시", "이연구",
       "lee.lead@energylab.re.kr", "jung.staff@energylab.re.kr",
       "2024-04-20", "2024-05-10",
@@ -2387,7 +2387,7 @@ export async function downloadExcelTemplate() {
     [
       "한국에너지기술평가원", "신재생에너지핵심기술개발", "RS-2024-00000002", "신재생에너지 효율화 연구",
       "2024-06-01", "2026-05-31", "0", "1", "0", "4", "2024-06-01", "2026-05-31", "위탁정산",
-      "에너지연구소", "345-67-89012", "주관", "최우수", "박연구", "800000000", "50000000",
+      "에너지연구소", "345-67-89012", "주관", "최우수(S)", "박연구", "800000000", "50000000",
     ],
   ];
 
