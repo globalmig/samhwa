@@ -4,6 +4,7 @@ import { use, useState, useMemo, useEffect, useRef, type ReactNode, type MouseEv
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth";
 import {
   FiEdit2, FiCheck, FiX, FiPlus, FiSend, FiChevronDown, FiChevronUp, FiTrash2, FiFileText,
   FiHash, FiCalendar, FiLayers, FiDollarSign, FiInfo,
@@ -4489,13 +4490,19 @@ function SettlementNoticeModal({
     return { ...base, contactRows: applyManagerContactRows(base.contactRows, project, users) };
   }, [selectedTemplate, project, users]);
 
-  // 정산절차 안내 공문은 담당자 개인 하이웍스 계정이 아니라, 전담기관별로 등록된 공용메일 계정으로
-  // "삼화회계법인" 명의 발송한다 (funding-agencies 관리 화면에서 등록).
-  const canSendMail = !!agency.noticeSenderEmail && !!agency.noticeSenderMailPassword;
+  // 정산절차 안내 공문은 실제 발신(인증)은 보내는 사람의 개인 하이웍스 계정으로 하되, 수신자에게
+  // 보이는 발신 이메일만 전담기관별로 등록된 공용메일 주소로 바꿔치기한다(funding-agencies 관리
+  // 화면에서 등록) — 전담기관마다 실제 메일 비밀번호를 따로 발급·등록할 필요가 없도록 한 것.
+  const senderUser = users.find((u) => u.id === getCurrentUser()?.id) ?? null;
+  const canSendMail = !!agency.noticeSenderEmail && !!senderUser?.hiworksEmail && !!senderUser?.hiworksMailPassword;
 
   async function send() {
-    if (!agency.noticeSenderEmail || !agency.noticeSenderMailPassword) {
-      setSendError("발신 계정(하이웍스 공용메일)이 등록되어 있지 않습니다. 전담기관 관리에서 먼저 등록해주세요.");
+    if (!agency.noticeSenderEmail) {
+      setSendError("발신 이메일(하이웍스 공용메일 주소)이 등록되어 있지 않습니다. 전담기관 관리에서 먼저 등록해주세요.");
+      return;
+    }
+    if (!senderUser?.hiworksEmail || !senderUser?.hiworksMailPassword) {
+      setSendError("본인 계정에 하이웍스 메일이 등록되어 있지 않습니다. 프로필에서 먼저 등록해주세요.");
       return;
     }
     setSending(true);
@@ -4514,8 +4521,9 @@ function SettlementNoticeModal({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          senderEmail: agency.noticeSenderEmail,
-          senderPassword: agency.noticeSenderMailPassword,
+          senderEmail: senderUser.hiworksEmail,
+          senderPassword: senderUser.hiworksMailPassword,
+          fromEmail: agency.noticeSenderEmail,
           senderName: companyInfo.name,
           to: [toEmail],
           subject,
@@ -4623,7 +4631,11 @@ function SettlementNoticeModal({
       </div>
 
       <p className="text-[11px] text-slate-400">
-        발신 계정: {canSendMail ? `${companyInfo.name} <${agency.noticeSenderEmail}>` : <span className="text-red-500">등록된 발신 계정이 없습니다 (전담기관 관리에서 등록)</span>}
+        발신 계정: {canSendMail
+          ? `${companyInfo.name} <${agency.noticeSenderEmail}>`
+          : !agency.noticeSenderEmail
+          ? <span className="text-red-500">발신 이메일이 없습니다 (전담기관 관리에서 등록)</span>
+          : <span className="text-red-500">본인 계정에 하이웍스 메일이 등록되어 있지 않습니다 (프로필에서 등록)</span>}
       </p>
       {sendError && <p className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{sendError}</p>}
 

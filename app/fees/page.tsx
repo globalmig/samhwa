@@ -1901,19 +1901,22 @@ function BulkSettlementNoticeModal({
   onClose: () => void;
 }) {
   const { companyInfo, users, fundingAgencies } = useStore();
-  // 정산절차 안내 공문은 담당자 개인 하이웍스 계정이 아니라, 전담기관별로 등록된 공용메일 계정
-  // (FundingAgency.noticeSenderEmail/noticeSenderMailPassword)으로 "삼화회계법인" 명의 발송한다.
+  // 정산절차 안내 공문은 실제 발신(인증)은 보내는 사람의 개인 하이웍스 계정으로 하되, 수신자에게
+  // 보이는 발신 이메일만 전담기관별로 등록된 공용메일 주소(FundingAgency.noticeSenderEmail)로
+  // 바꿔치기한다 — 전담기관마다 실제 메일 비밀번호를 따로 발급·등록할 필요가 없도록 한 것.
+  const senderUser = users.find((u) => u.id === getCurrentUser()?.id) ?? null;
+  const senderAccountMissing = !senderUser?.hiworksEmail || !senderUser?.hiworksMailPassword;
   const agencyByShortName = useMemo(() => new Map(fundingAgencies.map((a) => [a.shortName, a])), [fundingAgencies]);
-  const hasSenderAccount = (shortName: string) => {
-    const a = agencyByShortName.get(shortName);
-    return !!a?.noticeSenderEmail && !!a?.noticeSenderMailPassword;
-  };
-  // 공문 양식이 없는 전담기관 과제는 보낼 방법이 없어 건너뛰고, 수신 이메일이 없는 과제/발신 계정이
-  // 등록되지 않은 전담기관 과제도 자동 제외한다.
+  const hasSenderEmail = (shortName: string) => !!agencyByShortName.get(shortName)?.noticeSenderEmail;
+  // 공문 양식이 없는 전담기관 과제는 보낼 방법이 없어 건너뛰고, 수신 이메일이 없는 과제/발신
+  // 이메일이 등록되지 않은 전담기관 과제도 자동 제외한다. 본인 계정에 하이웍스 메일이 없으면
+  // (senderAccountMissing) 전담기관 설정과 무관하게 전체가 발송 불가 상태가 된다.
   const noTemplate = targets.filter((t) => t.templates.length === 0);
   const noEmail = targets.filter((t) => t.templates.length > 0 && !t.recipientEmail);
-  const noSenderAccount = targets.filter((t) => t.templates.length > 0 && t.recipientEmail && !hasSenderAccount(t.agencyShortName));
-  const eligible = targets.filter((t) => t.templates.length > 0 && t.recipientEmail && hasSenderAccount(t.agencyShortName));
+  const noSenderAccount = targets.filter((t) => t.templates.length > 0 && t.recipientEmail && !hasSenderEmail(t.agencyShortName));
+  const eligible = senderAccountMissing
+    ? []
+    : targets.filter((t) => t.templates.length > 0 && t.recipientEmail && hasSenderEmail(t.agencyShortName));
 
   const agencyGroups = useMemo(() => {
     const map = new Map<string, BulkNoticeTarget[]>();
@@ -1946,6 +1949,7 @@ function BulkSettlementNoticeModal({
   }
 
   async function sendAll() {
+    if (!senderUser?.hiworksEmail || !senderUser?.hiworksMailPassword) return;
     setSending(true);
     const now = new Date();
     const issuedDate = now.toISOString().slice(0, 10).replace(/-/g, ".");
@@ -1955,7 +1959,7 @@ function BulkSettlementNoticeModal({
 
     for (const t of toSend) {
       const senderAgency = agencyByShortName.get(t.agencyShortName);
-      if (!senderAgency?.noticeSenderEmail || !senderAgency?.noticeSenderMailPassword) continue;
+      if (!senderAgency?.noticeSenderEmail) continue;
       const templateId = templateChoices[t.agencyShortName] ?? t.templates[0]?.id;
       const rawTemplate = t.templates.find((x) => x.id === templateId)?.content ?? t.templates[0]?.content ?? EMPTY_NOTICE_TEMPLATE;
       // 문의사항 연락처의 "과제담당(정)/(부)" 행을 이 과제의 실제 담당자로 바꿔치기한다.
@@ -1977,8 +1981,9 @@ function BulkSettlementNoticeModal({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            senderEmail: senderAgency.noticeSenderEmail,
-            senderPassword: senderAgency.noticeSenderMailPassword,
+            senderEmail: senderUser.hiworksEmail,
+            senderPassword: senderUser.hiworksMailPassword,
+            fromEmail: senderAgency.noticeSenderEmail,
             senderName: companyInfo.name,
             to: [t.recipientEmail],
             subject,
@@ -2060,7 +2065,7 @@ function BulkSettlementNoticeModal({
         </div>
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-center">
           <p className="text-2xl font-bold text-slate-500">{noSenderAccount.length}</p>
-          <p className="text-xs text-slate-500 mt-0.5">발신 계정 미등록 (건너뜀)</p>
+          <p className="text-xs text-slate-500 mt-0.5">발신 이메일 미등록 (건너뜀)</p>
         </div>
       </div>
 
@@ -2144,13 +2149,19 @@ function BulkSettlementNoticeModal({
           )}
           {noSenderAccount.length > 0 && (
             <div className="max-h-24 overflow-y-auto leading-relaxed">
-              전담기관에 발신 계정이 등록되지 않은 과제 (전담기관 관리에서 등록): {noSenderAccount.map((t) => t.projectName).join(", ")}
+              전담기관에 발신 이메일이 등록되지 않은 과제 (전담기관 관리에서 등록): {noSenderAccount.map((t) => t.projectName).join(", ")}
             </div>
           )}
         </div>
       )}
 
-      {eligible.length === 0 && (
+      {senderAccountMissing && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
+          본인 계정에 하이웍스 메일이 등록되어 있지 않아 발송할 수 없습니다. 프로필에서 먼저 등록해주세요.
+        </div>
+      )}
+
+      {eligible.length === 0 && !senderAccountMissing && (
         <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
           발송 가능한 과제가 없습니다.
         </div>

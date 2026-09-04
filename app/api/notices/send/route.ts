@@ -16,6 +16,10 @@ interface SendNoticeBody {
   senderEmail: string;
   senderPassword: string;
   senderName?: string;
+  /** 실제 로그인(인증) 계정과 다른 주소를 발신인으로 보이게 할 때만 지정 — 예: 정산절차 안내
+   *  공문은 담당자 개인 하이웍스 계정으로 인증하되, 수신자에게는 전담기관 공용메일 주소로 보인다.
+   *  생략하면 senderEmail이 그대로 발신 주소로 쓰인다. */
+  fromEmail?: string;
   to: string[];
   subject: string;
   html?: string;
@@ -46,7 +50,7 @@ export async function POST(request: Request) {
     return Response.json({ ok: false, error: "요청 형식이 올바르지 않습니다." }, { status: 400 });
   }
 
-  const { senderEmail, senderPassword, senderName, to, subject, html, text, attachments } = body;
+  const { senderEmail, senderPassword, senderName, fromEmail, to, subject, html, text, attachments } = body;
 
   if (!senderEmail || !senderPassword) {
     return Response.json(
@@ -75,8 +79,9 @@ export async function POST(request: Request) {
   });
 
   try {
+    const displayEmail = fromEmail || senderEmail;
     const info = await transporter.sendMail({
-      from: senderName ? `"${senderName}" <${senderEmail}>` : senderEmail,
+      from: senderName ? `"${senderName}" <${displayEmail}>` : displayEmail,
       to: to.join(", "),
       subject,
       text,

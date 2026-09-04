@@ -300,21 +300,16 @@ function AgencyForm({
           <input className={inputCls} value={form.contactPhone} onChange={(e) => s("contactPhone", e.target.value)} placeholder="042-000-0000" />
         </Field>
       </div>
-      {/* 정산절차 안내 공문 발송 전용 계정 — 담당자 개인 하이웍스 계정이 아니라 전담기관별 공용메일
-          주소를 발신자로 쓴다(예: keit_samhwa@shcpa.co.kr). 발신자명은 항상 회사명으로 고정되며
-          여기서 따로 설정하지 않는다. */}
+      {/* 정산절차 안내 공문의 발신 표시 이메일 — 실제 발송(인증)은 보내는 담당자의 개인 하이웍스
+          계정으로 이뤄지고, 수신자에게 보이는 발신 주소만 전담기관별 공용메일 주소로 바꿔치기한다
+          (예: keit_samhwa@shcpa.co.kr). 그래서 이 계정 자체의 비밀번호는 필요 없다 — 발신자명은
+          항상 회사명으로 고정되며 여기서 따로 설정하지 않는다. */}
       <div className="space-y-2 border border-slate-200 rounded-lg p-3 bg-slate-50/50">
-        <p className="text-xs font-medium text-slate-600">정산절차 안내 공문 발신 계정 (하이웍스 공용메일)</p>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="발신 이메일">
-            <input className={inputCls} type="email" value={form.noticeSenderEmail ?? ""} onChange={(e) => s("noticeSenderEmail", e.target.value)} placeholder="keit_samhwa@shcpa.co.kr" />
-          </Field>
-          <Field label="메일 전용 비밀번호">
-            <input className={inputCls} type="password" value={form.noticeSenderMailPassword ?? ""} onChange={(e) => s("noticeSenderMailPassword", e.target.value)}
-              placeholder={initial.noticeSenderMailPassword ? "변경하려면 새 값을 입력..." : "미등록"} />
-          </Field>
-        </div>
-        <p className="text-[10px] text-slate-400">하이웍스 로그인 비밀번호가 아닌, 해당 계정의 개인설정 &gt; 보안설정에서 발급하는 메일 전용 비밀번호를 입력하세요. 비워두면 기존 값이 유지됩니다.</p>
+        <p className="text-xs font-medium text-slate-600">정산절차 안내 공문 발신 이메일 (하이웍스 공용메일 주소)</p>
+        <Field label="발신 이메일">
+          <input className={inputCls} type="email" value={form.noticeSenderEmail ?? ""} onChange={(e) => s("noticeSenderEmail", e.target.value)} placeholder="keit_samhwa@shcpa.co.kr" />
+        </Field>
+        <p className="text-[10px] text-slate-400">실제 발송은 공문을 보내는 담당자 본인의 하이웍스 계정으로 인증되며, 수신자에게는 이 주소가 발신인으로 표시됩니다. 이 계정의 비밀번호는 등록할 필요 없습니다.</p>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
@@ -437,10 +432,10 @@ function DetailModal({ agency, projects, termFees, feePolicies, onClose }: {
         <div><span className="text-xs text-slate-400">수수료 정책</span><p className="text-slate-700 mt-0.5">{ownPolicy ? `${ownPolicy.name} (${ownPolicy.version}) — 자체 정책` : "공통 정책 사용"}</p></div>
         <div><span className="text-xs text-slate-400">공문·세금계산서 발송 대상</span><p className="text-slate-700 mt-0.5">{NOTICE_SCOPE_LABEL[agency.noticeRecipientScope]}</p></div>
         <div>
-          <span className="text-xs text-slate-400">정산절차 안내 발신 계정</span>
+          <span className="text-xs text-slate-400">정산절차 안내 발신 이메일</span>
           <p className="text-slate-700 mt-0.5 flex items-center gap-1.5">
             {agency.noticeSenderEmail ? agency.noticeSenderEmail : <span className="text-slate-300">미등록</span>}
-            <StatusBadge label={agency.noticeSenderMailPassword ? "발송 가능" : "비밀번호 미등록"} color={agency.noticeSenderMailPassword ? "green" : "amber"} />
+            <StatusBadge label={agency.noticeSenderEmail ? "발송 가능" : "미등록"} color={agency.noticeSenderEmail ? "green" : "amber"} />
           </p>
         </div>
         <div><span className="text-xs text-slate-400">웹사이트</span>
