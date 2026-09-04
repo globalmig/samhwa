@@ -62,6 +62,26 @@ export function resolveResearchLeadForTerm(
   };
 }
 
+// ─── 연차별 과제담당자(정/부) 조회 ───────────────────────────────────
+// 담당자도 인사이동 등으로 연차 중간에 바뀔 수 있어, 연차별 이력이 있으면(assignedManagerHistory/
+// assignedManagerPrimaryHistory) 그 연차 값을 쓰고, 없으면 assignedManager/assignedManagerPrimary
+// (현재 진행 연차 기준값)를 그대로 쓴다 — resolveResearchLeadForTerm과 동일한 규칙.
+export function resolveAssignedManagerForTerm(
+  project: Pick<Project, "assignedManager" | "assignedManagerHistory">,
+  termNumber: number,
+): string {
+  const override = project.assignedManagerHistory?.find((h) => h.termNumber === termNumber);
+  return override?.assignedManager ?? project.assignedManager ?? "";
+}
+
+export function resolveAssignedManagerPrimaryForTerm(
+  project: Pick<Project, "assignedManagerPrimary" | "assignedManagerPrimaryHistory">,
+  termNumber: number,
+): string {
+  const override = project.assignedManagerPrimaryHistory?.find((h) => h.termNumber === termNumber);
+  return override?.assignedManagerPrimary ?? project.assignedManagerPrimary ?? "";
+}
+
 // ─── 기본값 변경 시 이미 만들어진 연차로 소급 방지 ─────────────────────
 // 실무자·책임자 연락처처럼 "오버라이드가 없는 모든 연차의 기본값" 역할을 겸하는 필드는, 기본값 자체를
 // 새 값으로 바꾸면 그 순간부터 오버라이드 없는 모든 연차가 한꺼번에 새 값으로 바뀌어버린다 — 새

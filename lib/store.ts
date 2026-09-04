@@ -99,6 +99,51 @@ export const ENTITY_NAMES: Record<string, string> = {
 // Store State
 // ============================================================
 
+// 수수료청구관리(/fees) 화면의 검색 필터 — 과제 상세로 들어갔다가 뒤로 돌아오거나 다른 메뉴를
+// 거쳐 다시 들어와도 화면을 새로고침하지 않는 한(SPA 네비게이션) 그대로 유지된다. 직접 "초기화"를
+// 누르기 전까지는 안 풀려야 한다는 요청으로 컴포넌트 로컬 useState 대신 store로 옮겼다 — 로컬
+// useState는 FeesPage가 언마운트되는 순간(다른 라우트로 이동) 값을 잃어버린다.
+export interface FeesFilters {
+  projectNumber: string;
+  projectName: string;
+  leadInstitution: string;
+  researchLead: string;
+  assignedManager: string;
+  assignedManagerPrimary: string;
+  // 완료/종료된 과제는 더 이상 확인할 필요가 없어 기본값은 '진행중'
+  projectStatus: string;
+  agency: string;
+  billingType: string;
+  collectionStatus: string;
+  onlyReceivable: boolean;
+  invoiceDateFrom: string;
+  invoiceDateTo: string;
+  termEndDateFrom: string;
+  termEndDateTo: string;
+  agencyAssignedFrom: string;
+  agencyAssignedTo: string;
+}
+
+const DEFAULT_FEES_FILTERS: FeesFilters = {
+  projectNumber: "",
+  projectName: "",
+  leadInstitution: "",
+  researchLead: "",
+  assignedManager: "",
+  assignedManagerPrimary: "",
+  projectStatus: "ACTIVE",
+  agency: "ALL",
+  billingType: "ALL",
+  collectionStatus: "ALL",
+  onlyReceivable: false,
+  invoiceDateFrom: "",
+  invoiceDateTo: "",
+  termEndDateFrom: "",
+  termEndDateTo: "",
+  agencyAssignedFrom: "",
+  agencyAssignedTo: "",
+};
+
 interface StoreState {
   fundingAgencies: FundingAgency[];
   institutions: Institution[];
@@ -127,6 +172,7 @@ interface StoreState {
   // lib/permissions.ts의 canAccessPage·canWriteDomain이 이 값을 참조한다.
   pageAccess: Record<string, Role[]>;
   writeAccess: Record<string, Role[]>;
+  feesFilters: FeesFilters;
 }
 
 const INITIAL_AUDIT_LOG: AuditEntry[] = [];
@@ -157,6 +203,7 @@ let _state: StoreState = {
   companyInfo: { ...initialCompanyInfo },
   pageAccess: Object.fromEntries(Object.entries(initialPageAccess).map(([k, v]) => [k, [...v]])),
   writeAccess: Object.fromEntries(Object.entries(initialWriteAccess).map(([k, v]) => [k, [...v]])),
+  feesFilters: { ...DEFAULT_FEES_FILTERS },
 };
 
 const _listeners = new Set<() => void>();
@@ -2394,6 +2441,20 @@ export function updateWriteAccess(domain: string, roles: Role[]): void {
     .then((res) => res.json())
     .then((res: { ok: boolean; error?: string }) => { if (!res.ok) console.error("기능 쓰기 권한 저장 실패:", res.error); })
     .catch((err) => console.error("기능 쓰기 권한 저장 실패:", err));
+}
+
+// ============================================================
+// FEES FILTERS (수수료청구관리 검색 필터 — 서버 저장 없이 세션 동안만 유지)
+// ============================================================
+
+export function updateFeesFilters(patch: Partial<FeesFilters>): void {
+  _state = { ..._state, feesFilters: { ..._state.feesFilters, ...patch } };
+  notify();
+}
+
+export function resetFeesFilters(): void {
+  _state = { ..._state, feesFilters: { ...DEFAULT_FEES_FILTERS } };
+  notify();
 }
 
 // ============================================================

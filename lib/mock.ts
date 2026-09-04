@@ -2927,7 +2927,7 @@ export const initialWriteAccess: Record<string, Role[]> = {
   emails:         ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
   "simple-notices": ["ADMIN", "ACCOUNTANT", "SETTLEMENT", "VIEWER"],
   projects:            ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
-  "projects-delete":   ["ADMIN"],
+  "projects-delete":   ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   "funding-agencies":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   "notice-templates":  ["ADMIN", "ACCOUNTANT", "SETTLEMENT"],
   "standard-attachments": ["ADMIN", "ACCOUNTANT"],

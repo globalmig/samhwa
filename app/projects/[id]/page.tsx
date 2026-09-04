@@ -15,7 +15,7 @@ import {
   setTermOtherFirmHandled, setTermBillingType, setTermDates, resolveProjectId,
 } from "@/lib/store";
 import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type EmailDispatch, type FeePolicy, type AnnualFinancials, type FundingAgency, EMPTY_NOTICE_TEMPLATE } from "@/lib/mock";
-import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, type CalcMember } from "@/lib/fee-calculator";
+import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, type CalcMember } from "@/lib/fee-calculator";
 import { fmtWonFull, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange, nowKST, todayKST } from "@/lib/utils";
 import { fmtValue, fieldLabel, describeOverrideChange } from "@/lib/audit-log-format";
 import StatusBadge from "@/components/common/StatusBadge";
@@ -633,15 +633,13 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   // 담당자도 인사이동 등으로 연차마다 바뀔 수 있어(assignedManagerHistory) 사업비 구분과 동일하게
   // 연차 탭(viewTerm)에 맞춰 보여준다 — currentTerm이면 지금 수정 중인 draft 값(입력 가능)을,
   // 다른 연차는 이력에서 찾은 값을 읽기 전용으로 보여준다.
-  const viewAssignedManagerRecord = project.assignedManagerHistory?.find((h) => h.termNumber === viewTerm);
   const viewAssignedManager = isCurrentTermFinancials
     ? (draft.assignedManager ?? "")
-    : (viewAssignedManagerRecord?.assignedManager ?? "");
+    : resolveAssignedManagerForTerm(project, viewTerm);
   // 과제담당자(정)도 (부)와 동일한 방식으로 연차별 이력을 본다.
-  const viewAssignedManagerPrimaryRecord = project.assignedManagerPrimaryHistory?.find((h) => h.termNumber === viewTerm);
   const viewAssignedManagerPrimary = isCurrentTermFinancials
     ? (draft.assignedManagerPrimary ?? "")
-    : (viewAssignedManagerPrimaryRecord?.assignedManagerPrimary ?? "");
+    : resolveAssignedManagerPrimaryForTerm(project, viewTerm);
 
   const totalCashBudget = members.reduce((s, m) => s + getMemberBudgetVal(m, "cashBudget"), 0);
   const totalInKindBudget = members.reduce((s, m) => s + getMemberBudgetVal(m, "inKindBudget"), 0);
@@ -653,9 +651,12 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   // 넣어도 무조건 "0원과 안 맞다"며 저장이 막힌다. 사업비 구분을 나중에 채우면 그때부터 맞춰보면 된다.
   const budgetMatchesAnnual = viewAnnualBudget === 0 || totalCashBudget + totalInKindBudget === viewAnnualBudget;
   // 참여기관 표 하단 합계는 편집 중일 때만 위 viewTerm+초안 반영 합계를 그대로 쓰고(입력하는 대로
-  // 바로 반영되어야 하니까), 탭으로 다른 연차를 보고 있을 때는 그 연차 기준(calcMembers)으로 다시 더한다.
-  const viewTotalCashBudget = editingMembers ? totalCashBudget : calcMembers.reduce((s, m) => s + m.cashBudget, 0);
-  const viewTotalInKindBudget = editingMembers ? totalInKindBudget : calcMembers.reduce((s, m) => s + (m.inKindBudget ?? 0), 0);
+  // 바로 반영되어야 하니까), 탭으로 다른 연차를 보고 있을 때는 그 연차 기준으로 다시 더한다. calcMembers는
+  // 수수료 산정용으로 걸러진 목록이라(feeBasis="CASH" 정책은 현금이 0원인 기관을 현물이 있어도 통째로
+  // 제외) 그걸로 더하면 현금 0원·현물 있는 기관의 현물예산이 하단 합계에서 조용히 빠진다 — 표시용
+  // 합계는 걸러지지 않은 전체 members를 그 연차 기준으로 다시 더해야 한다.
+  const viewTotalCashBudget = editingMembers ? totalCashBudget : members.reduce((s, m) => s + getViewTermBudget(m, viewTerm).cashBudget, 0);
+  const viewTotalInKindBudget = editingMembers ? totalInKindBudget : members.reduce((s, m) => s + getViewTermBudget(m, viewTerm).inKindBudget, 0);
 
   function startPastFinancialsEdit() {
     setPastFinancialsDraft({ govGrant: viewFinancials.govGrant, privateCash: viewFinancials.privateCash, privateInKind: viewFinancials.privateInKind });

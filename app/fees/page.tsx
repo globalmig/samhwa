@@ -22,6 +22,9 @@ import {
   addProject,
   addProjectMember,
   updateStandardAttachment,
+  deleteProject,
+  updateFeesFilters,
+  resetFeesFilters,
 } from "@/lib/store";
 import {
   type TermFee,
@@ -49,7 +52,7 @@ import { applyManagerContactRows } from "@/lib/notice-contacts";
 import { useCanWrite } from "@/lib/permissions";
 import { getCurrentUser } from "@/lib/auth";
 import { isOverdueByRule } from "@/lib/notifications";
-import { resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows } from "@/lib/fee-calculator";
+import { resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows } from "@/lib/fee-calculator";
 
 // 여러 이메일 문자열(각각 콤마 구분일 수 있음)을 하나로 합치고 중복을 제거한다 — 정산절차 안내
 // 공문은 책임자(researchLeadEmail)+실무자(recipientEmail) 두 필드를 합쳐서 기본 수신자로 쓴다.
@@ -1541,8 +1544,8 @@ function useFeeRows(): FeeRow[] {
           recipientName:       recipient.recipientName,
           recipientEmail:      recipient.recipientEmail,
           projectDivision:     project ? resolveProjectDivision(project) : "",
-          assignedManager:     project?.assignedManager ?? "",
-          assignedManagerPrimary: project?.assignedManagerPrimary ?? "",
+          assignedManager:     project ? resolveAssignedManagerForTerm(project, f0.termNumber) : "",
+          assignedManagerPrimary: project ? resolveAssignedManagerPrimaryForTerm(project, f0.termNumber) : "",
           registeredAt:        project?.registeredAt ?? "",
           taxInvoiceId:        invoice?.id ?? "",
           taxInvoiceStatus:    invoice?.status ?? "",
@@ -1614,8 +1617,8 @@ function useFeeRows(): FeeRow[] {
         recipientName: leadMember ? resolveMemberRecipientForTerm(leadMember, project.currentTerm).recipientName : "",
         recipientEmail: leadMember ? resolveMemberRecipientForTerm(leadMember, project.currentTerm).recipientEmail : "",
         projectDivision: resolveProjectDivision(project),
-        assignedManager: project.assignedManager ?? "",
-        assignedManagerPrimary: project.assignedManagerPrimary ?? "",
+        assignedManager: resolveAssignedManagerForTerm(project, project.currentTerm),
+        assignedManagerPrimary: resolveAssignedManagerPrimaryForTerm(project, project.currentTerm),
         registeredAt: project.registeredAt ?? "",
         taxInvoiceId: "",
         taxInvoiceStatus: "",
@@ -2380,36 +2383,62 @@ export default function FeesPage() {
   const canEditSales = useCanWrite("fees-sales");
   const canEditEmails = useCanWrite("emails");
   const canSendSimpleNotice = useCanWrite("simple-notices");
+  const canDeleteProjects = useCanWrite("projects-delete");
   // 행 선택(체크박스) 열 자체는 "과제 완료 처리"(canEdit) 목적뿐 아니라, 조회전용·전담기관담당자도
   // 쓸 수 있는 계산서발행 서류 요청/입금 확인 요청 일괄발송에도 필요해서 둘 중 하나만 있어도 보여준다.
-  const canSelectRows = canEdit || canSendSimpleNotice;
+  const canSelectRows = canEdit || canSendSimpleNotice || canDeleteProjects;
   const allRows     = useFeeRows();
-  const { fundingAgencies, projects, projectMembers, institutions, agencyNoticeTemplates, users, emailDispatches, termFees } = useStore();
+  const { fundingAgencies, projects, projectMembers, institutions, agencyNoticeTemplates, users, emailDispatches, termFees, feesFilters } = useStore();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const [filterProjectNumber,   setFilterProjectNumber]   = useState("");
-  const [filterProjectName,     setFilterProjectName]     = useState("");
-  const [filterLeadInstitution, setFilterLeadInstitution] = useState("");
-  const [filterResearchLead,    setFilterResearchLead]    = useState("");
-  const [filterAssignedManager, setFilterAssignedManager] = useState("");
-  const [filterAssignedManagerPrimary, setFilterAssignedManagerPrimary] = useState("");
-  // 완료/종료된 과제는 더 이상 확인할 필요가 없어 기본값은 '진행중'
-  const [filterProjectStatus,   setFilterProjectStatus]   = useState(() => searchParams.get("status") ?? "ACTIVE");
-  const [filterAgency,          setFilterAgency]          = useState("ALL");
-  const [filterBillingType,     setFilterBillingType]     = useState("ALL");
-  const [filterCollectionStatus,setFilterCollectionStatus]= useState("ALL");
-  const [filterOnlyReceivable,  setFilterOnlyReceivable]  = useState(false);
-  const [invoiceDateFrom, setInvoiceDateFrom] = useState("");
-  const [invoiceDateTo, setInvoiceDateTo]     = useState("");
-  const [termEndDateFrom, setTermEndDateFrom] = useState("");
-  const [termEndDateTo, setTermEndDateTo]     = useState("");
-  const [agencyAssignedFrom, setAgencyAssignedFrom] = useState("");
-  const [agencyAssignedTo, setAgencyAssignedTo]     = useState("");
+  // 검색 필터는 store(feesFilters)에 보관해 과제 상세로 들어갔다 나오는 등 다른 화면을 거쳐도
+  // "초기화"를 누르기 전까지 그대로 유지된다 — FeesPage가 언마운트될 때마다 풀리던 이전 로컬
+  // useState 방식의 불편함을 없애기 위함. 세터는 그대로 두되 store 갱신 함수로 바꿔치기한다.
+  const {
+    projectNumber: filterProjectNumber,
+    projectName: filterProjectName,
+    leadInstitution: filterLeadInstitution,
+    researchLead: filterResearchLead,
+    assignedManager: filterAssignedManager,
+    assignedManagerPrimary: filterAssignedManagerPrimary,
+    projectStatus: filterProjectStatus,
+    agency: filterAgency,
+    billingType: filterBillingType,
+    collectionStatus: filterCollectionStatus,
+    onlyReceivable: filterOnlyReceivable,
+    invoiceDateFrom, invoiceDateTo, termEndDateFrom, termEndDateTo,
+  } = feesFilters;
+  const setFilterProjectNumber   = (v: string) => updateFeesFilters({ projectNumber: v });
+  const setFilterProjectName     = (v: string) => updateFeesFilters({ projectName: v });
+  const setFilterLeadInstitution = (v: string) => updateFeesFilters({ leadInstitution: v });
+  const setFilterResearchLead    = (v: string) => updateFeesFilters({ researchLead: v });
+  const setFilterAssignedManager = (v: string) => updateFeesFilters({ assignedManager: v });
+  const setFilterAssignedManagerPrimary = (v: string) => updateFeesFilters({ assignedManagerPrimary: v });
+  const setFilterProjectStatus   = (v: string) => updateFeesFilters({ projectStatus: v });
+  const setFilterAgency          = (v: string) => updateFeesFilters({ agency: v });
+  const setFilterBillingType     = (v: string) => updateFeesFilters({ billingType: v });
+  const setFilterCollectionStatus = (v: string) => updateFeesFilters({ collectionStatus: v });
+  const setFilterOnlyReceivable  = (v: boolean) => updateFeesFilters({ onlyReceivable: v });
+  const setInvoiceDateFrom = (v: string) => updateFeesFilters({ invoiceDateFrom: v });
+  const setInvoiceDateTo   = (v: string) => updateFeesFilters({ invoiceDateTo: v });
+  const setTermEndDateFrom = (v: string) => updateFeesFilters({ termEndDateFrom: v });
+  const setTermEndDateTo   = (v: string) => updateFeesFilters({ termEndDateTo: v });
+  // 다른 화면에서 "/fees?status=..." 형태로 딥링크한 경우엔(예: 대시보드 위젯) 저장된 필터보다
+  // URL 쪽을 우선한다 — 마운트 시 한 번만 반영.
+  useEffect(() => {
+    const status = searchParams.get("status");
+    if (status) updateFeesFilters({ projectStatus: status });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const { agencyAssignedFrom, agencyAssignedTo } = feesFilters;
+  const setAgencyAssignedFrom = (v: string) => updateFeesFilters({ agencyAssignedFrom: v });
+  const setAgencyAssignedTo   = (v: string) => updateFeesFilters({ agencyAssignedTo: v });
   const [expandedKey, setExpandedKey]     = useState<string | null>(null);
   const [modal, setModal]                 = useState<ModalState | null>(null);
   const [selectedKeys, setSelectedKeys]   = useState<Set<string>>(new Set());
   const [showBulkNotice, setShowBulkNotice] = useState(false);
   const [showBulkSimpleNotice, setShowBulkSimpleNotice] = useState<SimpleNoticeKind | null>(null);
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
   const [showRcmsUpload, setShowRcmsUpload] = useState(false);
   // 고정열(약칭~연구책임자, 5개)이 차지하는 폭이 좁은 화면에서는 오른쪽 스크롤 영역을 거의 다 잡아먹으므로,
   // 필요할 때 꺼서 일반 표처럼 전체를 스크롤해 볼 수 있게 한다. 체크박스·펼치기 열은 폭이 작아(64px) 계속 고정해둔다.
@@ -2471,6 +2500,14 @@ export default function FeesPage() {
   const hasDateFilter = invoiceDateFrom !== "" || invoiceDateTo !== "";
   const hasTermEndDateFilter = termEndDateFrom !== "" || termEndDateTo !== "";
   const hasAgencyAssignedFilter = agencyAssignedFrom !== "" || agencyAssignedTo !== "";
+  // 검색 필터가 store에 남아 과제 상세를 오가도 안 풀리게 됐으니, 전부 한 번에 되돌릴 수 있는
+  // 길도 필요하다 — 날짜/상태 그룹별 "초기화"는 이미 있지만 텍스트 필터·과제상태는 따로 없었다.
+  const hasAnyFeesFilter =
+    filterProjectNumber !== "" || filterProjectName !== "" || filterLeadInstitution !== "" ||
+    filterResearchLead !== "" || filterAssignedManager !== "" || filterAssignedManagerPrimary !== "" ||
+    filterProjectStatus !== "ACTIVE" || filterAgency !== "ALL" || filterBillingType !== "ALL" ||
+    filterCollectionStatus !== "ALL" || filterOnlyReceivable ||
+    hasDateFilter || hasTermEndDateFilter || hasAgencyAssignedFilter;
 
   const filtered = useMemo(
     () =>
@@ -2593,6 +2630,19 @@ export default function FeesPage() {
     if (!confirm(`선택한 과제 ${projectIds.length}건을 '완료' 상태로 변경하시겠습니까?`)) return;
     projectIds.forEach((id) => updateProject(id, { status: "COMPLETED" }));
     setSelectedKeys(new Set());
+  }
+
+  // 선택된 행(연차 단위) → 과제 단위로 묶어 "선택 삭제" 확인 모달에 보여줄 대상 목록.
+  // 초기 업로드 과정에서 잘못 등록된 과제를 여러 건 한 번에 지울 때 쓴다.
+  const selectedProjectsForDelete = useMemo(() => {
+    const ids = Array.from(new Set(filtered.filter((r) => selectedKeys.has(r.key)).map((r) => r.projectId))).filter(Boolean);
+    return ids.map((id) => projects.find((p) => p.id === id)).filter((p): p is Project => !!p);
+  }, [filtered, selectedKeys, projects]);
+
+  function deleteSelectedProjects() {
+    selectedProjectsForDelete.forEach((p) => deleteProject(p.id));
+    setSelectedKeys(new Set());
+    setShowBulkDeleteConfirm(false);
   }
 
   // 선택된 행 → 과제 단위로 묶어 "정산절차 안내 공문 일괄발송" 모달에 넘길 대상 목록을 만든다.
@@ -2998,6 +3048,14 @@ export default function FeesPage() {
         <div className="px-5 py-2.5 flex items-center gap-2 bg-slate-50/70 rounded-t-xl">
           <FiSearch size={13} className="text-slate-400" />
           <span className="text-xs font-semibold text-slate-500 tracking-wide">검색 필터</span>
+          {hasAnyFeesFilter && (
+            <button
+              onClick={resetFeesFilters}
+              className="ml-auto text-xs text-slate-400 hover:text-slate-600 px-2.5 py-1 rounded-lg hover:bg-white transition-colors"
+            >
+              전체 초기화
+            </button>
+          )}
         </div>
 
         {/* 텍스트 필터 — 값이 짧은 필터(과제번호/연구책임자/과제담당자)는 좁게, 과제명은 넉넉하게 —
@@ -3210,6 +3268,14 @@ export default function FeesPage() {
                 <FiSend size={12} /> 입금 확인 요청 일괄발송
               </button>
             </>
+          )}
+          {canDeleteProjects && (
+            <button
+              onClick={() => setShowBulkDeleteConfirm(true)}
+              className="flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-lg text-red-600 bg-white border border-red-300 hover:bg-red-50 transition-colors"
+            >
+              <FiTrash2 size={12} /> 선택 과제 삭제
+            </button>
           )}
           <button
             onClick={() => setSelectedKeys(new Set())}
@@ -3696,6 +3762,42 @@ export default function FeesPage() {
             senderUser={bulkNoticeSenderUser}
             onClose={() => setShowBulkSimpleNotice(null)}
           />
+        </Modal>
+      )}
+      {showBulkDeleteConfirm && (
+        <Modal title="선택 과제 삭제" onClose={() => setShowBulkDeleteConfirm(false)}>
+          <div className="p-5 space-y-4">
+            <p className="text-sm text-slate-700">
+              선택한 과제 <strong className="font-semibold">{selectedProjectsForDelete.length}건</strong>을 삭제하시겠습니까?
+            </p>
+            <div className="max-h-48 overflow-y-auto border border-slate-100 rounded-lg divide-y divide-slate-50">
+              {selectedProjectsForDelete.map((p) => (
+                <div key={p.id} className="px-3 py-2 text-xs text-slate-600 flex items-center gap-2">
+                  <span className="font-mono text-slate-400 shrink-0">{p.projectNumber}</span>
+                  <span className="truncate">{p.projectName}</span>
+                </div>
+              ))}
+            </div>
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-700 space-y-1">
+              <p className="font-medium">함께 삭제되는 데이터 (되돌릴 수 없습니다)</p>
+              <ul className="list-disc list-inside space-y-0.5">
+                <li>참여기관 정보</li>
+                <li>연차별 수수료 산정·청구 내역</li>
+                <li>이슈/메모</li>
+                <li>미청구액·미수금 내역</li>
+                <li>세금계산서 내역</li>
+              </ul>
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button onClick={() => setShowBulkDeleteConfirm(false)}
+                className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
+              <button
+                onClick={deleteSelectedProjects}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors">
+                삭제
+              </button>
+            </div>
+          </div>
         </Modal>
       )}
       {modal?.mode === "collection" && (
