@@ -1906,34 +1906,63 @@ function getNotifState(userId: string): { readIds: string[]; dismissedIds: strin
   return _state.notificationState[userId] ?? { readIds: [], dismissedIds: [] };
 }
 
+// 로그인한 사용자당 한 번만 서버에서 읽음/삭제 상태를 불러온다 — 새로고침해도 유지되도록.
+// (알림 목록 자체는 항상 원본 데이터에서 다시 계산되므로 여기선 이 두 배열만 있으면 된다.)
+const _notifStateHydratedUserIds = new Set<string>();
+
+export function hydrateNotificationState(userId: string): void {
+  if (typeof window === "undefined" || _notifStateHydratedUserIds.has(userId)) return;
+  _notifStateHydratedUserIds.add(userId);
+  fetch("/api/notification-state")
+    .then((res) => res.json())
+    .then((data: { ok: boolean; readIds?: string[]; dismissedIds?: string[] }) => {
+      if (data.ok) {
+        _state = {
+          ..._state,
+          notificationState: { ..._state.notificationState, [userId]: { readIds: data.readIds ?? [], dismissedIds: data.dismissedIds ?? [] } },
+        };
+        notify();
+      }
+    })
+    .catch((err) => {
+      console.error("알림 상태를 불러오지 못했습니다.", err);
+      _notifStateHydratedUserIds.delete(userId);
+    });
+}
+
+function persistNotificationState(state: { readIds: string[]; dismissedIds: string[] }): void {
+  fetch("/api/notification-state", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(state),
+  }).catch((err) => console.error("알림 상태를 저장하지 못했습니다.", err));
+}
+
 export function markNotificationRead(userId: string, id: string): void {
   const cur = getNotifState(userId);
   if (cur.readIds.includes(id)) return;
-  _state = {
-    ..._state,
-    notificationState: { ..._state.notificationState, [userId]: { ...cur, readIds: [...cur.readIds, id] } },
-  };
+  const next = { ...cur, readIds: [...cur.readIds, id] };
+  _state = { ..._state, notificationState: { ..._state.notificationState, [userId]: next } };
   notify();
+  persistNotificationState(next);
 }
 
 export function markAllNotificationsRead(userId: string, ids: string[]): void {
   const cur = getNotifState(userId);
   const merged = Array.from(new Set([...cur.readIds, ...ids]));
-  _state = {
-    ..._state,
-    notificationState: { ..._state.notificationState, [userId]: { ...cur, readIds: merged } },
-  };
+  const next = { ...cur, readIds: merged };
+  _state = { ..._state, notificationState: { ..._state.notificationState, [userId]: next } };
   notify();
+  persistNotificationState(next);
 }
 
 export function dismissNotification(userId: string, id: string): void {
   const cur = getNotifState(userId);
   if (cur.dismissedIds.includes(id)) return;
-  _state = {
-    ..._state,
-    notificationState: { ..._state.notificationState, [userId]: { ...cur, dismissedIds: [...cur.dismissedIds, id] } },
-  };
+  const next = { ...cur, dismissedIds: [...cur.dismissedIds, id] };
+  _state = { ..._state, notificationState: { ..._state.notificationState, [userId]: next } };
   notify();
+  persistNotificationState(next);
 }
 
 // ============================================================

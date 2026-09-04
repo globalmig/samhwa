@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth, logout } from "@/lib/auth";
-import { useStore, markNotificationRead, markAllNotificationsRead, dismissNotification } from "@/lib/store";
+import { useStore, markNotificationRead, markAllNotificationsRead, dismissNotification, hydrateNotificationState } from "@/lib/store";
 import { computeOverdueAlerts, computeIssueAlerts, isAlertVisibleToUser, isIssueVisibleToUser } from "@/lib/notifications";
 import { fmtDatetime } from "@/lib/utils";
 
@@ -68,6 +68,10 @@ export default function Header() {
   const { receivables, projects, notices, projectIssues, notificationState } = useStore();
   const [menuOpen, setMenuOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
+
+  useEffect(() => {
+    if (user) hydrateNotificationState(user.id);
+  }, [user]);
 
   function resolveTitle(path: string): string {
     if (PAGE_TITLES[path]) return PAGE_TITLES[path];
