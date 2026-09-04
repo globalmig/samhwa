@@ -253,7 +253,9 @@ export default function NoticeDocumentTemplatesPage() {
                     value={newName}
                     onChange={(e) => setNewName(e.target.value)}
                     placeholder="예: 정산절차 안내 공문 (신규)"
-                    onKeyDown={(e) => { if (e.key === "Enter") createTemplate(); }}
+                    // 한글 입력 중(조합 중) 마지막 글자를 확정하는 Enter까지 실제 Enter로 잡혀
+                    // createTemplate()이 두 번 불려서 같은 이름의 템플릿이 2개 등록되는 것을 막는다.
+                    onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) createTemplate(); }}
                     className="w-full text-base border border-slate-200 rounded-lg px-4 py-3 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
                   />
                   <p className="text-xs text-slate-400 mt-2">

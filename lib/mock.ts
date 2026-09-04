@@ -3273,12 +3273,20 @@ export interface AgencyNoticeTemplateEntry {
 // 발송 시 실제 전담기관 정식명칭(FeeInvoiceTarget.agencyFullName)으로 자동 치환된다.
 export interface FeeInvoiceTemplate {
   title: string;            // 제목. 예: "{agency} 전담과제 연차상시점검 수수료 청구의 건"
-  bodyIntro: string[];      // 본문 안내문 2줄
+  bodyIntro: string[];      // 본문 안내문 — 각 줄은 줄바꿈(엔터)을 포함할 수 있다
   periodLabel: string;      // 대상과제현황 표의 기간 행 라벨. 예: "당해사업연도" | "정산대상기간"
+  // "■ 수수료" 섹션(표) 노출 여부 — 미지정(undefined)이면 기존 템플릿과 동일하게 항상 노출(true)한다.
+  // 정산결과 안내·제출 독촉처럼 금액표가 필요 없는 "기타 공문"에서 꺼둘 수 있게 추가했다.
+  feeSectionEnabled?: boolean;
   feeSectionTitle: string;  // "■ ..." 수수료 표 섹션 제목
   feeStdLabel: string;      // 공급가액 행 라벨
   surchargeLabel: string;   // 부가세 행 라벨
   feeTotalLabel: string;    // 합계(VAT 포함) 행 라벨
+  // "■ 입금계좌" 줄 노출 여부 — 미지정(undefined)이면 기존과 동일하게 항상 노출(true)한다.
+  depositAccountEnabled?: boolean;
+  // "■ 문의사항 연락처" 표 — 비어 있으면(기본) 섹션 자체가 안 보인다. NoticeLetterPreview(정산절차
+  // 안내 공문)의 같은 이름 섹션과 동일한 구조를 그대로 재사용한다.
+  contactRows?: NoticeContactRow[];
 }
 // 카테고리(category) 안에 여러 템플릿을 등록할 수 있되, isDefault로 표시된 하나만 발송 시 자동
 // 적용되는 대표양식이다 — 카테고리마다 정확히 1개씩 있어야 한다. ANNUAL/SETTLEMENT는 TermFee 등
@@ -3455,6 +3463,7 @@ export const EMPTY_FEE_INVOICE_TEMPLATE: FeeInvoiceTemplate = {
   feeStdLabel: "수수료 공급가액",
   surchargeLabel: "부가세",
   feeTotalLabel: "",
+  contactRows: [],
 };
 
 // 수수료 청구서 발송(app/fees/page.tsx의 DispatchModal)이 항상 카테고리별 대표양식을 찾아 쓰므로,
@@ -3538,19 +3547,21 @@ export const feeInvoiceTemplates: FeeInvoiceTemplateEntry[] = [
 ];
 
 // ============================================================
-// 간단 안내 메일 양식 (계산서발행 서류 요청 / 입금 확인 요청)
+// 간단 안내 메일 양식 (계산서발행 서류 요청 / 입금 확인 요청 / 기타 공문)
 // ============================================================
 // 청구서(FeeInvoiceTemplate)와 달리 첨부파일·수수료 표가 없는, 본문 텍스트 하나만 보내는 안내
 // 메일이라 별도의 단순한 구조로 관리한다. subject/body 안의 {토큰}은 발송 시 실제 과제 정보로
 // 치환된다 — 사용 가능한 토큰: {과제번호} {과제명} {전담기관명} {기관명} {당해연구개발기간}
 // {연구책임자} {참여기관수} {수수료금액}(입금 확인 요청 전용) {세금계산서발행일}(입금 확인 요청 전용)
+// OTHER_MAIL(기타 공문)은 청구서 첨부용 FeeInvoiceTemplateEntry의 "OTHER" 카테고리(청구서 PDF
+// 양식)와는 별개 — 공문발송 드롭다운의 "기타 공문"이 보내는 메일 본문(제목/본문) 쪽 템플릿이다.
 export interface SimpleNoticeTemplate {
   subject: string;
   body: string;
 }
 export interface SimpleNoticeTemplateEntry {
   id: string;
-  category: "DOC_REQUEST" | "PAYMENT_REMINDER";
+  category: "DOC_REQUEST" | "PAYMENT_REMINDER" | "OTHER_MAIL";
   name: string;
   isDefault: boolean;
   content: SimpleNoticeTemplate;

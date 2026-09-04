@@ -9,7 +9,10 @@ import { nowKST } from "@/lib/utils";
 // 세금계산서 공문(첨부파일·서식 있음)과 달리 "메일 본문 하나만" 보내면 되는 간단한 안내 메일 —
 // 계산서발행 서류 요청(세금계산서를 발행하기 전에 사업자등록증 등을 요청)과 입금 확인 요청
 // (발행 후 미수 상태를 독촉)이 여기 해당한다. 필요해지면 이 union에 새 종류를 더 추가하면 된다.
-export type SimpleNoticeKind = "DOC_REQUEST" | "PAYMENT_REMINDER";
+// OTHER_MAIL(기타 공문)은 이 모달로 직접 발송하진 않고(발송은 DispatchModal), 공문 양식 관리
+// (/notice-templates/invoices)에서 같은 템플릿 구조(제목/본문 + {토큰})와 미리보기를 재사용하기
+// 위해서만 이 union에 포함시켰다.
+export type SimpleNoticeKind = "DOC_REQUEST" | "PAYMENT_REMINDER" | "OTHER_MAIL";
 
 export interface SimpleNoticeTarget {
   kind: SimpleNoticeKind;
@@ -31,6 +34,7 @@ export interface SimpleNoticeTarget {
 export const SIMPLE_NOTICE_LABEL: Record<SimpleNoticeKind, string> = {
   DOC_REQUEST: "계산서발행 서류 요청",
   PAYMENT_REMINDER: "입금 확인 요청",
+  OTHER_MAIL: "기타 공문",
 };
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -118,7 +122,9 @@ export default function SimpleNoticeModal({ target, onClose }: { target: SimpleN
       recipientInstitution: target.leadInstitutionName,
       recipientEmail: toEmail.trim(),
       subject,
-      emailType: target.kind,
+      // OTHER_MAIL은 공문 양식 관리(/notice-templates/invoices)의 미리보기 전용이라 이 모달로는
+      // 절대 렌더링되지 않는다 — 실제로 여기서 발송되는 kind는 항상 아래 두 값 중 하나다.
+      emailType: target.kind as "DOC_REQUEST" | "PAYMENT_REMINDER",
       projectNumber: target.projectNumber,
       termNumber: target.termNumber,
       attachments: [],

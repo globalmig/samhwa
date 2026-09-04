@@ -47,7 +47,7 @@ function won(n: number): string {
 }
 
 function esc(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>");
 }
 
 // 템플릿에 저장된 "{agency}" 자리표시자를 실제 전담기관 정식명칭으로 치환한다.
@@ -75,6 +75,72 @@ export function buildFeeInvoiceHtml(target: FeeInvoiceTarget, content: FeeInvoic
       <div style="width:170px;flex-shrink:0;padding:7px 12px;font-size:13px;font-weight:600;color:#334155;background:#f8fafc;border-right:1px dashed #94a3b8;">${label}</div>
       <div style="flex:1;padding:7px 12px;font-size:13px;color:#1e293b;">${value}</div>
     </div>`;
+
+  // 문의사항 연락처 — 정산결과 안내·제출 독촉 같은 기타 공문에서 쓰기 위해 추가. 미리보기(FeeInvoiceLetterPreview)와
+  // 동일하게 내용이 있을 때만 섹션 자체가 나온다.
+  const contactHtml =
+    content.contactRows && content.contactRows.length > 0
+      ? `
+    <div style="margin-bottom:14px;">
+      <p style="font-weight:700;font-size:13px;margin:0 0 6px;">■ 문의사항 연락처</p>
+      <table style="width:100%;border-collapse:collapse;border:1px solid #64748b;font-size:13px;">
+        <thead>
+          <tr style="background:#f1f5f9;">
+            <th style="border:1px solid #94a3b8;padding:7px 12px;font-weight:700;">담당자</th>
+            <th style="border:1px solid #94a3b8;padding:7px 12px;font-weight:700;width:140px;">연락처</th>
+            <th style="border:1px solid #94a3b8;padding:7px 12px;font-weight:700;">이메일</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${content.contactRows
+            .map(
+              (r) => `
+          <tr>
+            <td style="border:1px solid #94a3b8;padding:7px 12px;text-align:center;">${esc(r.role)}</td>
+            <td style="border:1px solid #94a3b8;padding:7px 12px;text-align:center;">${esc(r.contact)}</td>
+            <td style="border:1px solid #94a3b8;padding:7px 12px;text-align:center;color:#1d4ed8;">${esc(r.email)}</td>
+          </tr>`
+            )
+            .join("")}
+        </tbody>
+      </table>
+    </div>`
+      : "";
+
+  // 수수료 표/입금계좌 — 정산결과 안내처럼 금액표가 필요 없는 기타 공문에서는 섹션 자체를 꺼둘 수 있다.
+  const feeSectionHtml =
+    content.feeSectionEnabled === false
+      ? ""
+      : `
+    <div style="margin-bottom:16px;">
+      <p style="font-weight:700;font-size:13px;margin:0 0 6px;">■ ${esc(feeSectionTitle)}</p>
+      <table style="width:100%;border-collapse:collapse;border:1px solid #64748b;font-size:13px;">
+        <thead>
+          <tr style="background:#f1f5f9;">
+            <th style="border:1px solid #94a3b8;padding:7px 12px;font-weight:700;">구분</th>
+            <th style="border:1px solid #94a3b8;padding:7px 12px;font-weight:700;">금액</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="border:1px solid #94a3b8;padding:7px 12px;text-align:center;">${esc(feeStdLabel)}</td>
+            <td style="border:1px solid #94a3b8;padding:7px 12px;text-align:right;">${won(supplyAmount)}</td>
+          </tr>
+          <tr>
+            <td style="border:1px solid #94a3b8;padding:7px 12px;text-align:center;">${esc(surchargeLabel)}</td>
+            <td style="border:1px solid #94a3b8;padding:7px 12px;text-align:right;">${won(taxAmount)}</td>
+          </tr>
+          <tr style="background:#f8fafc;">
+            <td style="border:1px solid #94a3b8;padding:7px 12px;text-align:center;font-weight:700;">${esc(feeTotalLabel)}</td>
+            <td style="border:1px solid #94a3b8;padding:7px 12px;text-align:right;font-weight:700;">${won(totalFee)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>`;
+  const depositAccountHtml =
+    content.depositAccountEnabled === false
+      ? ""
+      : `<p style="font-size:13px;margin:0 0 24px;">■ 입금계좌 : ${esc(companyInfo.depositAccountNote)}</p>`;
 
   return `
   <div style="width:794px;box-sizing:border-box;padding:36px 56px;background:#ffffff;font-family:'Malgun Gothic','맑은 고딕',sans-serif;color:#1e293b;">
@@ -111,33 +177,11 @@ export function buildFeeInvoiceHtml(target: FeeInvoiceTarget, content: FeeInvoic
       </div>
     </div>
 
-    <div style="margin-bottom:16px;">
-      <p style="font-weight:700;font-size:13px;margin:0 0 6px;">■ ${esc(feeSectionTitle)}</p>
-      <table style="width:100%;border-collapse:collapse;border:1px solid #64748b;font-size:13px;">
-        <thead>
-          <tr style="background:#f1f5f9;">
-            <th style="border:1px solid #94a3b8;padding:7px 12px;font-weight:700;">구분</th>
-            <th style="border:1px solid #94a3b8;padding:7px 12px;font-weight:700;">금액</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td style="border:1px solid #94a3b8;padding:7px 12px;text-align:center;">${esc(feeStdLabel)}</td>
-            <td style="border:1px solid #94a3b8;padding:7px 12px;text-align:right;">${won(supplyAmount)}</td>
-          </tr>
-          <tr>
-            <td style="border:1px solid #94a3b8;padding:7px 12px;text-align:center;">${esc(surchargeLabel)}</td>
-            <td style="border:1px solid #94a3b8;padding:7px 12px;text-align:right;">${won(taxAmount)}</td>
-          </tr>
-          <tr style="background:#f8fafc;">
-            <td style="border:1px solid #94a3b8;padding:7px 12px;text-align:center;font-weight:700;">${esc(feeTotalLabel)}</td>
-            <td style="border:1px solid #94a3b8;padding:7px 12px;text-align:right;font-weight:700;">${won(totalFee)}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+    ${contactHtml}
 
-    <p style="font-size:13px;margin:0 0 24px;">■ 입금계좌 : ${esc(companyInfo.depositAccountNote)}</p>
+    ${feeSectionHtml}
+
+    ${depositAccountHtml}
 
     <div style="display:flex;justify-content:flex-end;">
       <div style="text-align:left;">

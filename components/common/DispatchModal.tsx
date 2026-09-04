@@ -9,6 +9,7 @@ import Modal from "@/components/common/Modal";
 import { getCurrentUser } from "@/lib/auth";
 import { generateFeeInvoicePdfDataUrl, buildFeeInvoiceHtml, type FeeInvoiceTarget } from "@/lib/fee-invoice-pdf";
 import { nowKST, todayKST } from "@/lib/utils";
+import { fillTokens, type SimpleNoticeTarget } from "@/components/common/SimpleNoticeModal";
 
 // 수수료 공문 발송(연차상시/위탁정산/역발행/기타) — 청구서 PDF·첨부파일까지 갖춰 실제 메일을 보낸다.
 // 수수료청구관리 목록과 과제 상세 페이지 양쪽에서 똑같이 쓸 수 있도록 공용 컴포넌트로 뺐다.
@@ -198,7 +199,7 @@ function StandardAttachmentsPanel() {
 type AttachmentRow = { name: string; checked: boolean; dataUrl?: string; previewHtml?: string };
 
 export default function DispatchModal({ target, onClose }: { target: DispatchTarget; onClose: () => void }) {
-  const { standardAttachments, users, feeInvoiceTemplates, companyInfo } = useStore();
+  const { standardAttachments, users, feeInvoiceTemplates, simpleNoticeTemplates, companyInfo } = useStore();
   // getCurrentUser()는 로그인 시점 스냅샷이라 이후 등록된 하이웍스 계정 정보가 반영되지 않으므로,
   // 실시간 store에서 같은 id의 사용자 레코드를 다시 찾아 발신 계정으로 사용한다.
   const senderUser = users.find((u) => u.id === getCurrentUser()?.id) ?? null;
@@ -260,6 +261,27 @@ ${target.projectName} 과제의 ${termLabel} ${compact} 청구서를 첨부하�
 감사합니다.
 ${companyInfo.name} 드림`;
   }
+
+  // 기타 공문(자유 양식) 메일 제목/본문 — 공문 양식 관리 > 기타 공문(메일)(/notice-templates/invoices)에
+  // 등록해둔 템플릿 중 하나를 골라 아래 { 토큰 }을 이 과제/수신자 정보로 치환해 채워 넣는다.
+  // (계산서발행 서류 요청·입금 확인 요청과 같은 SimpleNoticeTemplateEntry 구조·토큰 치환을 그대로 재사용.)
+  function buildOtherMailTarget(): SimpleNoticeTarget {
+    return {
+      kind: "OTHER_MAIL",
+      projectNumber: target.projectNumber,
+      projectName: target.projectName,
+      agencyName: target.agencyShortName,
+      leadInstitutionName: target.leadInstitutionName,
+      termStart: target.startDate,
+      termEnd: target.endDate,
+      researchLead: target.researchLead,
+      participantCount: target.participantCount,
+      recipientEmail: target.recipientEmail,
+    };
+  }
+
+  const otherMailTemplates = simpleNoticeTemplates.filter((t) => t.category === "OTHER_MAIL");
+  const defaultOtherMailTemplate = otherMailTemplates.find((t) => t.isDefault) ?? otherMailTemplates[0];
 
   // 청구서 문구/라벨은 하드코딩이 아니라 공문관리 > 수수료 청구서 양식(/notice-templates/invoices)에서
   // 카테고리별로 등록해둔 대표양식을 그대로 쓴다 — 선택 UI 없이 항상 자동 적용. 역발행/기타는 연차상시/
@@ -333,8 +355,13 @@ ${companyInfo.name} 드림`;
 
   const [feeCategory,  setFeeCategory]  = useState(target.feeCategory);
   const [toEmailRaw,   setToEmailRaw]   = useState(target.recipientEmail);
-  const [subject,      setSubject]      = useState(() => isOther ? "" : buildSubject(target.feeCategory));
-  const [body,         setBody]         = useState(() => isOther ? "" : buildBody(target.feeCategory));
+  const [otherTemplateId, setOtherTemplateId] = useState(() => isOther ? (defaultOtherMailTemplate?.id ?? "") : "");
+  const [subject,      setSubject]      = useState(() => isOther
+    ? (defaultOtherMailTemplate ? fillTokens(defaultOtherMailTemplate.content.subject, buildOtherMailTarget()) : "")
+    : buildSubject(target.feeCategory));
+  const [body,         setBody]         = useState(() => isOther
+    ? (defaultOtherMailTemplate ? fillTokens(defaultOtherMailTemplate.content.body, buildOtherMailTarget()) : "")
+    : buildBody(target.feeCategory));
   const [attachments,  setAttachments]  = useState<AttachmentRow[]>(() => buildAttachments(target.feeCategory));
   const [sending,      setSending]      = useState(false);
   const [sent,         setSent]         = useState(false);
@@ -379,6 +406,17 @@ ${companyInfo.name} 드림`;
     setSubject(buildSubject(next));
     setBody(buildBody(next));
     setAttachments(buildAttachments(next));
+  }
+
+  // 기타 공문 템플릿 선택 — 고르면 제목/본문을 그 템플릿으로 덮어쓰고, "직접 작성"을 고르면 비워서
+  // 처음부터 자유롭게 쓸 수 있게 한다. 고른 뒤에도 제목/본문 입력창에서 바로 수정할 수 있다.
+  function applyOtherTemplate(id: string) {
+    setOtherTemplateId(id);
+    const entry = otherMailTemplates.find((t) => t.id === id);
+    if (!entry) { setSubject(""); setBody(""); return; }
+    const sample = buildOtherMailTarget();
+    setSubject(fillTokens(entry.content.subject, sample));
+    setBody(fillTokens(entry.content.body, sample));
   }
 
   const emails = parseEmails(toEmailRaw);
@@ -524,6 +562,26 @@ ${companyInfo.name} 드림`;
               </button>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* 기타 공문 — 공문 양식 관리에 등록해둔 템플릿 중 하나를 골라 제목/본문을 채운다 */}
+      {isOther && (
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium text-slate-600">공문 템플릿</label>
+          <select
+            value={otherTemplateId}
+            onChange={(e) => applyOtherTemplate(e.target.value)}
+            className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+          >
+            <option value="">직접 작성</option>
+            {otherMailTemplates.map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
+          {otherMailTemplates.length === 0 && (
+            <p className="text-[11px] text-slate-400">등록된 템플릿이 없습니다 — 공문 양식 관리 &gt; 기타 공문(메일)에서 추가할 수 있습니다.</p>
+          )}
         </div>
       )}
 

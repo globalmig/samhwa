@@ -1,6 +1,7 @@
 import Image from "next/image";
 import type { ReactNode } from "react";
-import { type FeeInvoiceTemplate } from "@/lib/mock";
+import { FiPlus, FiX } from "react-icons/fi";
+import { type FeeInvoiceTemplate, type NoticeContactRow } from "@/lib/mock";
 import { fmtWonFull } from "@/lib/utils";
 import { useStore, updateCompanyInfo } from "@/lib/store";
 
@@ -54,6 +55,73 @@ function InlineInput({
       className={`${editableCls} ${className}`}
     />
   );
+}
+
+// 절차 안내 공문(NoticeLetterPreview)과 동일하게, 본문 안내 문구는 한 줄짜리 input이 아니라
+// 엔터로 줄을 늘릴 수 있는 textarea로 편집한다.
+function InlineTextarea({
+  value,
+  onChange,
+  className = "",
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  className?: string;
+}) {
+  return (
+    <textarea
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      rows={Math.max(1, value.split("\n").length)}
+      className={`${editableCls} resize-y ${className}`}
+    />
+  );
+}
+
+function RemoveDot({ onClick, title = "삭제" }: { onClick: () => void; title?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className="shrink-0 p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+    >
+      <FiX size={12} />
+    </button>
+  );
+}
+
+// 이 행 바로 아래에 빈 행을 끼워 넣는다 — NoticeLetterPreview의 InsertDot과 동일한 동작.
+function InsertDot({ onClick, title = "아래에 행 추가" }: { onClick: () => void; title?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className="shrink-0 p-1 text-slate-300 hover:text-blue-500 hover:bg-blue-50 rounded transition-colors"
+    >
+      <FiPlus size={12} />
+    </button>
+  );
+}
+
+function AddRow({ onClick, label }: { onClick: () => void; label: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700 mt-2"
+    >
+      <FiPlus size={11} /> {label}
+    </button>
+  );
+}
+
+// 배열의 index번째 항목 "바로 아래"에 새 항목을 끼워 넣는다.
+function insertAt<T>(arr: T[], index: number, item: T): T[] {
+  const next = [...arr];
+  next.splice(index + 1, 0, item);
+  return next;
 }
 
 function MetaRow({ label, dynamic, children }: { label: string; dynamic?: boolean; children: ReactNode }) {
@@ -159,18 +227,26 @@ export default function FeeInvoiceLetterPreview({
         </p>
       )}
 
-      {/* 본문 안내 문구 */}
+      {/* 본문 안내 문구 — 절차 안내 공문(NoticeLetterPreview)과 동일하게 엔터로 줄을 늘릴 수 있고,
+          문구 단위로 추가·삭제할 수 있다. */}
       <ol className="mt-5 space-y-2.5 list-decimal list-outside pl-5 marker:text-slate-500">
         {template.bodyIntro.map((line, i) => (
           <li key={i}>
             {editable ? (
-              <InlineInput value={line} onChange={(v) => setBodyLine(i, v)} className="w-full" />
+              <div className="flex items-start gap-1.5">
+                <InlineTextarea value={line} onChange={(v) => setBodyLine(i, v)} className="flex-1" />
+                <InsertDot onClick={() => setField("bodyIntro", insertAt(template.bodyIntro, i, ""))} />
+                <RemoveDot onClick={() => setField("bodyIntro", template.bodyIntro.filter((_, j) => j !== i))} />
+              </div>
             ) : (
-              line
+              <span style={{ whiteSpace: "pre-line" }}>{line}</span>
             )}
           </li>
         ))}
       </ol>
+      {editable && (
+        <AddRow onClick={() => setField("bodyIntro", [...template.bodyIntro, ""])} label="문구 추가" />
+      )}
 
       <p className="text-center text-lg font-bold tracking-[0.5em] my-5">- 다 음 -</p>
 
@@ -204,67 +280,178 @@ export default function FeeInvoiceLetterPreview({
         </div>
       </div>
 
-      {/* 수수료 표 — 라벨은 편집 가능, 금액은 항상 샘플/실데이터 표시 전용 */}
-      <div className="mb-5">
-        {editable ? (
-          <div className="flex items-center gap-1.5 mb-1.5">
-            <span className="font-bold shrink-0">■</span>
-            <InlineInput
-              value={template.feeSectionTitle}
-              onChange={(v) => setField("feeSectionTitle", v)}
-              className="font-bold max-w-sm"
-              placeholder="연차상시점검 수수료"
+      {/* 문의사항 연락처 — 정산결과 안내·제출 독촉 같은 기타 공문에서 쓰기 위해 추가. 내용이 있으면
+          항상 보여주고, 비어 있으면(기본) 편집 모드에서만 "행 추가" 버튼을 보여준다. */}
+      {((template.contactRows?.length ?? 0) > 0 || editable) && (
+        <div className="mb-5">
+          <p className="font-bold mb-1.5">■ 문의사항 연락처</p>
+          {(template.contactRows?.length ?? 0) > 0 && (
+            <div className="overflow-x-auto border border-slate-400">
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr className="bg-slate-100 border-b border-slate-400">
+                    <th className="px-3 py-2.5 text-sm font-semibold text-slate-700 border-r border-slate-300">담당자</th>
+                    <th className="px-3 py-2.5 text-sm font-semibold text-slate-700 border-r border-slate-300 w-40">연락처</th>
+                    <th className="px-3 py-2.5 text-sm font-semibold text-slate-700">이메일</th>
+                    {editable && <th className="w-14 border-l border-slate-300" />}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(template.contactRows ?? []).map((row, i) => (
+                    <tr key={i} className={i > 0 ? "border-t border-slate-300" : ""}>
+                      {editable ? (
+                        <>
+                          <td className="px-2 py-2 text-center border-r border-slate-300">
+                            <InlineInput
+                              value={row.role}
+                              onChange={(v) =>
+                                setField("contactRows", (template.contactRows ?? []).map((r, j) => (j === i ? { ...r, role: v } : r)))
+                              }
+                              className="text-center font-medium"
+                            />
+                          </td>
+                          <td className="px-2 py-2 text-center border-r border-slate-300">
+                            <InlineInput
+                              value={row.contact}
+                              onChange={(v) =>
+                                setField("contactRows", (template.contactRows ?? []).map((r, j) => (j === i ? { ...r, contact: v } : r)))
+                              }
+                              className="text-center"
+                            />
+                          </td>
+                          <td className="px-2 py-2 text-center">
+                            <InlineInput
+                              value={row.email}
+                              onChange={(v) =>
+                                setField("contactRows", (template.contactRows ?? []).map((r, j) => (j === i ? { ...r, email: v } : r)))
+                              }
+                              className="text-center text-blue-700"
+                            />
+                          </td>
+                          <td className="px-1 py-2 text-center">
+                            <div className="flex items-center justify-center">
+                              <InsertDot onClick={() => setField("contactRows", insertAt<NoticeContactRow>(template.contactRows ?? [], i, { role: "", contact: "", email: "" }))} />
+                              <RemoveDot onClick={() => setField("contactRows", (template.contactRows ?? []).filter((_, j) => j !== i))} />
+                            </div>
+                          </td>
+                        </>
+                      ) : (
+                        <>
+                          <td className="px-3 py-2.5 text-center font-medium whitespace-nowrap border-r border-slate-300">{row.role}</td>
+                          <td className="px-3 py-2.5 text-center whitespace-nowrap border-r border-slate-300">{row.contact}</td>
+                          <td className="px-3 py-2.5 text-center text-blue-700">{row.email}</td>
+                        </>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {editable && (
+            <AddRow
+              onClick={() => setField("contactRows", [...(template.contactRows ?? []), { role: "", contact: "", email: "" }])}
+              label="행 추가"
             />
+          )}
+        </div>
+      )}
+
+      {/* 수수료 표 — 섹션 전체를 켜고 끌 수 있다(정산결과 안내처럼 금액표가 필요 없는 기타 공문을 위함).
+          라벨은 편집 가능, 금액은 항상 샘플/실데이터 표시 전용. */}
+      {template.feeSectionEnabled !== false ? (
+        <div className="mb-5">
+          {editable ? (
+            <div className="flex items-center gap-1.5 mb-1.5">
+              <span className="font-bold shrink-0">■</span>
+              <InlineInput
+                value={template.feeSectionTitle}
+                onChange={(v) => setField("feeSectionTitle", v)}
+                className="font-bold max-w-sm"
+                placeholder="연차상시점검 수수료"
+              />
+              <button
+                type="button"
+                onClick={() => setField("feeSectionEnabled", false)}
+                className="ml-auto shrink-0 flex items-center gap-1 text-xs font-medium text-red-500 hover:text-red-600 transition-colors"
+              >
+                <FiX size={12} /> 섹션 삭제
+              </button>
+            </div>
+          ) : (
+            <p className="font-bold mb-1.5">■ {template.feeSectionTitle || "—"}</p>
+          )}
+          <div className="overflow-x-auto border border-slate-400">
+            <table className="w-full border-collapse">
+              <thead>
+                <tr className="bg-slate-100 border-b border-slate-400">
+                  <th className="px-3 py-2.5 text-sm font-semibold text-slate-700 border-r border-slate-300">구분</th>
+                  <th className="px-3 py-2.5 text-sm font-semibold text-slate-700">금액</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td className="px-2 py-2 text-center border-r border-slate-300 align-middle">
+                    {editable ? (
+                      <InlineInput value={template.feeStdLabel} onChange={(v) => setField("feeStdLabel", v)} className="text-center" />
+                    ) : (
+                      template.feeStdLabel
+                    )}
+                  </td>
+                  <td className="px-3 py-2.5 text-right text-slate-500">{fmtWonFull(feeAmounts.supply)}</td>
+                </tr>
+                <tr className="border-t border-slate-300">
+                  <td className="px-2 py-2 text-center border-r border-slate-300 align-middle">
+                    {editable ? (
+                      <InlineInput value={template.surchargeLabel} onChange={(v) => setField("surchargeLabel", v)} className="text-center" />
+                    ) : (
+                      template.surchargeLabel
+                    )}
+                  </td>
+                  <td className="px-3 py-2.5 text-right text-slate-500">{fmtWonFull(feeAmounts.tax)}</td>
+                </tr>
+                <tr className="border-t border-slate-300 bg-slate-50">
+                  <td className="px-2 py-2 text-center font-bold border-r border-slate-300 align-middle">
+                    {editable ? (
+                      <InlineInput value={template.feeTotalLabel} onChange={(v) => setField("feeTotalLabel", v)} className="text-center font-bold" />
+                    ) : (
+                      template.feeTotalLabel
+                    )}
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-bold text-slate-700">{fmtWonFull(feeAmounts.total)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          {previewMode && <p className="text-[11px] text-slate-400 mt-1">금액은 예시이며, 실제 발송 시 과제·연차 데이터로 자동 계산됩니다.</p>}
+        </div>
+      ) : (
+        editable && <AddRow onClick={() => setField("feeSectionEnabled", true)} label="■ 수수료 섹션 추가" />
+      )}
+
+      {/* 입금계좌 — 마찬가지로 섹션을 켜고 끌 수 있다. */}
+      {template.depositAccountEnabled !== false ? (
+        editable ? (
+          <div className="flex items-center gap-1.5 mb-6">
+            <span className="text-sm shrink-0">■ 입금계좌 : {companyInfo.depositAccountNote}</span>
+            <button
+              type="button"
+              onClick={() => setField("depositAccountEnabled", false)}
+              className="ml-auto shrink-0 flex items-center gap-1 text-xs font-medium text-red-500 hover:text-red-600 transition-colors"
+            >
+              <FiX size={12} /> 섹션 삭제
+            </button>
           </div>
         ) : (
-          <p className="font-bold mb-1.5">■ {template.feeSectionTitle || "—"}</p>
-        )}
-        <div className="overflow-x-auto border border-slate-400">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr className="bg-slate-100 border-b border-slate-400">
-                <th className="px-3 py-2.5 text-sm font-semibold text-slate-700 border-r border-slate-300">구분</th>
-                <th className="px-3 py-2.5 text-sm font-semibold text-slate-700">금액</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td className="px-2 py-2 text-center border-r border-slate-300 align-middle">
-                  {editable ? (
-                    <InlineInput value={template.feeStdLabel} onChange={(v) => setField("feeStdLabel", v)} className="text-center" />
-                  ) : (
-                    template.feeStdLabel
-                  )}
-                </td>
-                <td className="px-3 py-2.5 text-right text-slate-500">{fmtWonFull(feeAmounts.supply)}</td>
-              </tr>
-              <tr className="border-t border-slate-300">
-                <td className="px-2 py-2 text-center border-r border-slate-300 align-middle">
-                  {editable ? (
-                    <InlineInput value={template.surchargeLabel} onChange={(v) => setField("surchargeLabel", v)} className="text-center" />
-                  ) : (
-                    template.surchargeLabel
-                  )}
-                </td>
-                <td className="px-3 py-2.5 text-right text-slate-500">{fmtWonFull(feeAmounts.tax)}</td>
-              </tr>
-              <tr className="border-t border-slate-300 bg-slate-50">
-                <td className="px-2 py-2 text-center font-bold border-r border-slate-300 align-middle">
-                  {editable ? (
-                    <InlineInput value={template.feeTotalLabel} onChange={(v) => setField("feeTotalLabel", v)} className="text-center font-bold" />
-                  ) : (
-                    template.feeTotalLabel
-                  )}
-                </td>
-                <td className="px-3 py-2.5 text-right font-bold text-slate-700">{fmtWonFull(feeAmounts.total)}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        {previewMode && <p className="text-[11px] text-slate-400 mt-1">금액은 예시이며, 실제 발송 시 과제·연차 데이터로 자동 계산됩니다.</p>}
-      </div>
-
-      <p className="text-sm mb-6">■ 입금계좌 : {companyInfo.depositAccountNote}</p>
+          <p className="text-sm mb-6">■ 입금계좌 : {companyInfo.depositAccountNote}</p>
+        )
+      ) : (
+        editable && (
+          <div className="mb-6">
+            <AddRow onClick={() => setField("depositAccountEnabled", true)} label="■ 입금계좌 섹션 추가" />
+          </div>
+        )
+      )}
 
       {/* 발신 서명 */}
       <div className="pt-6 border-t border-dashed border-slate-300 flex justify-end">

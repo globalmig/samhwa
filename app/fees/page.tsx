@@ -2258,7 +2258,9 @@ function BulkSimpleNoticeModal({
         recipientInstitution: t.leadInstitutionName,
         recipientEmail: t.recipientEmail,
         subject,
-        emailType: kind,
+        // OTHER_MAIL은 공문 양식 관리 미리보기 전용이라 이 일괄발송 모달로는 절대 열리지 않는다 —
+        // 실제로 여기서 발송되는 kind는 항상 아래 두 값 중 하나다.
+        emailType: kind as "DOC_REQUEST" | "PAYMENT_REMINDER",
         projectNumber: t.projectNumber,
         termNumber: t.termNumber,
         attachments: [],
@@ -3706,7 +3708,7 @@ export default function FeesPage() {
         </div>
         <div className="px-4 py-2.5 border-t border-slate-100 flex items-center justify-between gap-3">
           <span className="text-xs text-slate-400">
-            과제 {distinctProjectNumbers.length}건 중 {pagedRows.length}행 표시 (전체 {allRows.length}행)
+            과제 {distinctProjectNumbers.length}건 중 {pagedRows.length}행 표시 (전체 {filtered.length}행)
           </span>
           {totalPages > 1 && (
             <div className="flex items-center gap-1">

@@ -2225,12 +2225,41 @@ export function deleteStandardAttachment(id: string): void {
 // COMPANY INFO (공문 발신 회사 정보 — 회사명·대표이사·직인 등 전담기관과 무관한 고정 레터헤드)
 // ============================================================
 
+let _companyInfoHydrated = false;
+/** 앱이 브라우저에서 처음 로드될 때 한 번, 실제 DB의 회사 정보로 _state.companyInfo를 교체한다. */
+function hydrateCompanyInfo(): void {
+  if (_companyInfoHydrated || typeof window === "undefined") return;
+  _companyInfoHydrated = true;
+  fetch("/api/company-info")
+    .then((res) => res.json())
+    .then((data: { ok: boolean; companyInfo?: CompanyInfo }) => {
+      if (data.ok && data.companyInfo) {
+        _state = { ..._state, companyInfo: data.companyInfo };
+        notify();
+      }
+    })
+    .catch((err) => { console.error("회사 정보를 불러오지 못했습니다.", err); _companyInfoHydrated = false; });
+}
+if (typeof window !== "undefined") hydrateCompanyInfo();
+
 export function updateCompanyInfo(data: Partial<CompanyInfo>): void {
   const before = _state.companyInfo;
   const after = { ...before, ...data };
   _state = { ..._state, companyInfo: after };
   record("companyInfo", "company-info", after.name, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   notify();
+
+  fetch("/api/company-info", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; companyInfo?: CompanyInfo; error?: string }) => {
+      if (res.ok && res.companyInfo) {
+        _state = { ..._state, companyInfo: res.companyInfo };
+        notify();
+      } else if (!res.ok) {
+        console.error("회사 정보 수정 실패:", res.error);
+      }
+    })
+    .catch((err) => console.error("회사 정보 수정 실패:", err));
 }
 
 // ============================================================

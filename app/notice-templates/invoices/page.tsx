@@ -67,17 +67,21 @@ function genAttachmentId(): string {
 }
 
 // 청구서 양식(FeeInvoiceTemplateEntry) 4종 + 첨부 없이 본문만 보내는 간단 안내 메일
-// (SimpleNoticeTemplateEntry) 2종을 같은 탭 목록에서 관리한다. 구조가 서로 달라서(청구서는
+// (SimpleNoticeTemplateEntry) 3종을 같은 탭 목록에서 관리한다. 구조가 서로 달라서(청구서는
 // 표 양식·첨부, 간단 안내 메일은 제목/본문 텍스트뿐) isSimpleCategory로 나눠서 렌더링한다.
+// "기타 공문"이 두 탭으로 나뉘어 있는 이유: OTHER(청구서 PDF 양식)는 공문발송의 "기타 공문"에도
+// 항상 자동 첨부되는 청구서 PDF를 관리하고, OTHER_MAIL(메일)은 그 공문의 제목/본문 자체를
+// 관리한다 — DispatchModal에서 "기타 공문"을 고르면 OTHER_MAIL 템플릿을 선택할 수 있다.
 type Category = FeeInvoiceTemplateEntry["category"] | SimpleNoticeTemplateEntry["category"];
 function isSimpleCategory(cat: Category): cat is SimpleNoticeTemplateEntry["category"] {
-  return cat === "DOC_REQUEST" || cat === "PAYMENT_REMINDER";
+  return cat === "DOC_REQUEST" || cat === "PAYMENT_REMINDER" || cat === "OTHER_MAIL";
 }
 const CATEGORY_TABS: { key: Category; label: string }[] = [
   { key: "ANNUAL", label: "연차상시점검 수수료" },
   { key: "SETTLEMENT", label: "위탁정산 수수료" },
   { key: "REVERSE", label: "역발행 수수료" },
-  { key: "OTHER", label: "기타 공문" },
+  { key: "OTHER", label: "기타 공문 (청구서)" },
+  { key: "OTHER_MAIL", label: "기타 공문 (메일)" },
   { key: "DOC_REQUEST", label: "계산서발행 서류 요청" },
   { key: "PAYMENT_REMINDER", label: "입금 확인 요청" },
 ];
@@ -583,7 +587,9 @@ export default function NoticeInvoiceTemplatesPage() {
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   placeholder="예: 연차상시점검 수수료 청구서 (신규)"
-                  onKeyDown={(e) => { if (e.key === "Enter") createTemplate(); }}
+                  // 한글 입력 중(조합 중) 마지막 글자를 확정하는 Enter까지 실제 Enter로 잡혀
+                  // createTemplate()이 두 번 불려서 같은 이름의 템플릿이 2개 등록되는 것을 막는다.
+                  onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) createTemplate(); }}
                   className="w-full text-base border border-slate-200 rounded-lg px-4 py-3 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
                 />
                 <p className="text-xs text-slate-400 mt-2">
