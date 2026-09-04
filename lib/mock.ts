@@ -3255,6 +3255,8 @@ export interface AgencyNoticeTemplate {
   attachments: NoticeAttachment[];
   // "■ 수수료" 섹션 전체 노출 여부 — 미지정(undefined)이면 기존 템플릿과 동일하게 항상 노출(true)한다.
   feeSectionEnabled?: boolean;
+  // "■ 업무수행 시기" 섹션 전체 노출 여부 — feeSectionEnabled와 동일한 방식.
+  scheduleSectionEnabled?: boolean;
 }
 // 전담기관 하나에 여러 개의 템플릿을 등록해두고 발송 시 선택할 수 있도록 리스트로 관리한다.
 // (수수료 청구서 양식은 FeeInvoiceTemplateEntry로 별도 관리한다 — 전담기관 스코프도, 표 구조도 달라 여기 섞지 않는다.)

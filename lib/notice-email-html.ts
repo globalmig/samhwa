@@ -92,8 +92,9 @@ export function buildNoticeEmailHtml({
       : "";
 
   const scheduleHtml =
-    template.scheduleRows.length > 0
-      ? `
+    template.scheduleSectionEnabled === false || template.scheduleRows.length === 0
+      ? ""
+      : `
       <p style="font-weight:700;margin:0 0 6px;">■ 업무수행 시기</p>
       <table style="width:100%;border-collapse:collapse;border:1px solid #94a3b8;margin-bottom:20px;">
         <tr style="background:#f1f5f9;">
@@ -111,8 +112,7 @@ export function buildNoticeEmailHtml({
           </tr>`
           )
           .join("")}
-      </table>`
-      : "";
+      </table>`;
 
   const contactHtml =
     template.contactRows.length > 0

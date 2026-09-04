@@ -207,6 +207,7 @@ export default function NoticeLetterPreview({
 
   // 미지정(undefined)이면 기존 템플릿과 동일하게 항상 노출한다.
   const feeSectionEnabled = template.feeSectionEnabled ?? true;
+  const scheduleSectionEnabled = template.scheduleSectionEnabled ?? true;
 
   return (
     <div className="text-base text-slate-800 bg-white">
@@ -316,9 +317,22 @@ export default function NoticeLetterPreview({
         </div>
       )}
 
-      {/* 업무수행 시기 */}
+      {/* 업무수행 시기 — 섹션 전체를 켜고 끌 수 있다(feeSectionEnabled와 동일한 방식). 꺼두면
+          (scheduleSectionEnabled === false) 미리보기·발송 메일 모두에서 섹션 자체가 통째로 빠진다. */}
+      {scheduleSectionEnabled ? (
       <div className="mb-5">
-        <p className="font-bold mb-1.5">■ 업무수행 시기</p>
+        <div className="flex items-center justify-between mb-1.5">
+          <p className="font-bold">■ 업무수행 시기</p>
+          {editable && (
+            <button
+              type="button"
+              onClick={() => setField("scheduleSectionEnabled", false)}
+              className="flex items-center gap-1 text-xs font-medium text-red-500 hover:text-red-600 transition-colors"
+            >
+              <FiX size={12} /> 섹션 삭제
+            </button>
+          )}
+        </div>
         <div className="overflow-x-auto border border-slate-400">
           <table className="w-full border-collapse">
             <thead>
@@ -387,6 +401,9 @@ export default function NoticeLetterPreview({
           />
         )}
       </div>
+      ) : (
+        editable && <AddRow onClick={() => setField("scheduleSectionEnabled", true)} label="■ 업무수행 시기 섹션 추가" />
+      )}
 
       {/* 문의사항 연락처 */}
       <div className="mb-5">
