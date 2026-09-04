@@ -37,7 +37,7 @@ import {
   resolveMemberRecipientForTerm,
   resolveResearchLeadForTerm,
 } from "@/lib/fee-calculator";
-import { resolveTermDateRange, nowKST, todayKST } from "@/lib/utils";
+import { resolveTermDateRange, nowKST, todayKST, formatBizNumber } from "@/lib/utils";
 import ManagerPickerModal from "@/components/common/ManagerPickerModal";
 
 type InstitutionGrade = NonNullable<ProjectMember["institutionGrade"]>;
@@ -1530,7 +1530,9 @@ function PreviewStep({
       projectSet.add(r.projectNumber); newProjectList.push({ projectNumber: r.projectNumber, projectName: r.projectName, agencyName: r.agencyName });
     }
     if (r.bizNumber && r.willRegister.institution && !instSet.has(r.bizNumber)) {
-      instSet.add(r.bizNumber); newInstList.push({ bizNumber: r.bizNumber, institutionName: r.institutionName });
+      // 엑셀에 하이픈 없이 숫자만 입력해도(예: 1234567890) 실제 등록되는 값은 000-00-00000
+      // 형식으로 맞춰지므로, 등록 전 미리보기도 그 최종 형식 그대로 보여준다.
+      instSet.add(r.bizNumber); newInstList.push({ bizNumber: formatBizNumber(r.bizNumber), institutionName: r.institutionName });
     }
   }
 
@@ -2034,7 +2036,7 @@ const ANNUAL_SHEET_NOTES = [
   "선택", "선택", "선택 (\"자율성트랙\"만 인식)",
   "※필수 (YYYY-MM-DD)", "※필수 (YYYY-MM-DD)",
   "선택", "※필수 (이 행의 사업비가 몇 연차 것인지 — 비면 1연차로 잘못 등록됨)", "선택",
-  "※필수", "※필수 (000-00-00000)",
+  "※필수", "※필수 (하이픈 없이 숫자만 입력해도 등록 시 000-00-00000 형식으로 자동 변환됨)",
   "선택 (주관/공동/위탁)", "선택 (최우수/우수(A)/우수(B)/우수(C)/일반, 미입력시 등급 없음)", "선택 (위탁정산/자체정산)",
   "선택 (삼화가 아니면 이 연차를 타회계법인 진행으로 자동 표시)",
   "선택 (연차상시/정산, 미입력시 협약구조로 자동판정 — \"정산형태\"와는 다른 값)",
@@ -2088,7 +2090,7 @@ const STAGE_SHEET_NOTES = [
   "선택 (0=일괄협약, 1 이상=단계협약)", "선택 (연차 숫자)", "선택 (시작단계와 동일해야 함)", "선택 (연차 숫자)",
   "선택 (YYYY-MM-DD, 이 단계의 실제 시작일)", "선택 (YYYY-MM-DD, 이 단계의 실제 종료일)",
   "선택",
-  "※필수", "※필수 (000-00-00000)", "선택 (주관/공동/위탁)", "선택 (최우수/우수(A)/우수(B)/우수(C)/일반)", "선택 (주관기관 행에만)",
+  "※필수", "※필수 (하이픈 없이 숫자만 입력해도 등록 시 000-00-00000 형식으로 자동 변환됨)", "선택 (주관/공동/위탁)", "선택 (최우수/우수(A)/우수(B)/우수(C)/일반)", "선택 (주관기관 행에만)",
   "※필수 (원 단위)", "선택 (원 단위)",
 ];
 const STAGE_SHEET_HEADERS = [
@@ -2776,6 +2778,11 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
     // 없으면 이렇게 등록된 걸 아무도 못 알아챈다. 등록 자체는 막지 않고(단계 정보는 그대로 반영하고)
     // 이슈로 남겨서 담당자가 반드시 확인·정정하게 한다.
     const newProjectMissingInfo: { projectId: string; projectNumber: string; missingFields: string[] }[] = [];
+    // 새로 만든 과제 중 "주관기관 정보 보정"(아래) 단계에서 실제로 role="LEAD" 행을 찾아 주관기관을
+    // 채운 과제만 추적한다 — 파일에 "기관역할구분=주관"으로 표시된 행이 하나도 없으면 과제가 주관기관
+    // 없이(빈 값으로) 그대로 등록되는데, 지금까진 아무 표시 없이 조용히 넘어가 아무도 눈치채지 못했다.
+    const newProjectIdsForLeadCheck = new Map<string, string>(); // projectId → projectNumber
+    const leadResolvedProjectIds = new Set<string>();
 
     // 기존 전담기관·과제·기관 미리 채워두기 (참여기관 연결에 필요)
     for (const a of fundingAgencies) registeredAgencies.set(a.name, a.id);
@@ -2815,7 +2822,9 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         const created = addInstitution({
           name: row.institutionName || "미입력",
           type: "중소기업",
-          bizNumber: row.bizNumber,
+          // 엑셀에 하이픈 없이 숫자만 입력했어도 등록 시 000-00-00000 형식으로 자동 변환한다 —
+          // 하이픈을 직접 입력하지 않아도 되게 하되, 저장되는 값은 항상 같은 형식으로 맞춘다.
+          bizNumber: formatBizNumber(row.bizNumber),
           representativeName: "",
           contactName: "",
           contactEmail: "",
@@ -3020,6 +3029,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           registeredProjects.set(normNum, created.id);
           newProjectAgencyId.set(normNum, agencyId);
           newProjectStartDate.set(normNum, startDateStr);
+          newProjectIdsForLeadCheck.set(created.id, row.projectNumber);
           projectCount++;
 
           // 과제명·총개발시작일자가 비어 있어 임시값("미입력"/오늘 날짜)으로 채워진 채 새로 등록됐다면,
@@ -3390,6 +3400,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           ? { agencyId: resolvedAgencyId, agency: resolvedAgency }
           : {}),
       });
+      leadResolvedProjectIds.add(projectId);
     }
 
     // 회계법인 자동 반영 — "연차별기관별" 시트의 "회계법인" 값이 삼화가 아니면, 그 연차를 타회계법인
@@ -3493,6 +3504,28 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         projectId: info.projectId,
         projectNumber: info.projectNumber,
         content: `RCMS 엑셀 업로드 — 이 과제가 새로 등록될 때 ${info.missingFields.join("·")} 정보가 파일에 없어 임시값으로 채워졌습니다(과제명 "미입력" 및/또는 시작일 "오늘 날짜").\n과제 상세 페이지에서 실제 값으로 정정해주세요.`,
+        author: authorName,
+        createdAt: now,
+        priority: "HIGH",
+        status: "OPEN",
+        recipientGroups: ["MANAGER", "MANAGER_DEPUTY", "ACCOUNTANT"],
+        noInstitution: true,
+      });
+      stageAlertCount++;
+    }
+
+    // 새로 등록된 과제 중 참여기관 어디에도 "기관역할구분=주관"으로 표시된 행이 없어 주관기관을
+    // 끝내 못 채운 경우 — 조용히 빈 값으로 남기지 않고 이슈로 알린다. 이 상태로 두면 화면에
+    // 주관기관이 빈칸으로 보일 뿐 아니라, 표시 이름이 같은 전담기관이 둘 이상(RDA1/RDA2 등) 등록돼
+    // 있을 때 처음에 임의로 배정된 쪽(대개 배열의 나중 항목)이 그대로 굳어버린다.
+    for (const [projectId, projectNumber] of newProjectIdsForLeadCheck) {
+      if (leadResolvedProjectIds.has(projectId)) continue;
+      addProjectIssue({
+        projectId,
+        projectNumber,
+        content:
+          `RCMS 엑셀 업로드 — 이 과제가 새로 등록됐지만 참여기관 중 "기관역할구분"을 "주관"으로 표시한 행이 없어 주관기관이 비어 있습니다.\n` +
+          `전담기관도 정확히 판별되지 않았을 수 있습니다(같은 이름의 전담기관이 여러 개 등록된 경우 특히). 과제 상세 페이지에서 주관기관·전담기관을 확인해 직접 지정해주세요.`,
         author: authorName,
         createdAt: now,
         priority: "HIGH",
