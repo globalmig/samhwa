@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { requireUser, SessionError } from "@/lib/session";
+import { requireWriteAccess, SessionError } from "@/lib/session";
 import { toProject } from "@/lib/project-mapper";
 import type { Project } from "@/lib/mock";
 
@@ -13,7 +13,7 @@ export async function GET() {
 export async function POST(request: Request) {
   let actor;
   try {
-    actor = await requireUser();
+    actor = await requireWriteAccess(["fees", "projects"]);
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;

@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { requireUser, SessionError } from "@/lib/session";
+import { requireWriteAccess, SessionError } from "@/lib/session";
 import { toUnclaimedFee, MOCK_TO_DB_STATUS } from "@/lib/unclaimed-fee-mapper";
 import { getOrCreatePti } from "@/lib/pti-helper";
 import type { UnclaimedFee } from "@/lib/mock";
@@ -16,7 +16,7 @@ export async function GET() {
 export async function POST(request: Request) {
   let actor;
   try {
-    actor = await requireUser();
+    actor = await requireWriteAccess(["unclaimed", "fees"]);
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;

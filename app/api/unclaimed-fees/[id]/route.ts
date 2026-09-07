@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { requireUser, SessionError } from "@/lib/session";
+import { requireWriteAccess, SessionError } from "@/lib/session";
 import { toUnclaimedFee, MOCK_TO_DB_STATUS } from "@/lib/unclaimed-fee-mapper";
 import type { UnclaimedFee } from "@/lib/mock";
 
@@ -13,7 +13,7 @@ export async function PATCH(request: Request, { params }: Params) {
   const { id } = await params;
   let actor;
   try {
-    actor = await requireUser();
+    actor = await requireWriteAccess(["unclaimed", "fees"]);
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;

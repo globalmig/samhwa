@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { requireUser, SessionError } from "@/lib/session";
+import { requireWriteAccess, SessionError } from "@/lib/session";
 import { toReceivable, MOCK_TO_DB_STATUS } from "@/lib/receivable-mapper";
 import { getOrCreatePti } from "@/lib/pti-helper";
 import type { Receivable } from "@/lib/mock";
@@ -22,7 +22,7 @@ export async function GET() {
 export async function POST(request: Request) {
   let actor;
   try {
-    actor = await requireUser();
+    actor = await requireWriteAccess(["receivables", "fees-sales", "fees"]);
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;

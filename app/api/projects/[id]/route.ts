@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { requireUser, SessionError } from "@/lib/session";
+import { requireWriteAccess, SessionError } from "@/lib/session";
 import { toProject } from "@/lib/project-mapper";
 import type { Project } from "@/lib/mock";
 
@@ -11,7 +11,7 @@ export async function PATCH(request: Request, { params }: Params) {
   const { id } = await params;
   let actor;
   try {
-    actor = await requireUser();
+    actor = await requireWriteAccess(["projects", "fees", "fees-info-edit"]);
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -80,7 +80,7 @@ export async function DELETE(_request: Request, { params }: Params) {
   const { id } = await params;
   let actor;
   try {
-    actor = await requireUser();
+    actor = await requireWriteAccess("projects-delete");
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;

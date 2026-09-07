@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { requireUser, SessionError } from "@/lib/session";
+import { requireWriteAccess, SessionError } from "@/lib/session";
 import { getOrCreatePti } from "@/lib/pti-helper";
 import type { TermFee, TermFeeCalc } from "@/lib/mock";
 
@@ -16,7 +16,7 @@ export async function POST(request: Request, { params }: Params) {
   const { id: projectId } = await params;
   let actor;
   try {
-    actor = await requireUser();
+    actor = await requireWriteAccess(["fees", "projects"]);
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
