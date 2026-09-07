@@ -2459,7 +2459,16 @@ function hydratePermissions(): void {
     .then((res) => res.json())
     .then((data: { ok: boolean; pageAccess?: Record<string, Role[]>; writeAccess?: Record<string, Role[]> }) => {
       if (data.ok && data.pageAccess && data.writeAccess) {
-        _state = { ..._state, pageAccess: data.pageAccess, writeAccess: data.writeAccess };
+        // DB(role_permission)에 아예 행이 없는 도메인은 서버 응답에서 키 자체가 빠진다 — 코드에
+        // 새 권한 도메인이 추가됐는데 DB 시드/백필이 안 된 경우가 그렇다. 그런 도메인까지 서버
+        // 응답으로 통째로 교체해버리면 그 기능은 관리자를 포함해 아무도 못 쓰게 조용히 막혀버리므로
+        // (예: fees-sales가 DB에 없어 매출발행 버튼이 전 사용자에게 사라졌던 사고), 서버가 실제로
+        // 값을 준 도메인만 덮어쓰고 나머지는 코드 기본값을 그대로 둔다.
+        _state = {
+          ..._state,
+          pageAccess: { ...initialPageAccess, ...data.pageAccess },
+          writeAccess: { ...initialWriteAccess, ...data.writeAccess },
+        };
         notify();
       }
     })
@@ -2474,14 +2483,26 @@ export function updatePageAccess(path: string, roles: Role[]): void {
   record("permission", `page:${path}`, path, "UPDATE", { roles: { before, after: safeRoles } });
   notify();
 
+  // 저장이 실패하면 화면 체크박스는 이미 바뀐 채로 남아 관리자가 실제로 적용됐다고 착각하기 쉽다 —
+  // 다른 권한 변경 없이 저장(safeRoles)이 조용히 실패했을 때만 되돌린다(reference 비교로, 그 사이
+  // 다른 변경이 또 들어왔으면 그 최신 값을 덮어쓰지 않는다).
+  function rollback() {
+    if (_state.pageAccess[path] === safeRoles) {
+      _state = { ..._state, pageAccess: { ..._state.pageAccess, [path]: before } };
+      notify();
+    }
+  }
+
   fetch("/api/role-permissions", {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ resourceType: "MENU", resourceKey: path, roles: safeRoles }),
   })
     .then((res) => res.json())
-    .then((res: { ok: boolean; error?: string }) => { if (!res.ok) console.error("페이지 접근 권한 저장 실패:", res.error); })
-    .catch((err) => console.error("페이지 접근 권한 저장 실패:", err));
+    .then((res: { ok: boolean; error?: string }) => {
+      if (!res.ok) { console.error("페이지 접근 권한 저장 실패:", res.error); rollback(); }
+    })
+    .catch((err) => { console.error("페이지 접근 권한 저장 실패:", err); rollback(); });
 }
 
 export function updateWriteAccess(domain: string, roles: Role[]): void {
@@ -2491,14 +2512,26 @@ export function updateWriteAccess(domain: string, roles: Role[]): void {
   record("permission", `write:${domain}`, domain, "UPDATE", { roles: { before, after: safeRoles } });
   notify();
 
+  // 위 updatePageAccess와 동일한 이유 — 저장 실패를 콘솔에만 남기고 화면은 그대로 두면, 매출발행
+  // 등 기능 권한을 바꿨다고 착각한 채 다음 새로고침에서야(혹은 이번처럼 DB에 아예 안 남아) 원래대로
+  // 돌아가 있는 걸 알게 된다. reference 비교로 그 사이 다른 변경이 없을 때만 되돌린다.
+  function rollback() {
+    if (_state.writeAccess[domain] === safeRoles) {
+      _state = { ..._state, writeAccess: { ..._state.writeAccess, [domain]: before } };
+      notify();
+    }
+  }
+
   fetch("/api/role-permissions", {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ resourceType: "FEATURE", resourceKey: domain, roles: safeRoles }),
   })
     .then((res) => res.json())
-    .then((res: { ok: boolean; error?: string }) => { if (!res.ok) console.error("기능 쓰기 권한 저장 실패:", res.error); })
-    .catch((err) => console.error("기능 쓰기 권한 저장 실패:", err));
+    .then((res: { ok: boolean; error?: string }) => {
+      if (!res.ok) { console.error("기능 쓰기 권한 저장 실패:", res.error); rollback(); }
+    })
+    .catch((err) => { console.error("기능 쓰기 권한 저장 실패:", err); rollback(); });
 }
 
 // ============================================================
