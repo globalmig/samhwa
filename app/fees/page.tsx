@@ -748,7 +748,9 @@ function CollectionModal({ target, onClose }: { target: CollectionTarget; onClos
 
 // ── InfoEditModal (서류요청·서류회신·실무자·과제담당자 수정) ────
 function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: () => void }) {
-  const { projectMembers, projects, termFees } = useStore();
+  const { projectMembers, projects, termFees, users } = useStore();
+  const selectableUsers = users.filter((u) => u.status === "ACTIVE");
+  const currentProject = projects.find((p) => p.id === target.projectId);
   const [docRequestDate, setDocRequestDate]   = useState(target.docRequestDate);
   const [docReplyDate, setDocReplyDate]       = useState(target.docReplyDate);
   const [recipientName, setRecipientName]     = useState(target.recipientName);
@@ -756,6 +758,11 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
   const [researchLeadEmail, setResearchLeadEmail] = useState(target.researchLeadEmail);
   const [assignedManager, setAssignedManager] = useState(target.assignedManager);
   const [assignedManagerPrimary, setAssignedManagerPrimary] = useState(target.assignedManagerPrimary);
+  // 다른 화면(새 과제 등록, 과제 상세)과 동일하게 [권한관리]에 등록된 계정만 골라 지정할 수
+  // 있게 한다 — 자유 텍스트 입력은 오탈자로 공문 발송 시 연락처·이메일 자동 연동이 깨지기 쉬웠다.
+  const [assignedManagerUserId, setAssignedManagerUserId] = useState(currentProject?.assignedManagerUserId ?? "");
+  const [assignedManagerPrimaryUserId, setAssignedManagerPrimaryUserId] = useState(currentProject?.assignedManagerPrimaryUserId ?? "");
+  const [managerPicker, setManagerPicker] = useState<"primary" | "deputy" | null>(null);
   const [registeredAt, setRegisteredAt]       = useState(target.registeredAt);
 
   // 연차별로 값이 다를 수 있는(연차별 이력이 있는) 필드는 그 연차 하나만의 값으로 upsert한다 —
@@ -815,7 +822,10 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
         researchLeadOverrides,
         assignedManagerHistory,
         assignedManagerPrimaryHistory,
-        ...(isCurrentTerm ? { assignedManager: assignedManager || undefined, assignedManagerPrimary: assignedManagerPrimary || undefined } : {}),
+        ...(isCurrentTerm ? {
+          assignedManager: assignedManager || undefined, assignedManagerPrimary: assignedManagerPrimary || undefined,
+          assignedManagerUserId: assignedManagerUserId || undefined, assignedManagerPrimaryUserId: assignedManagerPrimaryUserId || undefined,
+        } : {}),
         registeredAt: registeredAt || undefined,
       });
     }
@@ -863,6 +873,11 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
           <DateInput value={docReplyDate} onChange={setDocReplyDate} className="w-full" />
         </div>
       </div>
+      {!target.docFeeId && (
+        <p className="text-[11px] text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+          이 연차는 아직 수수료 내역이 생성되지 않아 서류요청일·서류회신일은 저장되지 않습니다 — 주관기관을 지정하면 수수료 내역이 만들어져 저장할 수 있습니다.
+        </p>
+      )}
 
       <div className="grid grid-cols-2 gap-4">
         <div>
@@ -907,23 +922,42 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">과제담당자(부)</label>
-          <input
-            value={assignedManager}
-            onChange={(e) => setAssignedManager(e.target.value)}
-            placeholder="담당자명"
-            className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-          />
+          <button type="button" onClick={() => setManagerPicker("deputy")}
+            className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white text-left flex items-center justify-between gap-2 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+          >
+            <span className={assignedManager ? "text-slate-700" : "text-slate-400"}>
+              {assignedManager || "담당자 선택"}
+            </span>
+            <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400 shrink-0">
+              <path fillRule="evenodd" d="M10 3a1 1 0 01.707.293l5 5a1 1 0 01-1.414 1.414L10 5.414 5.707 9.707a1 1 0 01-1.414-1.414l5-5A1 1 0 0110 3zm-5.707 9.293a1 1 0 011.414 0L10 16.586l4.293-4.293a1 1 0 011.414 1.414l-5 5a1 1 0 01-1.414 0l-5-5a1 1 0 010-1.414z" clipRule="evenodd" />
+            </svg>
+          </button>
         </div>
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">과제담당자(정)</label>
-          <input
-            value={assignedManagerPrimary}
-            onChange={(e) => setAssignedManagerPrimary(e.target.value)}
-            placeholder="담당자명"
-            className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-          />
+          <button type="button" onClick={() => setManagerPicker("primary")}
+            className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white text-left flex items-center justify-between gap-2 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+          >
+            <span className={assignedManagerPrimary ? "text-slate-700" : "text-slate-400"}>
+              {assignedManagerPrimary || "담당자 선택"}
+            </span>
+            <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400 shrink-0">
+              <path fillRule="evenodd" d="M10 3a1 1 0 01.707.293l5 5a1 1 0 01-1.414 1.414L10 5.414 5.707 9.707a1 1 0 01-1.414-1.414l5-5A1 1 0 0110 3zm-5.707 9.293a1 1 0 011.414 0L10 16.586l4.293-4.293a1 1 0 011.414 1.414l-5 5a1 1 0 01-1.414 0l-5-5a1 1 0 010-1.414z" clipRule="evenodd" />
+            </svg>
+          </button>
         </div>
       </div>
+      {managerPicker && (
+        <ManagerPickerModal
+          title={managerPicker === "primary" ? "과제담당자(정) 선택" : "과제담당자(부) 선택"}
+          users={selectableUsers}
+          onSelect={(user) => {
+            if (managerPicker === "primary") { setAssignedManagerPrimary(user.name); setAssignedManagerPrimaryUserId(user.id); }
+            else { setAssignedManager(user.name); setAssignedManagerUserId(user.id); }
+          }}
+          onClose={() => setManagerPicker(null)}
+        />
+      )}
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">등록일 (배정일)</label>
