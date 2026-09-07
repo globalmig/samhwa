@@ -3575,10 +3575,10 @@ export default function FeesPage() {
                             <div className="flex flex-col items-center gap-1">
                               <button
                                 onClick={() => setModal({ mode: "sales-issue", target: salesTarget })}
-                                className="text-[11px] font-medium text-slate-700 hover:text-indigo-700 hover:underline whitespace-nowrap"
-                                title="발행 정보 수정"
+                                className="text-[11px] font-medium px-2 py-1 rounded transition-colors whitespace-nowrap bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200"
+                                title={row.invoiceIssuedAt ? `발행일 ${fmtDate(row.invoiceIssuedAt)} — 클릭하여 수정` : "발행일 미입력 — 클릭하여 수정"}
                               >
-                                {row.invoiceIssuedAt ? fmtDate(row.invoiceIssuedAt) : "발행일 미입력"}
+                                발행완료
                               </button>
                               <button
                                 onClick={() => setModal({ mode: "sales-cancel", target: salesTarget })}
