@@ -868,18 +868,34 @@ if (typeof window !== "undefined") hydrateProjectMembers();
 // project-members는 (project, institution) 그룹 단위 id를 서버가 매길 뿐 아니라 요청 시점에
 // project가 아직 임시 id(addProject의 fetch가 아직 안 끝났을 때 ensureLeadMember가 부르는 경우)일
 // 수도 있어 실패가 정상적으로 일어날 수 있다 — addProject 쪽에서 실제 id를 받은 뒤 다시 부른다.
+// 참여기관을 새로 등록한 직후(item.id가 아직 서버가 모르는 임시 id "pm-...")에 곧바로 그
+// 참여기관을 수정하면(예: 주관기관 지정 직후 "정보수정"에서 실무자 입력), updateProjectMember가
+// 그 임시 id로 PATCH를 보내는데 서버엔 존재하지 않는 id라 조용히 404로 실패하고, 뒤이어 도착하는
+// 이 생성 응답이 그 수정사항 없는 원래 상태로 덮어써 버려 편집이 통째로 사라졌었다(수정 7).
+// 생성이 끝나 진짜 id를 알기 전까지 들어온 수정 요청은 여기 등록해뒀다가, 생성이 끝나면 그 진짜
+// id로 다시 보내도록 updateProjectMember가 확인한다.
+const _pendingMemberCreates = new Map<string, Promise<string>>();
+
 function persistProjectMember(item: ProjectMember): void {
-  fetch("/api/project-members", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(item) })
+  const promise = fetch("/api/project-members", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(item) })
     .then((res) => res.json())
     .then((res: { ok: boolean; member?: ProjectMember; error?: string }) => {
       if (res.ok && res.member) {
         _state = { ..._state, projectMembers: _state.projectMembers.map((m) => (m.id === item.id ? res.member! : m)) };
         notify();
-      } else if (!res.ok) {
-        console.error("참여기관 저장 실패:", res.error);
+        return res.member.id;
       }
+      if (!res.ok) console.error("참여기관 저장 실패:", res.error);
+      return item.id;
     })
-    .catch((err) => console.error("참여기관 저장 실패:", err));
+    .catch((err) => {
+      console.error("참여기관 저장 실패:", err);
+      return item.id;
+    })
+    .finally(() => {
+      _pendingMemberCreates.delete(item.id);
+    });
+  _pendingMemberCreates.set(item.id, promise);
 }
 
 export function addProjectMember(data: Omit<ProjectMember, "id">): ProjectMember {
@@ -1027,17 +1043,36 @@ export function updateProjectMember(id: string, data: Partial<ProjectMember>): v
   }
   notify();
 
-  fetch(`/api/project-members/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(trackedData) })
-    .then((res) => res.json())
-    .then((res: { ok: boolean; member?: ProjectMember; error?: string }) => {
-      if (res.ok && res.member) {
-        _state = { ..._state, projectMembers: _state.projectMembers.map((m) => (m.id === id ? res.member! : m)) };
-        notify();
-      } else if (!res.ok) {
-        console.error("참여기관 수정 실패:", res.error);
-      }
-    })
-    .catch((err) => console.error("참여기관 수정 실패:", err));
+  // recipientOverrides처럼 값을 지워서 undefined로 되돌리는 경우, JSON.stringify는 undefined인
+  // 속성을 통째로 빼버려 서버가 그 필드를 아예 못 받는다(그 필드 하나만 보낼 때 특히 — 서버의
+  // "이 필드가 body에 있으면 반영" 로직 자체가 안 켜져서 삭제가 저장되지 않는다). null로 바꿔
+  // 보내 서버가 "명시적으로 비웠다"를 구분할 수 있게 한다.
+  const body = JSON.stringify(trackedData, (_k, v) => (v === undefined ? null : v));
+
+  // item.id가 아직 서버가 모르는 임시 id(방금 addProjectMember로 막 만든 직후)면, 그 생성 요청이
+  // 끝나 진짜 id를 알기 전까지 이 수정 요청을 미뤄뒀다가 진짜 id로 다시 보낸다(수정 7 — 안 그러면
+  // 임시 id로 보낸 PATCH가 404로 조용히 실패하고, 뒤이어 도착하는 생성 응답이 이 수정사항 없는
+  // 상태로 덮어써 버린다).
+  const sendPatch = (realId: string) => {
+    fetch(`/api/project-members/${realId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body })
+      .then((res) => res.json())
+      .then((res: { ok: boolean; member?: ProjectMember; error?: string }) => {
+        if (res.ok && res.member) {
+          _state = { ..._state, projectMembers: _state.projectMembers.map((m) => (m.id === realId ? res.member! : m)) };
+          notify();
+        } else if (!res.ok) {
+          console.error("참여기관 수정 실패:", res.error);
+        }
+      })
+      .catch((err) => console.error("참여기관 수정 실패:", err));
+  };
+
+  const pendingCreate = _pendingMemberCreates.get(id);
+  if (pendingCreate) {
+    pendingCreate.then(sendPatch);
+  } else {
+    sendPatch(id);
+  }
 }
 
 export interface InstitutionGradeApplyResult {
