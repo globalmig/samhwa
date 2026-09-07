@@ -3546,70 +3546,56 @@ export default function FeesPage() {
                           <span className="text-slate-300 text-xs">—</span>
                         )}
                       </td>
-                      {/* 매출관리 버튼 */}
+                      {/* 매출관리 버튼 — 발행 전엔 "매출발행" 버튼 하나만, 발행 후엔 발행일자와 취소
+                          버튼을 보여준다. 예전엔 발행 후에도 "매출발행"(재발행/수정용) 버튼과 "매출취소"
+                          버튼을 나란히 좁은 칸(w-32)에 욱여넣어, 발행일자는 안 보이고 취소 버튼도
+                          잘려서 없는 것처럼 보였다. */}
                       <td className={`px-3 py-2.5 text-center align-middle w-32 ${rowBorder}`}>
-                        {canEditSales ? (
-                          <div className="flex items-center justify-center gap-1">
+                        {canEditSales ? (() => {
+                          const salesTarget = {
+                            projectId:           row.projectId,
+                            projectNumber:       row.projectNumber,
+                            projectName:         row.projectName,
+                            leadInstitutionName: row.billedInstitutionName,
+                            institutionId:       row.isSplitRow ? row.billedInstitutionId : undefined,
+                            billedInstitutionId: row.billedInstitutionId,
+                            fees:                row.fees,
+                            termYear:            row.termYear,
+                            termNumber:          row.termNumber,
+                            currentBillingType:  row.billingType,
+                            currentIssuedAt:     row.invoiceIssuedAt,
+                            taxInvoiceId:        row.taxInvoiceId,
+                            taxInvoiceStatus:    row.taxInvoiceStatus,
+                            appliedFeeTotal:     row.appliedFeeTotal,
+                            receivableId:        row.receivableId,
+                            paidAmount:          row.paidAmount,
+                          };
+                          const isIssued = !!row.taxInvoiceId && row.taxInvoiceStatus !== "CANCELED";
+                          return isIssued ? (
+                            <div className="flex flex-col items-center gap-1">
+                              <button
+                                onClick={() => setModal({ mode: "sales-issue", target: salesTarget })}
+                                className="text-[11px] font-medium text-slate-700 hover:text-indigo-700 hover:underline whitespace-nowrap"
+                                title="발행 정보 수정"
+                              >
+                                {row.invoiceIssuedAt ? fmtDate(row.invoiceIssuedAt) : "발행일 미입력"}
+                              </button>
+                              <button
+                                onClick={() => setModal({ mode: "sales-cancel", target: salesTarget })}
+                                className="text-[11px] font-medium px-2 py-0.5 rounded transition-colors whitespace-nowrap bg-rose-50 text-rose-600 hover:bg-rose-100 border border-rose-200"
+                              >
+                                취소
+                              </button>
+                            </div>
+                          ) : (
                             <button
-                              onClick={() =>
-                                setModal({
-                                  mode: "sales-issue",
-                                  target: {
-                                    projectId:           row.projectId,
-                                    projectNumber:       row.projectNumber,
-                                    projectName:         row.projectName,
-                                    leadInstitutionName: row.billedInstitutionName,
-                                    institutionId:       row.isSplitRow ? row.billedInstitutionId : undefined,
-                                    billedInstitutionId: row.billedInstitutionId,
-                                    fees:                row.fees,
-                                    termYear:            row.termYear,
-                                    termNumber:          row.termNumber,
-                                    currentBillingType:  row.billingType,
-                                    currentIssuedAt:     row.invoiceIssuedAt,
-                                    taxInvoiceId:        row.taxInvoiceId,
-                                    taxInvoiceStatus:    row.taxInvoiceStatus,
-                                    appliedFeeTotal:     row.appliedFeeTotal,
-                                    receivableId:        row.receivableId,
-                                    paidAmount:          row.paidAmount,
-                                  },
-                                })
-                              }
+                              onClick={() => setModal({ mode: "sales-issue", target: salesTarget })}
                               className="text-[11px] font-medium px-2 py-1 rounded transition-colors whitespace-nowrap bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200"
                             >
                               매출발행
                             </button>
-                            {row.taxInvoiceId && row.taxInvoiceStatus !== "CANCELED" && (
-                              <button
-                                onClick={() =>
-                                  setModal({
-                                    mode: "sales-cancel",
-                                    target: {
-                                      projectId:           row.projectId,
-                                      projectNumber:       row.projectNumber,
-                                      projectName:         row.projectName,
-                                      leadInstitutionName: row.billedInstitutionName,
-                                      institutionId:       row.isSplitRow ? row.billedInstitutionId : undefined,
-                                      billedInstitutionId: row.billedInstitutionId,
-                                      fees:                row.fees,
-                                      termYear:            row.termYear,
-                                      termNumber:          row.termNumber,
-                                      currentBillingType:  row.billingType,
-                                      currentIssuedAt:     row.invoiceIssuedAt,
-                                      taxInvoiceId:        row.taxInvoiceId,
-                                      taxInvoiceStatus:    row.taxInvoiceStatus,
-                                      appliedFeeTotal:     row.appliedFeeTotal,
-                                      receivableId:        row.receivableId,
-                                      paidAmount:          row.paidAmount,
-                                    },
-                                  })
-                                }
-                                className="text-[11px] font-medium px-2 py-1 rounded transition-colors whitespace-nowrap bg-rose-50 text-rose-600 hover:bg-rose-100 border border-rose-200"
-                              >
-                                매출취소
-                              </button>
-                            )}
-                          </div>
-                        ) : (
+                          );
+                        })() : (
                           <span className="text-slate-300 text-xs">—</span>
                         )}
                       </td>
