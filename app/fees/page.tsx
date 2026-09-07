@@ -3551,7 +3551,7 @@ export default function FeesPage() {
                           버튼을 나란히 좁은 칸(w-32)에 욱여넣어, 발행일자는 안 보이고 취소 버튼도
                           잘려서 없는 것처럼 보였다. */}
                       <td className={`px-3 py-2.5 text-center align-middle w-32 ${rowBorder}`}>
-                        {canEditSales ? (() => {
+                        {canEditSales && !row.noFeeRecord && !row.currentTermFeeMissing ? (() => {
                           const salesTarget = {
                             projectId:           row.projectId,
                             projectNumber:       row.projectNumber,
@@ -3596,7 +3596,16 @@ export default function FeesPage() {
                             </button>
                           );
                         })() : (
-                          <span className="text-slate-300 text-xs">—</span>
+                          <span
+                            className="text-slate-300 text-xs"
+                            title={
+                              row.noFeeRecord || row.currentTermFeeMissing
+                                ? "이 연차는 아직 연차별 수수료(TermFee)가 산정되지 않아 매출발행할 수 없습니다 — 참여기관 목록에서 이 연차 사업비를 먼저 입력해주세요"
+                                : undefined
+                            }
+                          >
+                            —
+                          </span>
                         )}
                       </td>
                       {/* 수금관리 버튼 */}
