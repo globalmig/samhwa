@@ -1566,6 +1566,11 @@ function useFeeRows(): FeeRow[] {
           (r) => r.projectNumber === f0.projectNumber && r.termYear === f0.termYear && r.termNumber === f0.termNumber &&
             (isSplit ? r.institutionId === primary.institutionId : true)
         );
+        // 발행취소된 계산서엔 채권(수금) 레코드도 더 이상 유효하지 않다 — 청구/납부/미수금 표시와
+        // 수금등록 버튼이 취소 후에도 그대로 남아있던 문제. 재발행 시엔 같은 rv 레코드를 그대로 갱신해야
+        // 하므로(위 activeInvoice와 동일 이유) receivableId 자체는 원본 rv를 그대로 참조하고, 화면 표시용
+        // 금액·상태만 activeRv를 쓴다.
+        const activeRv = activeInvoice ? rv : undefined;
 
         // 미청구 — 기관별 레코드가 없으므로 지금까지처럼 연차 단위로만 붙인다(분리행이어도 동일 값 공유).
         const ucRecord = unclaimedFees.find(
@@ -1641,11 +1646,11 @@ function useFeeRows(): FeeRow[] {
           taxAmount:           activeInvoice?.taxAmount ?? (appliedFeeTotal > 0 ? splitVatInclusive(appliedFeeTotal).taxAmount : 0),
           totalInvoiceAmount:  activeInvoice?.totalAmount ?? appliedFeeTotal,
           receivableId:        rv?.id ?? "",
-          billedAmount:        rv?.billedAmount ?? 0,
-          collectionStatus:    feesCollectionStatus(rv),
-          paidAmount:          rv?.paidAmount ?? 0,
-          paidAt:              rv?.paidAt ?? null,
-          receivableAmount:    rv?.receivableAmount ?? 0,
+          billedAmount:        activeRv?.billedAmount ?? 0,
+          collectionStatus:    feesCollectionStatus(activeRv),
+          paidAmount:          activeRv?.paidAmount ?? 0,
+          paidAt:              activeRv?.paidAt ?? null,
+          receivableAmount:    activeRv?.receivableAmount ?? 0,
           unclaimedAmount:     ucRecord?.amount ?? 0,
           projectCode:         project ? (resolveProjectCodeForTerm(project, f0.termNumber) || project.projectCode || "") : "",
           agencyAssignedAt:    project?.agencyAssignedAt ?? "",
@@ -3530,7 +3535,9 @@ export default function FeesPage() {
               ) : (
                 pagedRows.flatMap((row, idx) => {
                   const isExpanded   = expandedKey === row.key;
-                  const hasReceivable = row.receivableId !== "";
+                  // 계산서가 발행취소(CANCELED)된 뒤에는 채권 레코드가 DB엔 남아있어도(재발행 시 재사용)
+                  // 수금등록/완료/수정 버튼은 다시 "—"(미발행 상태)로 돌아가야 한다.
+                  const hasReceivable = row.receivableId !== "" && row.taxInvoiceStatus !== "CANCELED";
                   const isFullyPaid   = row.collectionStatus === "PAID";
                   // 같은 과제(연차별 여러 행)를 옅은 배경색으로 묶어 보여주고, 다른 과제로 넘어가는
                   // 경계엔 굵은 구분선을 넣어 어디까지가 한 과제인지 한눈에 보이게 한다.

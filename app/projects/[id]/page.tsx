@@ -3505,9 +3505,12 @@ function BillingBlock({
       )}
 
       {/* ── 수금 정보 ── */}
+      {/* 계산서가 발행취소(CANCELED)되면 이미 등록된 수금 내역이 있어도(혹은 없어도) 수금등록/수금입력
+          버튼이 다시 "세금계산서 발행 후 등록 가능" 상태로 돌아가야 한다 — 취소 후에도 그대로 활성화돼
+          있으면 취소된 계산서를 근거로 새 수금을 등록/수정할 수 있게 돼버리는 문제가 있었다. */}
       <div className="flex items-start gap-3">
         <span className="text-xs font-semibold text-slate-600 w-24 shrink-0 pt-1">수금 정보</span>
-        {unit.receivable ? (
+        {unit.receivable && unit.invoice?.status !== "CANCELED" ? (
           <div className="flex-1 flex flex-wrap items-center gap-4">
             <span className="text-xs text-slate-500">청구 {fmtWonFull(unit.receivable.billedAmount)}</span>
             <span className="text-xs text-green-700 font-medium">납부 {fmtWonFull(unit.receivable.paidAmount)}</span>
@@ -3530,7 +3533,7 @@ function BillingBlock({
               )}
             </div>
           </div>
-        ) : unit.invoice ? (
+        ) : unit.invoice && unit.invoice.status !== "CANCELED" ? (
           <div className="flex items-center gap-3">
             <span className="text-xs text-slate-400">수금 내역 없음</span>
             {canEditEmails && (
