@@ -33,21 +33,21 @@ const ROLE_LABELS: Record<string, string> = {
   VIEWER: "조회 전용",
 };
 
-// 알림 항목 공통 액션(읽음 처리 / 삭제) 버튼
-function NotifActions({ read, onRead, onDismiss }: { read: boolean; onRead: () => void; onDismiss: () => void }) {
+// 알림 항목 공통 액션(읽음 처리 / 삭제) 버튼 — 읽음 처리된 항목은 목록에서 바로 빠지므로
+// (아래 overdueAlerts/issueAlerts/visibleNotices 필터 참고) 여기 렌더링되는 항목은 항상 미읽음
+// 상태이고, 읽음 처리 버튼은 항상 보인다.
+function NotifActions({ onRead, onDismiss }: { onRead: () => void; onDismiss: () => void }) {
   return (
     <div className="flex items-center gap-0.5 shrink-0 pt-0.5">
-      {!read && (
-        <button
-          onClick={(e) => { e.preventDefault(); e.stopPropagation(); onRead(); }}
-          title="읽음 처리"
-          className="p-1 text-slate-300 hover:text-green-600 hover:bg-green-50 rounded transition-colors"
-        >
-          <svg viewBox="0 0 20 20" fill="currentColor" className="w-3 h-3">
-            <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143z" clipRule="evenodd" />
-          </svg>
-        </button>
-      )}
+      <button
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); onRead(); }}
+        title="읽음 처리"
+        className="p-1 text-slate-300 hover:text-green-600 hover:bg-green-50 rounded transition-colors"
+      >
+        <svg viewBox="0 0 20 20" fill="currentColor" className="w-3 h-3">
+          <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143z" clipRule="evenodd" />
+        </svg>
+      </button>
       <button
         onClick={(e) => { e.preventDefault(); e.stopPropagation(); onDismiss(); }}
         title="삭제"
@@ -94,15 +94,17 @@ export default function Header() {
   const isRead = (id: string) => myNotifState.readIds.includes(id);
   const isDismissed = (id: string) => myNotifState.dismissedIds.includes(id);
 
+  // 읽음 처리한 알림은 (삭제와 마찬가지로) 목록에서 곧바로 빠진다 — 서버에 저장된 읽음 상태를
+  // 새로고침·재로그인 후에도 그대로 불러오므로(hydrateNotificationState), 다음 세션에서도 다시
+  // 나타나지 않는다.
   const overdueAlerts = user
-    ? computeOverdueAlerts(receivables, projects).filter((a) => isAlertVisibleToUser(a.assignedManager, user) && !isDismissed(a.id))
+    ? computeOverdueAlerts(receivables, projects).filter((a) => isAlertVisibleToUser(a.assignedManager, user) && !isDismissed(a.id) && !isRead(a.id))
     : [];
   const issueAlerts = user
-    ? computeIssueAlerts(projectIssues, projects).filter((i) => isIssueVisibleToUser(i, i.assignedManagerPrimary, i.assignedManagerDeputy, user) && !isDismissed(i.id))
+    ? computeIssueAlerts(projectIssues, projects).filter((i) => isIssueVisibleToUser(i, i.assignedManagerPrimary, i.assignedManagerDeputy, user) && !isDismissed(i.id) && !isRead(i.id))
     : [];
-  const visibleNotices = notices.filter((n) => !isDismissed(n.id));
-  const notifCount = [...overdueAlerts.map((a) => a.id), ...issueAlerts.map((i) => i.id), ...visibleNotices.map((n) => n.id)]
-    .filter((id) => !isRead(id)).length;
+  const visibleNotices = notices.filter((n) => !isDismissed(n.id) && !isRead(n.id));
+  const notifCount = overdueAlerts.length + issueAlerts.length + visibleNotices.length;
 
   function markAllRead() {
     if (!user) return;
@@ -175,10 +177,10 @@ export default function Header() {
                     <p className="px-4 py-6 text-center text-xs text-slate-400">등록된 공지가 없습니다</p>
                   ) : (
                     visibleNotices.map((n) => (
-                      <div key={n.id} className={`flex items-start gap-1.5 px-4 py-2.5 border-b border-slate-50 last:border-0 ${isRead(n.id) ? "opacity-50" : ""}`}>
+                      <div key={n.id} className="flex items-start gap-1.5 px-4 py-2.5 border-b border-slate-50 last:border-0">
                         <div className="flex-1 min-w-0">
                           <p className="text-xs font-medium text-slate-700 flex items-center gap-1.5">
-                            {!isRead(n.id) && <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />}
+                            <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
                             {n.title}
                           </p>
                           <p className="text-[11px] text-slate-500 mt-0.5 whitespace-pre-wrap">{n.content}</p>
@@ -186,7 +188,7 @@ export default function Header() {
                             {n.authorName} · {ROLE_LABELS[n.authorRole] ?? n.authorRole} · {fmtDatetime(n.createdAt)}
                           </p>
                         </div>
-                        <NotifActions read={isRead(n.id)} onRead={() => user && markNotificationRead(user.id, n.id)} onDismiss={() => handleDeleteNotice(n.id)} />
+                        <NotifActions onRead={() => user && markNotificationRead(user.id, n.id)} onDismiss={() => handleDeleteNotice(n.id)} />
                       </div>
                     ))
                   )}
@@ -198,19 +200,19 @@ export default function Header() {
                       연체 알림 · {overdueAlerts.length}건
                     </p>
                     {overdueAlerts.map((a) => (
-                      <div key={a.id} className={`flex items-start gap-1.5 px-4 py-2.5 border-b border-slate-50 transition-colors ${isRead(a.id) ? "opacity-50" : "hover:bg-slate-50"}`}>
+                      <div key={a.id} className="flex items-start gap-1.5 px-4 py-2.5 border-b border-slate-50 transition-colors hover:bg-slate-50">
                         <Link
                           href="/receivables"
                           onClick={() => { if (user) markNotificationRead(user.id, a.id); setNotifOpen(false); }}
                           className="flex-1 min-w-0"
                         >
                           <p className="text-xs font-medium text-red-600 flex items-center gap-1.5">
-                            {!isRead(a.id) && <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" />}
+                            <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" />
                             {a.leadInstitutionName} · {a.projectName}
                           </p>
                           <p className="text-[11px] text-slate-500 mt-0.5">{a.detail}</p>
                         </Link>
-                        <NotifActions read={isRead(a.id)} onRead={() => user && markNotificationRead(user.id, a.id)} onDismiss={() => user && dismissNotification(user.id, a.id)} />
+                        <NotifActions onRead={() => user && markNotificationRead(user.id, a.id)} onDismiss={() => user && dismissNotification(user.id, a.id)} />
                       </div>
                     ))}
                   </div>
@@ -222,19 +224,19 @@ export default function Header() {
                       이슈/메모 알림 · {issueAlerts.length}건
                     </p>
                     {issueAlerts.map((i) => (
-                      <div key={i.id} className={`flex items-start gap-1.5 px-4 py-2.5 border-b border-slate-50 transition-colors ${isRead(i.id) ? "opacity-50" : "hover:bg-slate-50"}`}>
+                      <div key={i.id} className="flex items-start gap-1.5 px-4 py-2.5 border-b border-slate-50 transition-colors hover:bg-slate-50">
                         <Link
                           href={`/projects/${i.projectId}`}
                           onClick={() => { if (user) markNotificationRead(user.id, i.id); setNotifOpen(false); }}
                           className="flex-1 min-w-0"
                         >
                           <p className="text-xs font-medium text-amber-600 flex items-center gap-1.5">
-                            {!isRead(i.id) && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />}
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
                             {i.projectName}
                           </p>
                           <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-2">{i.content}</p>
                         </Link>
-                        <NotifActions read={isRead(i.id)} onRead={() => user && markNotificationRead(user.id, i.id)} onDismiss={() => user && dismissNotification(user.id, i.id)} />
+                        <NotifActions onRead={() => user && markNotificationRead(user.id, i.id)} onDismiss={() => user && dismissNotification(user.id, i.id)} />
                       </div>
                     ))}
                   </div>
