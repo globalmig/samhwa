@@ -160,6 +160,11 @@ interface MemberAggregate {
   // 같은 연차 안에서 서로 다른 실무자 메일주소가 동시에 관측된 연차(중복 행 등 데이터 오류) —
   // 이 연차는 어느 값도 신뢰할 수 없으니 반영하지 않고 이슈로 안내한다.
   contactEmailConflictTerms: Set<number>;
+  // 실무자 이름 — "실무자명" 컬럼에서 읽는다. contactEmail과 동일한 방식(마지막 값/연차별/충돌
+  // 감지)으로 다룬다.
+  contactName?: string;
+  contactNamesByTerm: Map<number, string>;
+  contactNameConflictTerms: Set<number>;
   // "연차별기관별"(현재 진행중인 연차 실적) 시트에서 이미 값을 받았는지 — "단계기관별" 시트는
   // 단계 전체의 정산 시점 스냅샷이라 지난 단계의 오래된 역할·정산형태·등급을 담고 있을 수 있어서,
   // 연차별 시트에 값이 있으면 그걸 우선하고 단계기관별 값으론 덮어쓰지 않는다.
@@ -248,15 +253,21 @@ function buildGradeOverridesFromExcel(
 // 값도 신뢰할 수 없으니 건너뛰고 기존 오버라이드를 그대로 둔다 — 그 연차는 별도로 이슈 안내한다.
 function buildRecipientOverridesFromExcel(
   agg: MemberAggregate,
-  existingMember: Pick<ProjectMember, "contactName" | "contactPhone">,
+  existingMember: Pick<ProjectMember, "contactName" | "contactEmail" | "contactPhone">,
   existingOverrides: NonNullable<ProjectMember["recipientOverrides"]> | undefined
 ): ProjectMember["recipientOverrides"] {
-  const perTerm = Array.from(agg.contactEmailsByTerm.entries())
-    .filter(([termNumber]) => !agg.contactEmailConflictTerms.has(termNumber))
-    .map(([termNumber, email]) => ({
+  // 실무자명 컬럼은 실무자 메일주소와 별도로 입력될 수 있어(둘 다 있는 연차, 메일주소만 있는 연차 등)
+  // 두 맵의 연차를 모두 합쳐서 순회한다 — 그 연차에 이름이 없으면 기존 담당자 이름으로 채운다.
+  const termNumbers = new Set<number>([...agg.contactEmailsByTerm.keys(), ...agg.contactNamesByTerm.keys()]);
+  const perTerm = Array.from(termNumbers)
+    .filter((termNumber) => !agg.contactEmailConflictTerms.has(termNumber) && !agg.contactNameConflictTerms.has(termNumber))
+    .map((termNumber) => ({
       termNumber,
-      recipientName: existingMember.contactName ?? "",
-      recipientEmail: email,
+      recipientName: agg.contactNamesByTerm.get(termNumber) ?? existingMember.contactName ?? "",
+      // 이 연차에 실무자명만 새로 들어오고 메일주소는 안 들어온 경우, 여기서 빈 문자열로 덮어써버리면
+      // (override.recipientEmail ?? contactEmail 폴백이 "값 없음"으로 착각) 기존에 잘 쓰던 메일주소가
+      // 지워진다 — resolveContactEmailForTerm의 폴백값으로 보존한다.
+      recipientEmail: agg.contactEmailsByTerm.get(termNumber) ?? resolveContactEmailForTerm(agg, termNumber) ?? existingMember.contactEmail ?? "",
       recipientPhone: existingMember.contactPhone ?? "",
     }));
   if (perTerm.length === 0) return existingOverrides;
@@ -327,6 +338,19 @@ function resolveContactEmailForTerm(agg: MemberAggregate, term: number): string 
       .map(([, email]) => email)
   );
   return emails.size === 1 ? [...emails][0] : agg.contactEmail;
+}
+
+function resolveContactNameForTerm(agg: MemberAggregate, term: number): string | undefined {
+  if (!agg.contactNameConflictTerms.has(term)) {
+    const termName = agg.contactNamesByTerm.get(term);
+    if (termName) return termName;
+  }
+  const names = new Set(
+    [...agg.contactNamesByTerm.entries()]
+      .filter(([termNumber]) => !agg.contactNameConflictTerms.has(termNumber))
+      .map(([, name]) => name)
+  );
+  return names.size === 1 ? [...names][0] : agg.contactName;
 }
 
 function cleanRecipientOverridesForExcelMerge(
@@ -442,6 +466,8 @@ function buildMemberAggregates(
           gradeFromAnnual: false,
           contactEmailsByTerm: new Map(),
           contactEmailConflictTerms: new Set(),
+          contactNamesByTerm: new Map(),
+          contactNameConflictTerms: new Set(),
           budgetsByTerm: new Map(),
           totalCashBudgetFallback: 0,
           totalInKindBudgetFallback: 0,
@@ -494,6 +520,18 @@ function buildMemberAggregates(
             agg.contactEmailConflictTerms.add(termNumberForEmail);
           } else {
             agg.contactEmailsByTerm.set(termNumberForEmail, contactEmailStr);
+          }
+        }
+        const contactNameStr = get("contactName", row);
+        if (contactNameStr) {
+          agg.contactName = contactNameStr;
+          // 실무자명도 실무자 메일주소와 동일한 방식(연차별 이력 + 충돌 감지)으로 다룬다.
+          const termNumberForName = parseInt(get("termYear", row), 10) || 1;
+          const existingNameForTerm = agg.contactNamesByTerm.get(termNumberForName);
+          if (existingNameForTerm !== undefined && existingNameForTerm !== contactNameStr) {
+            agg.contactNameConflictTerms.add(termNumberForName);
+          } else {
+            agg.contactNamesByTerm.set(termNumberForName, contactNameStr);
           }
         }
       } else {
@@ -1006,7 +1044,7 @@ function resolveStageStructure(
 function computeProjectUpdates(
   projects: Project[],
   memberAggregates: MemberAggregate[],
-  projectMembers: readonly Pick<ProjectMember, "projectId" | "institutionId" | "contactEmail">[],
+  projectMembers: readonly Pick<ProjectMember, "projectId" | "institutionId" | "contactEmail" | "contactName">[],
   institutions: readonly Pick<Institution, "id" | "bizNumber">[],
   projectMaxTerm: Map<string, number>,
   stageAggregates: Map<string, ProjectStageInfo>,
@@ -1077,12 +1115,17 @@ function computeProjectUpdates(
         ? projectMembers.find((m) => m.projectId === existing.id && m.institutionId === institutionId)
         : undefined;
       if (agg.contactEmail && agg.contactEmail !== (existingMember?.contactEmail ?? "")) return true;
+      if (agg.contactName && agg.contactName !== (existingMember?.contactName ?? "")) return true;
       if (!existingMember) return false;
-      // 실무자 메일주소도 연차별 오버라이드(recipientOverrides)로 반영되므로, 파일에 담긴 다른
-      // 연차에 대한 변경도 함께 감지한다.
+      // 실무자명·실무자 메일주소도 연차별 오버라이드(recipientOverrides)로 반영되므로, 파일에 담긴
+      // 다른 연차에 대한 변경도 함께 감지한다.
       for (const [termNumber, email] of agg.contactEmailsByTerm) {
         if (agg.contactEmailConflictTerms.has(termNumber)) continue;
         if (email !== resolveMemberRecipientForTerm(existingMember, termNumber).recipientEmail) return true;
+      }
+      for (const [termNumber, name] of agg.contactNamesByTerm) {
+        if (agg.contactNameConflictTerms.has(termNumber)) continue;
+        if (name !== resolveMemberRecipientForTerm(existingMember, termNumber).recipientName) return true;
       }
       return false;
     });
@@ -2042,6 +2085,7 @@ const ANNUAL_SHEET_NOTES = [
   "※필수 (연차상시/정산 — \"정산형태\"와는 다른 값)",
   "선택 (주관기관 행에만, 없으면 단계기관별 시트의 값을 사용)",
   "선택 (주관기관 행에만 — 여러 명이면 콤마(,)로 구분, 정산절차 안내 공문에 실무자와 함께 수신)",
+  "선택 (이 행 기관의 담당자 이름 — 실무자 메일주소와 함께 입력)",
   "선택 (이 행 기관의 담당자 — 여러 명이면 콤마(,)로 구분, 정산절차 안내 공문 외 모든 공문 수신)",
   "선택 (YYYY-MM-DD)", "선택 (YYYY-MM-DD)",
   "※필수 (YYYY-MM-DD, 이 연차의 실제 시작일 — 빈칸이면 공동기관을 인식하지 못할 수 있음)",
@@ -2062,7 +2106,7 @@ const ANNUAL_SHEET_HEADERS = [
   "연구개발기관명", "기관사업자등록번호",
   "기관역할구분", "등급", "정산형태", "회계법인",
   "과제구분", "연구책임자",
-  "책임자 메일주소", "실무자 메일주소",
+  "책임자 메일주소", "실무자명", "실무자 메일주소",
   "전문기관배정일", "내부배정일",
   "연차시작일자", "연차종료일자",
   "단계시작일자", "단계종료일자",
@@ -2189,6 +2233,7 @@ function buildAnnualSheetRowsFromData(
           isSettlementTerm(project, termNumber) ? "정산" : "연차상시",
           lead.name,
           lead.email,
+          recipient.recipientName,
           recipient.recipientEmail,
           isLead ? (project.agencyAssignedAt ?? "") : "",
           isLead ? (project.internalAssignedAt ?? "") : "",
@@ -2325,7 +2370,7 @@ export async function downloadExcelTemplate() {
       "삼화기술경영(주)", "123-45-67890",
       "주관", "우수(A)", "위탁정산", "",
       "연차상시", "박연구",
-      "park.lead@samhwa-tech.co.kr", "kim.staff@samhwa-tech.co.kr,lee.staff@samhwa-tech.co.kr",
+      "park.lead@samhwa-tech.co.kr", "김실무", "kim.staff@samhwa-tech.co.kr,lee.staff@samhwa-tech.co.kr",
       "2024-01-15", "2024-02-01",
       "2024-03-01", "2025-02-28",
       "2024-03-01", "2027-02-28",
@@ -2340,7 +2385,7 @@ export async function downloadExcelTemplate() {
       "참여기업(주)", "234-56-78901",
       "공동", "", "위탁정산", "",
       "연차상시", "",
-      "", "staff@participant.co.kr",
+      "", "박실무", "staff@participant.co.kr",
       "", "",
       "2024-03-01", "2025-02-28",
       "2024-03-01", "2027-02-28",
@@ -2355,7 +2400,7 @@ export async function downloadExcelTemplate() {
       "에너지연구소", "345-67-89012",
       "주관", "최우수(S)", "자체정산", "",
       "연차상시", "이연구",
-      "lee.lead@energylab.re.kr", "jung.staff@energylab.re.kr",
+      "lee.lead@energylab.re.kr", "정실무", "jung.staff@energylab.re.kr",
       "2024-04-20", "2024-05-10",
       "2024-06-01", "2025-05-31",
       "", "",
@@ -3083,6 +3128,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       );
       const targetTerm = projectMaxTerm.get(normNum) ?? 1;
       const contactEmailForTargetTerm = resolveContactEmailForTerm(agg, targetTerm);
+      const contactNameForTargetTerm = resolveContactNameForTerm(agg, targetTerm);
 
       if (!existingMember) {
         if (!approved) continue; // 아직 승인되지 않은 연차의 신규 참여기관은 만들지 않는다
@@ -3114,14 +3160,14 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           cashBudget: totalCash,
           inKindBudget: totalInKind,
           annualBudgets: annualBudgets.length > 0 ? annualBudgets : undefined,
-          // "실무자 메일주소" 컬럼 값을 우선 쓰고, 없으면 이미 등록된 기관의 대표 연락처를 기본값으로
-          // 채운다 — 그래야 참여기관마다 연락처를 일일이 다시 입력할 필요가 없다.
-          contactName: institution?.contactName || undefined,
+          // "실무자명"·"실무자 메일주소" 컬럼 값을 우선 쓰고, 없으면 이미 등록된 기관의 대표 연락처를
+          // 기본값으로 채운다 — 그래야 참여기관마다 연락처를 일일이 다시 입력할 필요가 없다.
+          contactName: contactNameForTargetTerm || institution?.contactName || undefined,
           contactEmail: contactEmailForTargetTerm || institution?.contactEmail || undefined,
           contactPhone: institution?.contactPhone || undefined,
           recipientOverrides: buildRecipientOverridesFromExcel(
             agg,
-            { contactName: institution?.contactName, contactPhone: institution?.contactPhone },
+            { contactName: institution?.contactName, contactEmail: institution?.contactEmail, contactPhone: institution?.contactPhone },
             undefined,
           ),
         });
@@ -3131,12 +3177,14 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         // 항상 반영하고, 사업비·역할·정산형태·등급처럼 연차 진행에 얽힌 값은 승인된 경우에만 반영한다.
         const updates: Partial<ProjectMember> = {};
 
-        // "실무자 메일주소" 컬럼에 값이 있을 때만 덮어쓴다 — 비어 있으면 화면에서 직접 입력해둔
-        // 기존 실무자 이메일을 그대로 보존한다. 값이 실제로 달라지면, 이번 엑셀이 반영하는
-        // 연차(targetTerm) 이전 연차는 옛 연락처로 고정해 소급 변경을 막는다.
-        if (contactEmailForTargetTerm || agg.contactEmailsByTerm.size > 0) {
+        // "실무자명"·"실무자 메일주소" 컬럼에 값이 있을 때만 덮어쓴다 — 비어 있으면 화면에서 직접
+        // 입력해둔 기존 값을 그대로 보존한다. 값이 실제로 달라지면, 이번 엑셀이 반영하는 연차(targetTerm)
+        // 이전 연차는 옛 연락처로 고정해 소급 변경을 막는다.
+        if (contactEmailForTargetTerm || contactNameForTargetTerm || agg.contactEmailsByTerm.size > 0 || agg.contactNamesByTerm.size > 0) {
           let recipientOverrides = cleanRecipientOverridesForExcelMerge(existingMember.recipientOverrides);
-          if (existingMember.contactEmail && contactEmailForTargetTerm && contactEmailForTargetTerm !== existingMember.contactEmail) {
+          const emailChanged = !!(existingMember.contactEmail && contactEmailForTargetTerm && contactEmailForTargetTerm !== existingMember.contactEmail);
+          const nameChanged = !!(existingMember.contactName && contactNameForTargetTerm && contactNameForTargetTerm !== existingMember.contactName);
+          if (emailChanged || nameChanged) {
             // "이전 연차"가 아니라 "이미 TermFee가 있는 연차"를 기준으로 고정한다 — 다년치 사업비를
             // 미리 입력해둬서 진행 연차보다 나중 연차가 이미 만들어져 있는 경우도 소급되면 안 된다.
             // termFees는 이 컴포넌트가 마운트될 때 찍힌 스냅샷이라, 이번 업로드가 "처음으로" 만드는
@@ -3164,6 +3212,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           }
           updates.recipientOverrides = buildRecipientOverridesFromExcel(agg, existingMember, recipientOverrides);
           if (contactEmailForTargetTerm) updates.contactEmail = contactEmailForTargetTerm;
+          if (contactNameForTargetTerm) updates.contactName = contactNameForTargetTerm;
         }
 
         if (approved) {

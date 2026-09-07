@@ -158,6 +158,13 @@ const annualColumns: ColumnDef[] = [
     description: "주관기관 행의 값을 과제의 책임자 이메일(Project.researchLeadEmail)로 등록 — 여러 개면 콤마(,)로 구분",
   },
   {
+    field: "contactName",
+    label: "실무자명",
+    aliases: ["실무자명", "실무자 이름", "실무자성명", "수신자명", "수신자이름"],
+    required: false,
+    description: "이 행 기관의 실무자 이름(ProjectMember.contactName)으로 등록 — 실무자 메일주소와 함께 입력",
+  },
+  {
     field: "contactEmail",
     label: "실무자 메일주소",
     aliases: ["실무자 메일주소", "실무자메일주소", "실무자이메일", "수신자메일주소", "수신자이메일"],
