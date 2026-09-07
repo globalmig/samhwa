@@ -626,6 +626,14 @@ export function resolveProjectId(id: string): string {
   return _projectIdRemap.get(id) ?? id;
 }
 
+// 과제 생성이 끝나 진짜 id를 알기 전까지 들어온 수정 요청은 여기 등록해뒀다가, 생성이 끝나면 그
+// 진짜 id로 다시 보내도록 updateProject가 확인한다(updateProjectMember의 _pendingMemberCreates와
+// 동일한 이유) — 안 그러면 임시 id로 보낸 PATCH가 404로 조용히 실패하고, 뒤이어 도착하는 생성 응답이
+// 그 수정사항 없는 상태로 덮어써 버린다. 엑셀 업로드가 과제를 새로 만든 직후 곧바로 주관기관을
+// 채워 넣을 때(주관기관 정보 보정 단계) 실제로 이 경합이 발생해, 화면엔 주관기관이 정상 등록된
+// 것처럼 보이다가 몇 초 뒤(생성 응답 도착 시점) 조용히 빈 값으로 되돌아가던 버그의 원인이었다.
+const _pendingProjectCreates = new Map<string, Promise<string>>();
+
 export function addProject(data: Omit<Project, "id">): Project {
   const projectCode = data.projectCode ?? nextTermCode();
   const termCodes = data.termCodes ?? [{ termNumber: 1, code: projectCode }];
@@ -636,7 +644,7 @@ export function addProject(data: Omit<Project, "id">): Project {
   ensureLeadMember(item);
   notify();
 
-  fetch("/api/projects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(item) })
+  const promise = fetch("/api/projects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(item) })
     .then((res) => res.json())
     .then((res: { ok: boolean; project?: Project; error?: string }) => {
       if (res.ok && res.project) {
@@ -653,6 +661,8 @@ export function addProject(data: Omit<Project, "id">): Project {
         };
         for (const m of remapped) persistProjectMember({ ...m, projectId: realId });
         autoGenerateTermFees(realId);
+        notify();
+        return realId;
       } else {
         _state = {
           ..._state,
@@ -660,8 +670,9 @@ export function addProject(data: Omit<Project, "id">): Project {
           projectMembers: _state.projectMembers.filter((m) => m.projectId !== tempId),
         };
         console.error("과제 생성 실패:", res.error);
+        notify();
+        return tempId;
       }
-      notify();
     })
     .catch((err) => {
       _state = {
@@ -671,7 +682,12 @@ export function addProject(data: Omit<Project, "id">): Project {
       };
       notify();
       console.error("과제 생성 실패:", err);
+      return tempId;
+    })
+    .finally(() => {
+      _pendingProjectCreates.delete(tempId);
     });
+  _pendingProjectCreates.set(tempId, promise);
 
   return item;
 }
@@ -729,17 +745,28 @@ export function updateProject(id: string, data: Partial<Project>): void {
   }
   notify();
 
-  fetch(`/api/projects/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
-    .then((res) => res.json())
-    .then((res: { ok: boolean; project?: Project; error?: string }) => {
-      if (res.ok && res.project) {
-        _state = { ..._state, projects: _state.projects.map((p) => (p.id === id ? res.project! : p)) };
-        notify();
-      } else if (!res.ok) {
-        console.error("과제 수정 실패:", res.error);
-      }
-    })
-    .catch((err) => console.error("과제 수정 실패:", err));
+  // id가 아직 서버가 모르는 임시 id(방금 addProject로 막 만든 직후)면, 그 생성 요청이 끝나 진짜 id를
+  // 알기 전까지 이 수정 요청을 미뤄뒀다가 진짜 id로 다시 보낸다 — 위 _pendingProjectCreates 설명 참고.
+  const sendPatch = (realId: string) => {
+    fetch(`/api/projects/${realId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+      .then((res) => res.json())
+      .then((res: { ok: boolean; project?: Project; error?: string }) => {
+        if (res.ok && res.project) {
+          _state = { ..._state, projects: _state.projects.map((p) => (p.id === realId ? res.project! : p)) };
+          notify();
+        } else if (!res.ok) {
+          console.error("과제 수정 실패:", res.error);
+        }
+      })
+      .catch((err) => console.error("과제 수정 실패:", err));
+  };
+
+  const pendingCreate = _pendingProjectCreates.get(id);
+  if (pendingCreate) {
+    pendingCreate.then(sendPatch);
+  } else {
+    sendPatch(id);
+  }
 }
 
 // 과제 삭제 시 연결된 참여기관·수수료·이슈·미청구액·미수금·세금계산서까지 함께 정리해
