@@ -3201,9 +3201,11 @@ function BillingBlock({
     // new Date("")(Invalid Date)를 만들다 저장이 조용히 실패했다(app/fees/page.tsx의 매출취소와
     // 동일한 원인). 발행일은 그대로 두고(발행 이력으로 남김) status만 CANCELED로 바꾼다.
     updateTaxInvoice(unit.invoice.id, { status: "CANCELED" });
-    // billingType이 이 연차(+분리 청구 기관)에 "정발행"으로 저장되어 있으면 취소 후에도 목록에서
-    // 계속 그 표시가 남으므로 초기화한다.
-    if (unit.billingType === "정발행") {
+    // billingType(정발행/역발행요청/역발행)이 이 연차(+분리 청구 기관)에 저장되어 있으면 취소 후에도
+    // 목록에서 계속 그 표시가 남으므로 초기화한다 — 대상아님/면제는 계산서를 만들지 않는 값이라 여기까지
+    // 올 수 없지만 방어적으로 제외한다. (예전엔 "정발행"일 때만 지워서 역발행/역발행요청으로 발행한 뒤
+    // 취소하면 발행구분 표시가 그대로 남아있던 문제가 있었다)
+    if (unit.billingType && unit.billingType !== "대상아님" && unit.billingType !== "면제") {
       setTermBillingType(projectNumber, termYear, termNumber, undefined, unit.institutionId ?? undefined);
     }
     // 발행 시 BILLED/CONFIRMED로 잠갔던 이 청구 단위의 연차를 다시 풀어서, 재발행 전까지 정산구분·
