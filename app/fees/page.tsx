@@ -1550,6 +1550,11 @@ function useFeeRows(): FeeRow[] {
           (ti) => ti.projectNumber === f0.projectNumber && ti.termYear === f0.termYear && ti.termNumber === f0.termNumber &&
             (isSplit ? ti.institutionId === primary.institutionId : true)
         );
+        // 발행취소(CANCELED)된 계산서는 더 이상 "지금 유효한 발행 내역"이 아니므로, 화면에 보여줄
+        // 발행일자·금액은 취소 전 값이 그대로 남지 않고 미발행 상태(예상 금액)로 되돌아가야 한다 —
+        // taxInvoiceId/taxInvoiceStatus 자체는 재발행 시 새로 만들지 않고 같은 레코드를 갱신해야
+        // 하므로 원본 invoice를 그대로 참조하되(아래), 발행일자·금액은 activeInvoice만 본다.
+        const activeInvoice = invoice && invoice.status !== "CANCELED" ? invoice : undefined;
 
         // 수금(receivable)
         const rv = receivables.find(
@@ -1594,7 +1599,7 @@ function useFeeRows(): FeeRow[] {
         // 단, 취소된(CANCELED) 계산서는 "발행됨"으로 치지 않는다 — 안 그러면 발행 취소 후에도
         // billingType이 비어있는 과제는 계속 "정발행"으로 표시되어 버린다.
         const termBillingType = unitFees.find((f) => f.billingType)?.billingType;
-        const billingType = termBillingType ?? project?.billingType ?? (invoice && invoice.status !== "CANCELED" ? "정발행" : "");
+        const billingType = termBillingType ?? project?.billingType ?? (activeInvoice ? "정발행" : "");
         // 타회계법인이 진행한 기관×연차는 삼화가 청구할 금액이 아니므로 appliedFeeTotal(실제 청구/발행 대상
         // 금액)에서 제외한다 — 그 몫의 당해 미청구(15%)는 otherFirmUnclaimedTotal로 따로 보여주기만 하고,
         // 정산연차가 되면 store.ts의 이월 로직이 알아서 그때 청구액에 합산한다.
@@ -1622,13 +1627,14 @@ function useFeeRows(): FeeRow[] {
           stageStartDate:      project?.stageStartDate ?? "",
           stageEndDate:        project?.stageEndDate ?? "",
           billingType,
-          invoiceIssuedAt:     invoice?.issuedAt ?? "",
-          // 세금계산서가 아직 발행되지 않았어도, 산정된 수수료(appliedFeeTotal)가 있으면 그걸 부가세
-          // 포함가 기준으로 역산해 "예상 금액"으로 채운다 — 전체 과제의 예상 수수료 합계를 발행 여부와
-          // 무관하게 확인할 수 있어야 하기 때문. 실제 발행액과 구분은 taxInvoiceId 유무로 렌더링에서 한다.
-          supplyAmount:        invoice?.supplyAmount ?? (appliedFeeTotal > 0 ? splitVatInclusive(appliedFeeTotal).supplyAmount : 0),
-          taxAmount:           invoice?.taxAmount ?? (appliedFeeTotal > 0 ? splitVatInclusive(appliedFeeTotal).taxAmount : 0),
-          totalInvoiceAmount:  invoice?.totalAmount ?? appliedFeeTotal,
+          invoiceIssuedAt:     activeInvoice?.issuedAt ?? "",
+          // 세금계산서가 아직 발행되지 않았거나(또는 발행 취소됐거나), 산정된 수수료(appliedFeeTotal)가
+          // 있으면 그걸 부가세 포함가 기준으로 역산해 "예상 금액"으로 채운다 — 전체 과제의 예상 수수료
+          // 합계를 발행 여부와 무관하게 확인할 수 있어야 하기 때문. 실제 발행액과 구분은 렌더링에서
+          // taxInvoiceId·taxInvoiceStatus(CANCELED 제외) 유무로 한다.
+          supplyAmount:        activeInvoice?.supplyAmount ?? (appliedFeeTotal > 0 ? splitVatInclusive(appliedFeeTotal).supplyAmount : 0),
+          taxAmount:           activeInvoice?.taxAmount ?? (appliedFeeTotal > 0 ? splitVatInclusive(appliedFeeTotal).taxAmount : 0),
+          totalInvoiceAmount:  activeInvoice?.totalAmount ?? appliedFeeTotal,
           receivableId:        rv?.id ?? "",
           billedAmount:        rv?.billedAmount ?? 0,
           collectionStatus:    feesCollectionStatus(rv),
@@ -2944,26 +2950,32 @@ export default function FeesPage() {
       case "invoiceIssuedAt":
         return <span className="text-xs text-slate-600">{row.invoiceIssuedAt ? fmtDate(row.invoiceIssuedAt) : "—"}</span>;
 
-      case "supplyAmount":
+      case "supplyAmount": {
+        const isIssuedAmount = !!row.taxInvoiceId && row.taxInvoiceStatus !== "CANCELED";
         return row.supplyAmount ? (
-          row.taxInvoiceId
+          isIssuedAmount
             ? <span className="text-xs font-medium text-slate-800">{fmtWon(row.supplyAmount)}</span>
             : <span className="text-xs font-medium text-slate-400" title="세금계산서 발행 전 예상 금액">{fmtWon(row.supplyAmount)}</span>
         ) : <span className="text-xs text-slate-300">—</span>;
+      }
 
-      case "taxAmount":
+      case "taxAmount": {
+        const isIssuedAmount = !!row.taxInvoiceId && row.taxInvoiceStatus !== "CANCELED";
         return row.taxAmount ? (
-          row.taxInvoiceId
+          isIssuedAmount
             ? <span className="text-xs text-slate-600">{fmtWon(row.taxAmount)}</span>
             : <span className="text-xs text-slate-400" title="세금계산서 발행 전 예상 금액">{fmtWon(row.taxAmount)}</span>
         ) : <span className="text-xs text-slate-300">—</span>;
+      }
 
-      case "totalInvoiceAmount":
+      case "totalInvoiceAmount": {
+        const isIssuedAmount = !!row.taxInvoiceId && row.taxInvoiceStatus !== "CANCELED";
         return row.totalInvoiceAmount ? (
-          row.taxInvoiceId
+          isIssuedAmount
             ? <span className="text-xs font-bold text-slate-800">{fmtWon(row.totalInvoiceAmount)}</span>
             : <span className="text-xs font-bold text-slate-400" title="세금계산서 발행 전 예상 금액">{fmtWon(row.totalInvoiceAmount)}</span>
         ) : <span className="text-xs text-slate-300">—</span>;
+      }
 
       case "collectionStatus":
         return row.collectionStatus ? (
