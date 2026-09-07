@@ -99,14 +99,20 @@ export function backfillExistingTermOverrides<O extends { termNumber: number }>(
   targetTerm: number,
   makeOverride: (termNumber: number) => O,
 ): O[] | undefined {
-  const covered = new Set((existingOverrides ?? []).map((o) => o.termNumber));
+  // targetTerm 자신에 남아있던 오버라이드는 제거한다 — 예를 들어 엑셀 업로드가 진행 연차에도
+  // 오버라이드를 만들어둔 적이 있으면(연차별기관별 시트에 진행 연차 행도 있었던 경우), 그 뒤 과제
+  // 상세·정보수정 모달에서 기본값(=진행 연차 값)을 새로 고쳐도 resolveResearchLeadForTerm 등은
+  // 오버라이드를 기본값보다 우선하므로 방금 고친 값이 전혀 반영 안 된 것처럼 보이는 문제가 있었다.
+  const withoutTarget = (existingOverrides ?? []).filter((o) => o.termNumber !== targetTerm);
+  const covered = new Set(withoutTarget.map((o) => o.termNumber));
   const backfilled: O[] = [];
   for (const t of existingTermNumbers) {
     if (t === targetTerm) continue;
     if (!covered.has(t)) backfilled.push(makeOverride(t));
   }
-  if (backfilled.length === 0) return existingOverrides;
-  return [...(existingOverrides ?? []), ...backfilled].sort((a, b) => a.termNumber - b.termNumber);
+  if (backfilled.length === 0 && withoutTarget.length === (existingOverrides ?? []).length) return existingOverrides;
+  const merged = [...withoutTarget, ...backfilled];
+  return merged.length > 0 ? merged.sort((a, b) => a.termNumber - b.termNumber) : undefined;
 }
 
 // ─── 기관구분 기본값 조회 ────────────────────────────────────────────

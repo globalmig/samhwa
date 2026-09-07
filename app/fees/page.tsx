@@ -52,7 +52,7 @@ import { applyManagerContactRows } from "@/lib/notice-contacts";
 import { useCanWrite } from "@/lib/permissions";
 import { getCurrentUser } from "@/lib/auth";
 import { isOverdueByRule } from "@/lib/notifications";
-import { resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows } from "@/lib/fee-calculator";
+import { resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides } from "@/lib/fee-calculator";
 
 // 여러 이메일 문자열(각각 콤마 구분일 수 있음)을 하나로 합치고 중복을 제거한다 — 정산절차 안내
 // 공문은 책임자(researchLeadEmail)+실무자(recipientEmail) 두 필드를 합쳐서 기본 수신자로 쓴다.
@@ -596,6 +596,9 @@ function CollectionModal({ target, onClose }: { target: CollectionTarget; onClos
   const [inputAmount, setInputAmount] = useState(0);
   const [paidAtInput, setPaidAtInput] = useState(target.paidAt ?? todayKST());
   const remaining = target.billedAmount - target.paidAmount;
+  // 잔여 미수액을 넘는 금액을 실수로 입력해도 그대로 저장되던 문제 — 청구액을 초과하는
+  // 입금은 등록을 막고, 초과분은 수금 등록이 아니라 별도로(협의 후) 처리하도록 안내한다.
+  const overpaying = inputAmount > remaining;
 
   function calcStatus(paid: number): "PENDING" | "PARTIAL" | "PAID" | "OVERDUE" {
     if (paid <= 0)                         return "PENDING";
@@ -604,7 +607,7 @@ function CollectionModal({ target, onClose }: { target: CollectionTarget; onClos
   }
 
   function handleSave() {
-    if (inputAmount <= 0) return;
+    if (inputAmount <= 0 || overpaying) return;
     const newPaid       = target.paidAmount + inputAmount;
     const newReceivable = Math.max(0, target.billedAmount - newPaid);
     updateReceivable(target.receivableId, {
@@ -684,6 +687,11 @@ function CollectionModal({ target, onClose }: { target: CollectionTarget; onClos
             완납처리
           </button>
         </div>
+        {overpaying && (
+          <p className="text-[11px] text-red-500">
+            잔여 미수액({fmtWon(remaining)})보다 큰 금액은 등록할 수 없습니다.
+          </p>
+        )}
       </div>
 
       {/* 수금일 */}
@@ -727,7 +735,7 @@ function CollectionModal({ target, onClose }: { target: CollectionTarget; onClos
           </button>
           <button
             onClick={handleSave}
-            disabled={inputAmount <= 0}
+            disabled={inputAmount <= 0 || overpaying}
             className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             수금 등록
@@ -740,7 +748,7 @@ function CollectionModal({ target, onClose }: { target: CollectionTarget; onClos
 
 // ── InfoEditModal (서류요청·서류회신·실무자·과제담당자 수정) ────
 function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: () => void }) {
-  const { projectMembers } = useStore();
+  const { projectMembers, projects, termFees } = useStore();
   const [docRequestDate, setDocRequestDate]   = useState(target.docRequestDate);
   const [docReplyDate, setDocReplyDate]       = useState(target.docReplyDate);
   const [recipientName, setRecipientName]     = useState(target.recipientName);
@@ -750,13 +758,67 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
   const [assignedManagerPrimary, setAssignedManagerPrimary] = useState(target.assignedManagerPrimary);
   const [registeredAt, setRegisteredAt]       = useState(target.registeredAt);
 
+  // 연차별로 값이 다를 수 있는(연차별 이력이 있는) 필드는 그 연차 하나만의 값으로 upsert한다 —
+  // 값이 비어있으면(기본값과 같아졌으면) 그 연차의 기록 자체를 지운다.
+  function upsertTermHistory<T extends { termNumber: number }>(
+    history: T[] | undefined,
+    value: string,
+    makeEntry: (termNumber: number) => T,
+  ): T[] | undefined {
+    const others = (history ?? []).filter((h) => h.termNumber !== target.termNumber);
+    const next = value ? [...others, makeEntry(target.termNumber)] : others;
+    return next.length > 0 ? next.sort((a, b) => a.termNumber - b.termNumber) : undefined;
+  }
+
   function handleSave() {
-    updateProject(target.projectId, {
-      assignedManager: assignedManager || undefined,
-      assignedManagerPrimary: assignedManagerPrimary || undefined,
-      researchLeadEmail: researchLeadEmail || undefined,
-      registeredAt:   registeredAt || undefined,
-    });
+    const project = projects.find((p) => p.id === target.projectId);
+    if (project) {
+      const isCurrentTerm = target.termNumber === project.currentTerm;
+
+      // 책임자이메일 — 과제 상세 페이지의 동일 필드 편집과 같은 규칙을 따른다: 진행 연차 행에서
+      // 고치면 기본값 자체가 바뀌고(이미 청구서가 나간 다른 연차는 그 전 값으로 자동 고정된다),
+      // 과거/다른 연차 행에서 고치면 그 연차만의 오버라이드로 저장되고 기본값은 그대로 둔다. 예전엔
+      // 이 모달에서 고치면 어느 연차 행에서 열었든 무조건 기본값(진행 연차 값)을 덮어써서, 과거 연차
+      // 행에서 고쳤는데 정작 진행 연차 값이 바뀌어버리는(그리고 정작 그 과거 연차엔 반영 안 되는) 문제가 있었다.
+      const baseName = project.researchLead ?? "";
+      const baseEmail = project.researchLeadEmail ?? "";
+      const newEmail = researchLeadEmail || "";
+      let nextResearchLeadEmail = project.researchLeadEmail;
+      let researchLeadOverrides = project.researchLeadOverrides;
+      if (isCurrentTerm) {
+        if (newEmail !== baseEmail) {
+          researchLeadOverrides = backfillExistingTermOverrides(
+            project.researchLeadOverrides,
+            termFees.filter((f) => f.projectNumber === project.projectNumber).map((f) => f.termNumber),
+            target.termNumber,
+            (termNumber) => ({ termNumber, name: baseName, email: baseEmail }),
+          );
+          nextResearchLeadEmail = newEmail || undefined;
+        }
+      } else {
+        const nameForTerm = resolveResearchLeadForTerm(project, target.termNumber).name;
+        const isDefault = newEmail === baseEmail && nameForTerm === baseName;
+        const others = (project.researchLeadOverrides ?? []).filter((o) => o.termNumber !== target.termNumber);
+        const next = isDefault
+          ? others
+          : [...others, { termNumber: target.termNumber, name: nameForTerm, email: newEmail }].sort((a, b) => a.termNumber - b.termNumber);
+        researchLeadOverrides = next.length > 0 ? next : undefined;
+      }
+
+      // 과제담당자(부)/(정)도 동일한 문제였다 — 연차별 이력(History)에 이 연차 값만 기록하고,
+      // 진행 연차 행에서 고친 경우에만 기본값(현재 진행 연차 값)도 함께 갱신한다.
+      const assignedManagerHistory = upsertTermHistory(project.assignedManagerHistory, assignedManager, (termNumber) => ({ termNumber, assignedManager }));
+      const assignedManagerPrimaryHistory = upsertTermHistory(project.assignedManagerPrimaryHistory, assignedManagerPrimary, (termNumber) => ({ termNumber, assignedManagerPrimary }));
+
+      updateProject(target.projectId, {
+        researchLeadEmail: nextResearchLeadEmail,
+        researchLeadOverrides,
+        assignedManagerHistory,
+        assignedManagerPrimaryHistory,
+        ...(isCurrentTerm ? { assignedManager: assignedManager || undefined, assignedManagerPrimary: assignedManagerPrimary || undefined } : {}),
+        registeredAt: registeredAt || undefined,
+      });
+    }
     if (target.docFeeId) {
       updateTermFee(target.docFeeId, {
         docRequestDate: docRequestDate || undefined,
