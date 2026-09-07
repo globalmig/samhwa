@@ -36,6 +36,9 @@ const editableCls =
   "w-full bg-white border border-slate-200 rounded-md px-2 py-1 focus:outline-none " +
   "focus:ring-1 focus:ring-blue-400 focus:border-blue-400 hover:border-slate-300 transition-colors";
 
+// 원래는 한 줄짜리 <input>이었지만, 제목·담당자·연락처처럼 짧은 값도 길어지면 줄바꿔 쓰고 싶을
+// 수 있어 <textarea>로 바꿨다 — 기본 1행 높이로 시작해 값에 든 줄바꿈 수만큼만 늘어나므로 평소엔
+// 기존 input과 똑같아 보인다.
 function InlineInput({
   value,
   onChange,
@@ -48,11 +51,12 @@ function InlineInput({
   placeholder?: string;
 }) {
   return (
-    <input
+    <textarea
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
-      className={`${editableCls} ${className}`}
+      rows={Math.max(1, value.split("\n").length)}
+      className={`${editableCls} resize-none leading-normal ${className}`}
     />
   );
 }
@@ -216,7 +220,7 @@ export default function FeeInvoiceLetterPreview({
               placeholder="{agency} 전담과제 연차상시점검 수수료 청구의 건"
             />
           ) : (
-            <span>{template.title || "—"}</span>
+            <span className="whitespace-pre-wrap">{template.title || "—"}</span>
           )}
         </MetaRow>
       </div>
@@ -337,9 +341,9 @@ export default function FeeInvoiceLetterPreview({
                         </>
                       ) : (
                         <>
-                          <td className="px-3 py-2.5 text-center font-medium whitespace-nowrap border-r border-slate-300">{row.role}</td>
-                          <td className="px-3 py-2.5 text-center whitespace-nowrap border-r border-slate-300">{row.contact}</td>
-                          <td className="px-3 py-2.5 text-center text-blue-700">{row.email}</td>
+                          <td className="px-3 py-2.5 text-center font-medium whitespace-pre-wrap border-r border-slate-300">{row.role}</td>
+                          <td className="px-3 py-2.5 text-center whitespace-pre-wrap border-r border-slate-300">{row.contact}</td>
+                          <td className="px-3 py-2.5 text-center whitespace-pre-wrap text-blue-700">{row.email}</td>
                         </>
                       )}
                     </tr>
@@ -379,7 +383,7 @@ export default function FeeInvoiceLetterPreview({
               </button>
             </div>
           ) : (
-            <p className="font-bold mb-1.5">■ {template.feeSectionTitle || "—"}</p>
+            <p className="font-bold mb-1.5 whitespace-pre-wrap">■ {template.feeSectionTitle || "—"}</p>
           )}
           <div className="overflow-x-auto border border-slate-400">
             <table className="w-full border-collapse">
@@ -391,7 +395,7 @@ export default function FeeInvoiceLetterPreview({
               </thead>
               <tbody>
                 <tr>
-                  <td className="px-2 py-2 text-center border-r border-slate-300 align-middle">
+                  <td className="px-2 py-2 text-center border-r border-slate-300 align-middle whitespace-pre-wrap">
                     {editable ? (
                       <InlineInput value={template.feeStdLabel} onChange={(v) => setField("feeStdLabel", v)} className="text-center" />
                     ) : (
@@ -401,7 +405,7 @@ export default function FeeInvoiceLetterPreview({
                   <td className="px-3 py-2.5 text-right text-slate-500">{fmtWonFull(feeAmounts.supply)}</td>
                 </tr>
                 <tr className="border-t border-slate-300">
-                  <td className="px-2 py-2 text-center border-r border-slate-300 align-middle">
+                  <td className="px-2 py-2 text-center border-r border-slate-300 align-middle whitespace-pre-wrap">
                     {editable ? (
                       <InlineInput value={template.surchargeLabel} onChange={(v) => setField("surchargeLabel", v)} className="text-center" />
                     ) : (
@@ -411,7 +415,7 @@ export default function FeeInvoiceLetterPreview({
                   <td className="px-3 py-2.5 text-right text-slate-500">{fmtWonFull(feeAmounts.tax)}</td>
                 </tr>
                 <tr className="border-t border-slate-300 bg-slate-50">
-                  <td className="px-2 py-2 text-center font-bold border-r border-slate-300 align-middle">
+                  <td className="px-2 py-2 text-center font-bold border-r border-slate-300 align-middle whitespace-pre-wrap">
                     {editable ? (
                       <InlineInput value={template.feeTotalLabel} onChange={(v) => setField("feeTotalLabel", v)} className="text-center font-bold" />
                     ) : (

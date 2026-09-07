@@ -57,6 +57,9 @@ const editableCls =
   "w-full bg-white border border-slate-200 rounded-md px-2 py-1 focus:outline-none " +
   "focus:ring-1 focus:ring-blue-400 focus:border-blue-400 hover:border-slate-300 transition-colors";
 
+// 원래는 한 줄짜리 <input>이었지만, 제목·수신·연락처처럼 짧은 값도 길어지면 줄바꿔 쓰고 싶을 수
+// 있어 <textarea>로 바꿨다 — 기본 1행 높이로 시작해 값에 든 줄바꿈 수만큼만 늘어나므로 평소엔
+// 기존 input과 똑같아 보인다.
 function InlineInput({
   value,
   onChange,
@@ -69,11 +72,12 @@ function InlineInput({
   placeholder?: string;
 }) {
   return (
-    <input
+    <textarea
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
-      className={`${editableCls} ${className}`}
+      rows={Math.max(1, value.split("\n").length)}
+      className={`${editableCls} resize-none leading-normal ${className}`}
     />
   );
 }
@@ -240,21 +244,21 @@ export default function NoticeLetterPreview({
           {editable ? (
             <InlineInput value={template.recipient} onChange={(v) => setField("recipient", v)} />
           ) : (
-            <span>{template.recipient || "—"}</span>
+            <span className="whitespace-pre-wrap">{template.recipient || "—"}</span>
           )}
         </MetaRow>
         <MetaRow label="참 조">
           {editable ? (
             <InlineInput value={template.reference} onChange={(v) => setField("reference", v)} />
           ) : (
-            <span>{template.reference || "—"}</span>
+            <span className="whitespace-pre-wrap">{template.reference || "—"}</span>
           )}
         </MetaRow>
         <MetaRow label="제 목">
           {editable ? (
             <InlineInput value={template.title} onChange={(v) => setField("title", v)} className="font-medium" />
           ) : (
-            <span>{template.title || "—"}</span>
+            <span className="whitespace-pre-wrap">{template.title || "—"}</span>
           )}
         </MetaRow>
       </div>
@@ -384,7 +388,7 @@ export default function NoticeLetterPreview({
                     </>
                   ) : (
                     <>
-                      <td className="px-3 py-2.5 text-center font-medium whitespace-nowrap align-middle border-r border-slate-300">{row.category}</td>
+                      <td className="px-3 py-2.5 text-center font-medium whitespace-pre-wrap align-middle border-r border-slate-300">{row.category}</td>
                       <td className="px-3 py-2.5 text-center whitespace-pre-line align-middle border-r border-slate-300">{row.institutionTask}</td>
                       <td className="px-3 py-2.5 text-center whitespace-pre-line align-middle">{row.firmTask}</td>
                     </>
@@ -478,9 +482,9 @@ export default function NoticeLetterPreview({
                     </>
                   ) : (
                     <>
-                      <td className="px-3 py-2.5 text-center font-medium whitespace-nowrap border-r border-slate-300">{row.role}</td>
-                      <td className="px-3 py-2.5 text-center whitespace-nowrap border-r border-slate-300">{row.contact}</td>
-                      <td className="px-3 py-2.5 text-center text-blue-700">{row.email}</td>
+                      <td className="px-3 py-2.5 text-center font-medium whitespace-pre-wrap border-r border-slate-300">{row.role}</td>
+                      <td className="px-3 py-2.5 text-center whitespace-pre-wrap border-r border-slate-300">{row.contact}</td>
+                      <td className="px-3 py-2.5 text-center whitespace-pre-wrap text-blue-700">{row.email}</td>
                     </>
                   )}
                 </tr>

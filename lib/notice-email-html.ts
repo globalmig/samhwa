@@ -59,7 +59,7 @@ export function buildNoticeEmailHtml({
       ([label, value]) => `
       <tr>
         <td style="padding:8px 12px;font-weight:600;color:#475569;white-space:nowrap;border-bottom:1px solid #e2e8f0;width:120px;">${esc(label)}</td>
-        <td style="padding:8px 12px;color:#1e293b;border-bottom:1px solid #e2e8f0;">${esc(value)}</td>
+        <td style="padding:8px 12px;color:#1e293b;border-bottom:1px solid #e2e8f0;white-space:pre-line;">${esc(value)}</td>
       </tr>`
     )
     .join("");
@@ -106,7 +106,7 @@ export function buildNoticeEmailHtml({
           .map(
             (row) => `
           <tr>
-            <td style="padding:8px;text-align:center;font-weight:500;border:1px solid #cbd5e1;">${esc(row.category)}</td>
+            <td style="padding:8px;text-align:center;font-weight:500;white-space:pre-line;border:1px solid #cbd5e1;">${esc(row.category)}</td>
             <td style="padding:8px;text-align:center;white-space:pre-line;border:1px solid #cbd5e1;">${esc(row.institutionTask)}</td>
             <td style="padding:8px;text-align:center;white-space:pre-line;border:1px solid #cbd5e1;">${esc(row.firmTask)}</td>
           </tr>`
@@ -128,9 +128,9 @@ export function buildNoticeEmailHtml({
           .map(
             (row) => `
           <tr>
-            <td style="padding:8px;text-align:center;font-weight:500;border:1px solid #cbd5e1;">${esc(row.role)}</td>
-            <td style="padding:8px;text-align:center;border:1px solid #cbd5e1;">${esc(row.contact)}</td>
-            <td style="padding:8px;text-align:center;color:#1d4ed8;border:1px solid #cbd5e1;">${esc(row.email)}</td>
+            <td style="padding:8px;text-align:center;font-weight:500;white-space:pre-line;border:1px solid #cbd5e1;">${esc(row.role)}</td>
+            <td style="padding:8px;text-align:center;white-space:pre-line;border:1px solid #cbd5e1;">${esc(row.contact)}</td>
+            <td style="padding:8px;text-align:center;color:#1d4ed8;white-space:pre-line;border:1px solid #cbd5e1;">${esc(row.email)}</td>
           </tr>`
           )
           .join("")}
