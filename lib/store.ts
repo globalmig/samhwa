@@ -277,10 +277,12 @@ let _fundingAgenciesHydrated = false;
 function hydrateFundingAgencies(): void {
   if (_fundingAgenciesHydrated || typeof window === "undefined") return;
   _fundingAgenciesHydrated = true;
+  const snapshotAtStart = _state.fundingAgencies;
   fetch("/api/funding-agencies")
     .then((res) => res.json())
     .then((data: { ok: boolean; agencies?: FundingAgency[] }) => {
-      if (data.ok && data.agencies) {
+      // 이 요청이 떠 있는 동안 이미 수정이 있었으면 그 전 시점의 이 응답으로 덮어쓰지 않는다(수정 8).
+      if (data.ok && data.agencies && _state.fundingAgencies === snapshotAtStart) {
         _state = { ..._state, fundingAgencies: data.agencies };
         notify();
       }
@@ -400,10 +402,11 @@ let _institutionsHydrated = false;
 function hydrateInstitutions(): void {
   if (_institutionsHydrated || typeof window === "undefined") return;
   _institutionsHydrated = true;
+  const snapshotAtStart = _state.institutions;
   fetch("/api/institutions")
     .then((res) => res.json())
     .then((data: { ok: boolean; institutions?: Institution[] }) => {
-      if (data.ok && data.institutions) {
+      if (data.ok && data.institutions && _state.institutions === snapshotAtStart) {
         _state = { ..._state, institutions: data.institutions };
         notify();
       }
@@ -595,10 +598,15 @@ let _projectsHydrated = false;
 function hydrateProjects(): void {
   if (_projectsHydrated || typeof window === "undefined") return;
   _projectsHydrated = true;
+  const snapshotAtStart = _state.projects;
   fetch("/api/projects")
     .then((res) => res.json())
     .then((data: { ok: boolean; projects?: Project[] }) => {
-      if (data.ok && data.projects) {
+      // 이 요청이 떠 있는 동안 사용자가 이미 뭔가 저장했으면(주관기관 지정 등) _state.projects는
+      // 그 사이 새 배열로 바뀌어 있다 — 그런데 이 응답은 그 수정 "전" 시점의 스냅샷이라, 그대로
+      // 덮어쓰면 방금 한 수정이 몇 초 뒤 조용히 사라져 버린다(수정 8). 그 사이 아무 수정도 없었을
+      // 때만(참조가 그대로일 때만) 반영한다 — 있었다면 이미 최신 상태이므로 이 응답은 버린다.
+      if (data.ok && data.projects && _state.projects === snapshotAtStart) {
         _state = { ..._state, projects: data.projects };
         notify();
       }
@@ -850,10 +858,13 @@ let _projectMembersHydrated = false;
 function hydrateProjectMembers(): void {
   if (_projectMembersHydrated || typeof window === "undefined") return;
   _projectMembersHydrated = true;
+  const snapshotAtStart = _state.projectMembers;
   fetch("/api/project-members")
     .then((res) => res.json())
     .then((data: { ok: boolean; members?: ProjectMember[] }) => {
-      if (data.ok && data.members) {
+      // hydrateProjects와 동일한 이유(수정 8) — 이 요청이 떠 있는 동안 참여기관을 이미 수정했으면
+      // (주관기관 지정 등) 그 수정 전 시점의 이 응답으로 덮어쓰지 않는다.
+      if (data.ok && data.members && _state.projectMembers === snapshotAtStart) {
         _state = { ..._state, projectMembers: data.members };
         notify();
       }
@@ -1221,10 +1232,11 @@ let _feePoliciesHydrated = false;
 function hydrateFeePolicies(): void {
   if (_feePoliciesHydrated || typeof window === "undefined") return;
   _feePoliciesHydrated = true;
+  const snapshotAtStart = _state.feePolicies;
   fetch("/api/fee-policies")
     .then((res) => res.json())
     .then((data: { ok: boolean; policies?: FeePolicy[] }) => {
-      if (data.ok && data.policies) {
+      if (data.ok && data.policies && _state.feePolicies === snapshotAtStart) {
         _state = { ..._state, feePolicies: data.policies };
         notify();
       }
@@ -1324,10 +1336,11 @@ let _termFeeCalcsHydrated = false;
 function hydrateTermFeeCalcs(): void {
   if (_termFeeCalcsHydrated || typeof window === "undefined") return;
   _termFeeCalcsHydrated = true;
+  const snapshotAtStart = _state.termFeeCalcs;
   fetch("/api/term-fee-calcs")
     .then((res) => res.json())
     .then((data: { ok: boolean; termFeeCalcs?: TermFeeCalc[] }) => {
-      if (data.ok && data.termFeeCalcs) {
+      if (data.ok && data.termFeeCalcs && _state.termFeeCalcs === snapshotAtStart) {
         _state = { ..._state, termFeeCalcs: data.termFeeCalcs };
         notify();
       }
@@ -1423,10 +1436,11 @@ let _termFeesHydrated = false;
 function hydrateTermFees(): void {
   if (_termFeesHydrated || typeof window === "undefined") return;
   _termFeesHydrated = true;
+  const snapshotAtStart = _state.termFees;
   fetch("/api/term-fees")
     .then((res) => res.json())
     .then((data: { ok: boolean; termFees?: TermFee[] }) => {
-      if (data.ok && data.termFees) {
+      if (data.ok && data.termFees && _state.termFees === snapshotAtStart) {
         _state = { ..._state, termFees: data.termFees };
         notify();
       }
@@ -1588,10 +1602,11 @@ let _unclaimedFeesHydrated = false;
 function hydrateUnclaimedFees(): void {
   if (_unclaimedFeesHydrated || typeof window === "undefined") return;
   _unclaimedFeesHydrated = true;
+  const snapshotAtStart = _state.unclaimedFees;
   fetch("/api/unclaimed-fees")
     .then((res) => res.json())
     .then((data: { ok: boolean; unclaimedFees?: UnclaimedFee[] }) => {
-      if (data.ok && data.unclaimedFees) {
+      if (data.ok && data.unclaimedFees && _state.unclaimedFees === snapshotAtStart) {
         _state = { ..._state, unclaimedFees: data.unclaimedFees };
         notify();
       }
@@ -1657,10 +1672,11 @@ let _receivablesHydrated = false;
 function hydrateReceivables(): void {
   if (_receivablesHydrated || typeof window === "undefined") return;
   _receivablesHydrated = true;
+  const snapshotAtStart = _state.receivables;
   fetch("/api/receivables")
     .then((res) => res.json())
     .then((data: { ok: boolean; receivables?: Receivable[] }) => {
-      if (data.ok && data.receivables) {
+      if (data.ok && data.receivables && _state.receivables === snapshotAtStart) {
         _state = { ..._state, receivables: data.receivables };
         notify();
       }
@@ -1726,10 +1742,11 @@ let _settlementsHydrated = false;
 function hydrateSettlements(): void {
   if (_settlementsHydrated || typeof window === "undefined") return;
   _settlementsHydrated = true;
+  const snapshotAtStart = _state.settlements;
   fetch("/api/settlements")
     .then((res) => res.json())
     .then((data: { ok: boolean; settlements?: Settlement[] }) => {
-      if (data.ok && data.settlements) {
+      if (data.ok && data.settlements && _state.settlements === snapshotAtStart) {
         _state = { ..._state, settlements: data.settlements };
         notify();
       }
@@ -1795,10 +1812,11 @@ let _projectIssuesHydrated = false;
 function hydrateProjectIssues(): void {
   if (_projectIssuesHydrated || typeof window === "undefined") return;
   _projectIssuesHydrated = true;
+  const snapshotAtStart = _state.projectIssues;
   fetch("/api/project-issues")
     .then((res) => res.json())
     .then((data: { ok: boolean; projectIssues?: ProjectIssue[] }) => {
-      if (data.ok && data.projectIssues) {
+      if (data.ok && data.projectIssues && _state.projectIssues === snapshotAtStart) {
         _state = { ..._state, projectIssues: data.projectIssues };
         notify();
       }
@@ -1878,10 +1896,11 @@ let _noticesHydrated = false;
 function hydrateNotices(): void {
   if (_noticesHydrated || typeof window === "undefined") return;
   _noticesHydrated = true;
+  const snapshotAtStart = _state.notices;
   fetch("/api/notices")
     .then((res) => res.json())
     .then((data: { ok: boolean; notices?: Notice[] }) => {
-      if (data.ok && data.notices) {
+      if (data.ok && data.notices && _state.notices === snapshotAtStart) {
         _state = { ..._state, notices: data.notices };
         notify();
       }
@@ -2008,10 +2027,11 @@ let _taxInvoicesHydrated = false;
 function hydrateTaxInvoices(): void {
   if (_taxInvoicesHydrated || typeof window === "undefined") return;
   _taxInvoicesHydrated = true;
+  const snapshotAtStart = _state.taxInvoices;
   fetch("/api/tax-invoices")
     .then((res) => res.json())
     .then((data: { ok: boolean; taxInvoices?: TaxInvoice[] }) => {
-      if (data.ok && data.taxInvoices) {
+      if (data.ok && data.taxInvoices && _state.taxInvoices === snapshotAtStart) {
         _state = { ..._state, taxInvoices: data.taxInvoices };
         notify();
       }
@@ -2164,10 +2184,11 @@ let _standardAttachmentsHydrated = false;
 function hydrateStandardAttachments(): void {
   if (_standardAttachmentsHydrated || typeof window === "undefined") return;
   _standardAttachmentsHydrated = true;
+  const snapshotAtStart = _state.standardAttachments;
   fetch("/api/standard-attachments")
     .then((res) => res.json())
     .then((data: { ok: boolean; attachments?: StandardAttachment[] }) => {
-      if (data.ok && data.attachments) {
+      if (data.ok && data.attachments && _state.standardAttachments === snapshotAtStart) {
         _state = { ..._state, standardAttachments: data.attachments };
         notify();
       }
@@ -2265,10 +2286,11 @@ let _companyInfoHydrated = false;
 function hydrateCompanyInfo(): void {
   if (_companyInfoHydrated || typeof window === "undefined") return;
   _companyInfoHydrated = true;
+  const snapshotAtStart = _state.companyInfo;
   fetch("/api/company-info")
     .then((res) => res.json())
     .then((data: { ok: boolean; companyInfo?: CompanyInfo }) => {
-      if (data.ok && data.companyInfo) {
+      if (data.ok && data.companyInfo && _state.companyInfo === snapshotAtStart) {
         _state = { ..._state, companyInfo: data.companyInfo };
         notify();
       }
@@ -2321,10 +2343,11 @@ let _usersHydrated = false;
 function hydrateUsers(): void {
   if (_usersHydrated || typeof window === "undefined") return;
   _usersHydrated = true;
+  const snapshotAtStart = _state.users;
   fetch("/api/users")
     .then((res) => res.json())
     .then((data: { ok: boolean; users?: SystemUser[] }) => {
-      if (data.ok && data.users) {
+      if (data.ok && data.users && _state.users === snapshotAtStart) {
         _state = { ..._state, users: data.users };
         notify();
       }
@@ -2490,10 +2513,17 @@ let _permissionsHydrated = false;
 function hydratePermissions(): void {
   if (_permissionsHydrated || typeof window === "undefined") return;
   _permissionsHydrated = true;
+  const pageAccessSnapshotAtStart = _state.pageAccess;
+  const writeAccessSnapshotAtStart = _state.writeAccess;
   fetch("/api/role-permissions")
     .then((res) => res.json())
     .then((data: { ok: boolean; pageAccess?: Record<string, Role[]>; writeAccess?: Record<string, Role[]> }) => {
-      if (data.ok && data.pageAccess && data.writeAccess) {
+      // 이 요청이 떠 있는 동안 [권한 설정] 화면에서 이미 뭔가 바꿨으면 그 전 시점의 이 응답으로
+      // 덮어쓰지 않는다(수정 8) — 안 그러면 방금 바꾼 권한이 몇 초 뒤 조용히 원래대로 돌아간다.
+      if (
+        data.ok && data.pageAccess && data.writeAccess &&
+        _state.pageAccess === pageAccessSnapshotAtStart && _state.writeAccess === writeAccessSnapshotAtStart
+      ) {
         // DB(role_permission)에 아예 행이 없는 도메인은 서버 응답에서 키 자체가 빠진다 — 코드에
         // 새 권한 도메인이 추가됐는데 DB 시드/백필이 안 된 경우가 그렇다. 그런 도메인까지 서버
         // 응답으로 통째로 교체해버리면 그 기능은 관리자를 포함해 아무도 못 쓰게 조용히 막혀버리므로
@@ -2612,10 +2642,11 @@ let _agencyNoticeTemplatesHydrated = false;
 function hydrateAgencyNoticeTemplates(): void {
   if (_agencyNoticeTemplatesHydrated || typeof window === "undefined") return;
   _agencyNoticeTemplatesHydrated = true;
+  const snapshotAtStart = _state.agencyNoticeTemplates;
   fetch("/api/agency-notice-templates")
     .then((res) => res.json())
     .then((data: { ok: boolean; templates?: AgencyNoticeTemplateEntry[] }) => {
-      if (data.ok && data.templates) {
+      if (data.ok && data.templates && _state.agencyNoticeTemplates === snapshotAtStart) {
         _state = { ..._state, agencyNoticeTemplates: data.templates };
         notify();
       }
@@ -2698,10 +2729,11 @@ let _feeInvoiceTemplatesHydrated = false;
 function hydrateFeeInvoiceTemplates(): void {
   if (_feeInvoiceTemplatesHydrated || typeof window === "undefined") return;
   _feeInvoiceTemplatesHydrated = true;
+  const snapshotAtStart = _state.feeInvoiceTemplates;
   fetch("/api/fee-invoice-templates")
     .then((res) => res.json())
     .then((data: { ok: boolean; templates?: FeeInvoiceTemplateEntry[] }) => {
-      if (data.ok && data.templates) { _state = { ..._state, feeInvoiceTemplates: data.templates }; notify(); }
+      if (data.ok && data.templates && _state.feeInvoiceTemplates === snapshotAtStart) { _state = { ..._state, feeInvoiceTemplates: data.templates }; notify(); }
     })
     .catch((err) => { console.error("수수료 청구서 템플릿을 불러오지 못했습니다.", err); _feeInvoiceTemplatesHydrated = false; });
 }
@@ -2801,10 +2833,11 @@ let _simpleNoticeTemplatesHydrated = false;
 function hydrateSimpleNoticeTemplates(): void {
   if (_simpleNoticeTemplatesHydrated || typeof window === "undefined") return;
   _simpleNoticeTemplatesHydrated = true;
+  const snapshotAtStart = _state.simpleNoticeTemplates;
   fetch("/api/simple-notice-templates")
     .then((res) => res.json())
     .then((data: { ok: boolean; templates?: SimpleNoticeTemplateEntry[] }) => {
-      if (data.ok && data.templates) { _state = { ..._state, simpleNoticeTemplates: data.templates }; notify(); }
+      if (data.ok && data.templates && _state.simpleNoticeTemplates === snapshotAtStart) { _state = { ..._state, simpleNoticeTemplates: data.templates }; notify(); }
     })
     .catch((err) => { console.error("간단 안내메일 템플릿을 불러오지 못했습니다.", err); _simpleNoticeTemplatesHydrated = false; });
 }
