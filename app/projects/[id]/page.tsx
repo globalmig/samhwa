@@ -3196,8 +3196,11 @@ function BillingBlock({
 
   function cancelInvoice() {
     if (!unit.invoice) return;
-    if (!window.confirm("세금계산서 발행을 취소할까요? 발행일이 삭제되고 상태가 '취소'로 변경됩니다.")) return;
-    updateTaxInvoice(unit.invoice.id, { issuedAt: "", status: "CANCELED" });
+    if (!window.confirm("세금계산서 발행을 취소할까요? 상태가 '취소'로 변경됩니다.")) return;
+    // issuedAt은 보내지 않는다 — DB의 issue_date는 NOT NULL이라 빈 문자열을 보내면 서버가
+    // new Date("")(Invalid Date)를 만들다 저장이 조용히 실패했다(app/fees/page.tsx의 매출취소와
+    // 동일한 원인). 발행일은 그대로 두고(발행 이력으로 남김) status만 CANCELED로 바꾼다.
+    updateTaxInvoice(unit.invoice.id, { status: "CANCELED" });
     // billingType이 이 연차(+분리 청구 기관)에 "정발행"으로 저장되어 있으면 취소 후에도 목록에서
     // 계속 그 표시가 남으므로 초기화한다.
     if (unit.billingType === "정발행") {

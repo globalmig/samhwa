@@ -33,7 +33,11 @@ export async function PATCH(request: Request, { params }: Params) {
     where: { id },
     data: {
       invoiceNumber: body.invoiceNumber ?? undefined,
-      issueDate: body.issuedAt !== undefined ? new Date(body.issuedAt) : undefined,
+      // issue_date는 DB에서 NOT NULL이라, 빈 문자열(취소 시 "발행일을 지운다"는 의도로 보내던 값)을
+      // new Date("")(Invalid Date)로 그대로 넘기면 이 update 자체가 예외로 실패해 상태(status)까지
+      // 함께 저장 안 되는 문제가 있었다 — 취소가 화면엔 잠깐 반영된 것처럼 보이다 새로고침하면
+      // 원래 발행 상태로 되돌아가던 버그의 실제 원인. 빈 문자열이면 기존 발행일을 그대로 둔다.
+      issueDate: body.issuedAt ? new Date(body.issuedAt) : undefined,
       supplyAmount: body.supplyAmount !== undefined ? BigInt(Math.round(body.supplyAmount)) : undefined,
       taxAmount: body.taxAmount !== undefined ? BigInt(Math.round(body.taxAmount)) : undefined,
       totalAmount: body.totalAmount !== undefined ? BigInt(Math.round(body.totalAmount)) : undefined,

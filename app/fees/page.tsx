@@ -473,7 +473,12 @@ function SalesCancelModal({ target, onClose }: { target: SalesTarget; onClose: (
   function handleSave() {
     if (!target.taxInvoiceId) { onClose(); return; }
     if (mode === "delete") {
-      updateTaxInvoice(target.taxInvoiceId, { issuedAt: "", status: "CANCELED" });
+      // issuedAt은 보내지 않는다 — DB의 issue_date는 NOT NULL이라 빈 문자열을 보내면 서버가
+      // new Date("")(Invalid Date)를 만들다 저장 자체가 조용히 실패했다(취소가 화면엔 잠깐
+      // 반영된 것처럼 보이다가 새로고침하면 원래 발행 상태로 되돌아가던 버그의 원인). 발행일은
+      // 원래 값 그대로 두고(발행 이력으로 남김) status만 CANCELED로 바꾼다 — 화면 표시는 취소된
+      // 계산서를 항상 "미발행"처럼 보여주므로(activeInvoice) 발행일을 지우지 않아도 문제없다.
+      updateTaxInvoice(target.taxInvoiceId, { status: "CANCELED" });
       // billingType이 이 연차에 "정발행"으로 저장되어 있으면 취소 후에도 계속 그 표시가 남으므로 초기화한다.
       // (세금계산서가 실제로 취소됐는지와 무관하게 TermFee.billingType은 별도 필드라 자동으로 안 지워짐)
       if (target.currentBillingType === "정발행") {
