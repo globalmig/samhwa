@@ -39,7 +39,12 @@ function kstParts(d: Date) {
 }
 
 export function nowKST(withSeconds = false): string {
-  const { y, mo, da, h, mi, s } = kstParts(new Date());
+  return formatKST(new Date(), withSeconds);
+}
+
+/** 서버에서 받아온 임의의 Date(예: DB의 createdAt)를 nowKST와 동일한 형식의 KST 문자열로 바꾼다. */
+export function formatKST(d: Date, withSeconds = false): string {
+  const { y, mo, da, h, mi, s } = kstParts(d);
   return `${y}-${mo}-${da} ${h}:${mi}${withSeconds ? `:${s}` : ""}`;
 }
 

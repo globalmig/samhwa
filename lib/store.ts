@@ -267,7 +267,41 @@ function record(
     performedAt: nowKST(true),
   };
   _state = { ..._state, auditLog: [entry, ..._state.auditLog] };
+
+  // 서버(audit_log 테이블)에 영구 저장한다 — 예전엔 이 함수가 브라우저 메모리에만 쌓아서 새로고침하면
+  // "전체 변경이력"이 통째로 사라졌다(수정 9). 실패해도 이미 화면엔 반영됐고 이 기록을 트리거한
+  // 실제 동작(과제 수정 등)은 이미 끝난 뒤라, 굳이 되돌리지 않고 콘솔에만 남긴다.
+  fetch("/api/audit-log", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ entityType, entityId, entityLabel, action, changedFields }),
+  }).catch((err) => console.error("변경이력 저장 실패:", err));
 }
+
+// audit_log는 추가 전용(append-only) 데이터라 다른 hydrate*와 달리 "그 사이 로컬 변경이 있으면
+// 응답을 버린다" 방식이 아니라, 서버에서 가져온 과거 기록과 세션 중 새로 쌓인 기록을 id 기준으로
+// 합친다 — 둘 다 잃지 않는다.
+let _auditLogHydrated = false;
+function hydrateAuditLog(): void {
+  if (_auditLogHydrated || typeof window === "undefined") return;
+  _auditLogHydrated = true;
+  fetch("/api/audit-log")
+    .then((res) => res.json())
+    .then((data: { ok: boolean; entries?: AuditEntry[] }) => {
+      if (data.ok && data.entries) {
+        const localIds = new Set(_state.auditLog.map((e) => e.id));
+        const merged = [..._state.auditLog, ...data.entries.filter((e) => !localIds.has(e.id))]
+          .sort((a, b) => (a.performedAt < b.performedAt ? 1 : a.performedAt > b.performedAt ? -1 : 0));
+        _state = { ..._state, auditLog: merged };
+        notify();
+      }
+    })
+    .catch((err) => {
+      console.error("변경이력을 불러오지 못했습니다.", err);
+      _auditLogHydrated = false;
+    });
+}
+if (typeof window !== "undefined") hydrateAuditLog();
 
 // ============================================================
 // FUNDING AGENCIES (전담기관)
