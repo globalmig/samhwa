@@ -3445,8 +3445,24 @@ export function autoGenerateTermFees(projectId: string): void {
     body: JSON.stringify({ termFees: projectTermFees, termFeeCalcs: projectTermFeeCalcs }),
   })
     .then((res) => res.json())
-    .then((res: { ok: boolean; error?: string }) => {
-      if (!res.ok) console.error("연차수수료 동기화 실패(서버):", res.error);
+    .then((res: { ok: boolean; termFees?: TermFee[]; error?: string }) => {
+      if (!res.ok) { console.error("연차수수료 동기화 실패(서버):", res.error); return; }
+      if (!res.termFees) return;
+      // 여기서 만든 termFees는 매번 새 임시 id(genId("tf"))를 달고 있어, 서버가 upsert한 실제 DB id와
+      // 다르다 — sync-fees는 id가 아니라 (기관×연차) 기준으로 upsert하기 때문에 서버는 정상 저장되지만,
+      // 로컬 상태는 계속 이 임시 id를 들고 있게 된다. 그 상태로 이 행에 개별 PATCH를 보내는 다른 동작
+      // (updateTermFee, setTermOtherFirmHandled 등)을 하면 서버가 그 임시 id를 실제 DB에서 못 찾아
+      // 조용히 실패한다(타회계법인 진행 체크가 저장은 되는 것처럼 보이다 사라지던 버그의 원인). 서버가
+      // 돌려준 실제 id로 즉시 교체해 이 문제를 없앤다.
+      const realByKey = new Map(res.termFees.map((f) => [`${f.termYear}|${f.termNumber}|${f.institutionId}`, f]));
+      _state = {
+        ..._state,
+        termFees: _state.termFees.map((f) => {
+          if (f.projectNumber !== project.projectNumber) return f;
+          return realByKey.get(`${f.termYear}|${f.termNumber}|${f.institutionId}`) ?? f;
+        }),
+      };
+      notify();
     })
     .catch((err) => console.error("연차수수료 동기화 실패(서버):", err));
 }
