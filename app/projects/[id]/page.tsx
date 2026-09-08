@@ -1925,8 +1925,8 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               <tr className="bg-slate-50 border-b border-slate-100">
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500">일시</th>
                 <th className="text-center px-4 py-3 text-xs font-medium text-slate-500">액션</th>
-                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500">대상</th>
-                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500">수행자</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">대상</th>
+                <th className="text-center px-4 py-3 text-xs font-medium text-slate-500 whitespace-nowrap">수행자</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-slate-500">변경 항목</th>
               </tr>
             </thead>
@@ -1940,10 +1940,10 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                       color={e.action === "CREATE" ? "blue" : e.action === "UPDATE" ? "amber" : "red"}
                     />
                   </td>
-                  <td className="px-4 py-2.5 text-center text-xs text-slate-500">
+                  <td className="px-4 py-2.5 text-center text-xs text-slate-500 whitespace-nowrap">
                     {e.entityType === "projectMember" ? (members.find((m) => m.id === e.entityId)?.institutionName ?? "-") : "과제"}
                   </td>
-                  <td className="px-4 py-2.5 text-center text-sm text-slate-700">{e.performedBy}</td>
+                  <td className="px-4 py-2.5 text-center text-sm text-slate-700 whitespace-nowrap">{e.performedBy}</td>
                   <td className="px-4 py-2.5 text-xs text-slate-500">
                     {e.changedFields ? (
                       <div className="space-y-0.5">

@@ -277,7 +277,7 @@ export default function AuditLogPage() {
               <p className="text-xs text-slate-400 mt-0.5">{summary}</p>
             )}
           </td>
-          <td className="px-4 py-3 text-center text-sm text-slate-700">{entry.performedBy}</td>
+          <td className="px-4 py-3 text-center text-sm text-slate-700 whitespace-nowrap">{entry.performedBy}</td>
           <td className="px-4 py-3 text-center">
             {hasDetail ? (
               <button
@@ -389,7 +389,7 @@ export default function AuditLogPage() {
             )}
             <p className="text-xs text-slate-400 mt-0.5">한 번에 처리된 작업 {entries.length}건</p>
           </td>
-          <td className="px-4 py-3 text-center text-sm text-slate-700">{latest.performedBy}</td>
+          <td className="px-4 py-3 text-center text-sm text-slate-700 whitespace-nowrap">{latest.performedBy}</td>
           <td className="px-4 py-3 text-center">
             <button
               onClick={() => toggleGroup(groupId)}
