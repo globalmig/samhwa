@@ -489,23 +489,34 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
     const resolvedAgency = fundingAgencies.find((a) => a.id === resolvedAgencyId)?.name ?? draft.agency;
     // 당해(draft.currentTerm) 정부출연금/민간현금/민간현물을 직접 수정했을 수 있으니, 연차별 이력
     // (annualFinancials)도 함께 갱신한다 — 안 그러면 다른 연차를 봤다가 돌아왔을 때 방금 수정한
-    // 값과 이력이 어긋난다.
+    // 값과 이력이 어긋난다. 단, 이 세 값을 실제로 건드리지 않았으면(과제명만 고치는 등) 여기서
+    // 손대지 않는다 — 예전엔 매번 무조건 다시 만들어서, 관련 없는 값만 고쳐도 변경이력에 "연차별
+    // 사업비 이력"이 "-"에서 값이 생긴 것처럼 남고, 그 값이 실제로 그 연차에 고정(백필)돼버렸다.
     const savedTermYear = termNumberToYear(draft.startDate, draft.currentTerm);
-    const annualFinancials = [
-      ...(draft.annualFinancials ?? []).filter((a) => a.termNumber !== draft.currentTerm),
-      { termYear: savedTermYear, termNumber: draft.currentTerm, govGrant: draft.govGrant ?? 0, privateCash: draft.privateCash ?? 0, privateInKind: draft.privateInKind ?? 0 },
-    ].sort((a, b) => a.termNumber - b.termNumber);
+    const financialsChanged =
+      (draft.govGrant ?? 0) !== (project!.govGrant ?? 0) ||
+      (draft.privateCash ?? 0) !== (project!.privateCash ?? 0) ||
+      (draft.privateInKind ?? 0) !== (project!.privateInKind ?? 0);
+    const annualFinancials = financialsChanged
+      ? [
+          ...(draft.annualFinancials ?? []).filter((a) => a.termNumber !== draft.currentTerm),
+          { termYear: savedTermYear, termNumber: draft.currentTerm, govGrant: draft.govGrant ?? 0, privateCash: draft.privateCash ?? 0, privateInKind: draft.privateInKind ?? 0 },
+        ].sort((a, b) => a.termNumber - b.termNumber)
+      : draft.annualFinancials;
     // 당해(draft.currentTerm) 담당자를 직접 수정했을 수 있으니, 연차별 이력(assignedManagerHistory)도
     // 함께 갱신한다 — 안 그러면 다른 연차를 봤다가 돌아왔을 때 방금 수정한 값과 이력이 어긋난다.
     // 연락처·이메일은 여기 저장하지 않는다 — 공문 발송 시 이 이름으로 [권한관리]에서 찾아 쓴다.
-    const assignedManagerHistory = draft.assignedManager
+    // 위 사업비와 동일하게, 실제로 값이 바뀐 경우에만 이력을 새로 만든다.
+    const assignedManagerChanged = (draft.assignedManager ?? "") !== (project!.assignedManager ?? "");
+    const assignedManagerHistory = draft.assignedManager && assignedManagerChanged
       ? [
           ...(draft.assignedManagerHistory ?? []).filter((h) => h.termNumber !== draft.currentTerm),
           { termNumber: draft.currentTerm, assignedManager: draft.assignedManager },
         ].sort((a, b) => a.termNumber - b.termNumber)
       : draft.assignedManagerHistory;
     // 과제담당자(정)도 (부)와 동일하게 진행 연차 기준으로 이력을 남긴다.
-    const assignedManagerPrimaryHistory = draft.assignedManagerPrimary
+    const assignedManagerPrimaryChanged = (draft.assignedManagerPrimary ?? "") !== (project!.assignedManagerPrimary ?? "");
+    const assignedManagerPrimaryHistory = draft.assignedManagerPrimary && assignedManagerPrimaryChanged
       ? [
           ...(draft.assignedManagerPrimaryHistory ?? []).filter((h) => h.termNumber !== draft.currentTerm),
           { termNumber: draft.currentTerm, assignedManagerPrimary: draft.assignedManagerPrimary },
