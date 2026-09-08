@@ -1,12 +1,13 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import * as XLSX from "xlsx";
-import { FiPlus, FiX, FiCheck, FiEdit2, FiTrash2, FiDownload } from "react-icons/fi";
-import { useStore, addProjectIssue, updateProjectIssue, deleteProjectIssue } from "@/lib/store";
+import { FiPlus, FiX, FiCheck, FiTrash2, FiDownload } from "react-icons/fi";
+import { useStore, addProjectIssue, deleteProjectIssue } from "@/lib/store";
+import { useAuth } from "@/lib/auth";
 import { useCanWrite } from "@/lib/permissions";
-import type { ProjectIssue, IssueRecipientGroup } from "@/lib/mock";
+import type { IssueRecipientGroup } from "@/lib/mock";
 import UserMultiSelect from "@/components/common/UserMultiSelect";
 import { nowKST, todayKST } from "@/lib/utils";
 
@@ -38,18 +39,8 @@ const RECIPIENT_OPTIONS: { value: IssueRecipientGroup; label: string }[] = [
   { value: "SETTLEMENT",     label: "전담기관 담당자 전체" },
 ];
 
-type EditDraft = {
-  content: string;
-  priority: "HIGH" | "MEDIUM" | "LOW";
-  status: "OPEN" | "IN_PROGRESS" | "RESOLVED";
-  recipientGroups: IssueRecipientGroup[];
-  recipientUserIds: string[];
-  institutionName: string;
-  noInstitution: boolean;
-  term: number | "";
-};
-
 export default function IssuesPage() {
+  const { user } = useAuth();
   const canCreate = useCanWrite('issues');
   const canManage = useCanWrite('issues-manage');
   const { projectIssues, projects, fundingAgencies, users } = useStore();
@@ -74,25 +65,11 @@ export default function IssuesPage() {
   const [formNoInstitution, setFormNoInstitution] = useState(false);
   const [formTerm, setFormTerm] = useState<number | "">("");
 
-  // Edit state
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState<EditDraft>({
-    content: "", priority: "MEDIUM", status: "OPEN", recipientGroups: [],
-    recipientUserIds: [], institutionName: "", noInstitution: false, term: "",
-  });
-
   // Delete confirm
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   function toggleFormRecipient(group: IssueRecipientGroup) {
     setFormRecipients((prev) => prev.includes(group) ? prev.filter((g) => g !== group) : [...prev, group]);
-  }
-
-  function toggleEditRecipient(group: IssueRecipientGroup) {
-    setEditDraft((d) => ({
-      ...d,
-      recipientGroups: d.recipientGroups.includes(group) ? d.recipientGroups.filter((g) => g !== group) : [...d.recipientGroups, group],
-    }));
   }
 
   const sorted = [...projectIssues].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -115,7 +92,7 @@ export default function IssuesPage() {
       projectId: project.id,
       projectNumber: project.projectNumber,
       content: formContent.trim(),
-      author: "김관리",
+      author: user?.name ?? "시스템",
       createdAt: nowKST(),
       priority: formPriority,
       status: formStatus,
@@ -135,31 +112,6 @@ export default function IssuesPage() {
     setFormNoInstitution(false);
     setFormTerm("");
     setShowForm(false);
-  }
-
-  function startEdit(issue: ProjectIssue) {
-    setEditingId(issue.id);
-    setEditDraft({
-      content: issue.content, priority: issue.priority, status: issue.status ?? "OPEN",
-      recipientGroups: issue.recipientGroups ?? [], recipientUserIds: issue.recipientUserIds ?? [],
-      institutionName: issue.institutionName ?? "", noInstitution: issue.noInstitution ?? false,
-      term: issue.term ?? "",
-    });
-  }
-
-  function saveEdit() {
-    if (!editingId || !editDraft.content.trim()) return;
-    updateProjectIssue(editingId, {
-      content: editDraft.content.trim(),
-      priority: editDraft.priority,
-      status: editDraft.status,
-      recipientGroups: editDraft.recipientGroups,
-      recipientUserIds: editDraft.recipientUserIds,
-      institutionName: editDraft.noInstitution ? undefined : (editDraft.institutionName.trim() || undefined),
-      noInstitution: editDraft.noInstitution,
-      term: editDraft.term === "" ? undefined : editDraft.term,
-    });
-    setEditingId(null);
   }
 
   function exportToExcel() {
@@ -420,124 +372,7 @@ export default function IssuesPage() {
             <tbody>
               {filtered.map((issue) => {
                 const project = projects.find((p) => p.id === issue.projectId);
-                const isEditing = editingId === issue.id;
                 const isDeleting = deletingId === issue.id;
-
-                if (isEditing) {
-                  return (
-                    <Fragment key={issue.id}>
-                      <tr className="border-b border-blue-100 bg-blue-50/30">
-                        <td className="px-4 py-3 text-center">
-                          <select value={editDraft.priority}
-                            onChange={(e) => setEditDraft((d) => ({ ...d, priority: e.target.value as typeof editDraft.priority }))}
-                            className="text-[10px] font-semibold border border-slate-200 rounded px-1.5 py-0.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400">
-                            <option value="HIGH">높음</option>
-                            <option value="MEDIUM">보통</option>
-                            <option value="LOW">낮음</option>
-                          </select>
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          <select value={editDraft.status}
-                            onChange={(e) => setEditDraft((d) => ({ ...d, status: e.target.value as typeof editDraft.status }))}
-                            className="text-[10px] font-semibold border border-slate-200 rounded px-1.5 py-0.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400">
-                            <option value="OPEN">미처리</option>
-                            <option value="IN_PROGRESS">진행중</option>
-                            <option value="RESOLVED">완료</option>
-                          </select>
-                        </td>
-                        <td className="px-4 py-3" colSpan={4}>
-                          <textarea
-                            value={editDraft.content}
-                            onChange={(e) => setEditDraft((d) => ({ ...d, content: e.target.value }))}
-                            className="w-full text-sm border border-blue-300 rounded-lg px-3 py-1.5 text-slate-700 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-                            rows={2} maxLength={500} autoFocus />
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          {project && (
-                            <Link href={`/projects/${project.id}`}
-                              className="text-xs text-blue-500 hover:underline hover:text-blue-700 transition-colors">
-                              과제 상세 →
-                            </Link>
-                          )}
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center justify-center gap-1">
-                            <button onClick={saveEdit} disabled={!editDraft.content.trim()}
-                              className="flex items-center gap-0.5 px-2.5 py-1 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40 transition-colors">
-                              <FiCheck size={11} /> 저장
-                            </button>
-                            <button onClick={() => setEditingId(null)}
-                              className="px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
-                              취소
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                      <tr className="border-b border-blue-100 bg-blue-50/30">
-                        <td className="px-4 pt-1 pb-2" colSpan={8}>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-slate-500 w-20 shrink-0">연차</span>
-                            <select value={editDraft.term}
-                              onChange={(e) => setEditDraft((d) => ({ ...d, term: e.target.value === "" ? "" : Number(e.target.value) }))}
-                              className="text-xs border border-slate-200 rounded-lg px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400 w-28">
-                              <option value="">선택 안함</option>
-                              {Array.from({ length: project?.totalTerms ?? 0 }, (_, i) => i + 1).map((n) => (
-                                <option key={n} value={n}>{n}연차</option>
-                              ))}
-                            </select>
-                          </div>
-                        </td>
-                      </tr>
-                      <tr className="border-b border-blue-100 bg-blue-50/30">
-                        <td className="px-4 pt-1 pb-2" colSpan={8}>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-slate-500 w-20 shrink-0">이슈 발생 기관</span>
-                            <input value={editDraft.institutionName}
-                              onChange={(e) => setEditDraft((d) => ({ ...d, institutionName: e.target.value }))}
-                              disabled={editDraft.noInstitution} placeholder="기관명을 입력하세요"
-                              className="text-xs border border-slate-200 rounded-lg px-2 py-1 bg-white disabled:bg-slate-50 disabled:text-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-400 w-48" />
-                            <label className="flex items-center gap-1.5 cursor-pointer shrink-0">
-                              <input type="checkbox" checked={editDraft.noInstitution}
-                                onChange={(e) => setEditDraft((d) => ({ ...d, noInstitution: e.target.checked, institutionName: e.target.checked ? "" : d.institutionName }))}
-                                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30" />
-                              <span className="text-xs text-slate-600">선택 필요 없음</span>
-                            </label>
-                          </div>
-                        </td>
-                      </tr>
-                      <tr className="border-b border-blue-100 bg-blue-50/30">
-                        <td className="px-4 pb-1" colSpan={8}>
-                          <div className="flex items-center gap-3">
-                            <span className="text-xs text-slate-500 w-20 shrink-0">대상(전체)</span>
-                            {RECIPIENT_OPTIONS.map(({ value, label }) => (
-                              <label key={value} className="flex items-center gap-1.5 cursor-pointer">
-                                <input type="checkbox" checked={editDraft.recipientGroups.includes(value)}
-                                  onChange={() => toggleEditRecipient(value)}
-                                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500/30" />
-                                <span className="text-xs text-slate-600">{label}</span>
-                              </label>
-                            ))}
-                          </div>
-                        </td>
-                      </tr>
-                      <tr className="border-b border-blue-100 bg-blue-50/30">
-                        <td className="px-4 pb-3" colSpan={8}>
-                          <div className="flex items-start gap-3">
-                            <span className="text-xs text-slate-500 w-20 shrink-0 pt-1.5">대상(개인)</span>
-                            <div className="flex-1 max-w-sm">
-                              <UserMultiSelect
-                                users={selectableUsers}
-                                selectedIds={editDraft.recipientUserIds}
-                                onChange={(ids) => setEditDraft((d) => ({ ...d, recipientUserIds: ids }))}
-                                placeholder="이름으로 검색..."
-                              />
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
-                    </Fragment>
-                  );
-                }
 
                 return (
                   <tr key={issue.id} className={`border-b border-slate-50 transition-colors ${isDeleting ? "bg-red-50" : "hover:bg-slate-50"}`}>
@@ -595,10 +430,6 @@ export default function IssuesPage() {
                           </div>
                         ) : (
                           <div className="flex items-center justify-center gap-1">
-                            <button onClick={() => startEdit(issue)}
-                              className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors">
-                              <FiEdit2 size={13} />
-                            </button>
                             <button onClick={() => setDeletingId(issue.id)}
                               className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors">
                               <FiTrash2 size={13} />

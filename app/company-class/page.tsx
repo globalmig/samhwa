@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { FiChevronDown, FiChevronRight, FiEdit2, FiPlus, FiTrash2 } from "react-icons/fi";
+import { getCurrentUser } from "@/lib/auth";
 import {
   useStore,
   addFeePolicy,
@@ -126,7 +127,7 @@ function makePolicyEmpty(agencyId: string | null, templatePolicy: FeePolicy | nu
     standardRate: 3.0,
     description: "",
     createdAt: todayKST(),
-    createdBy: "김관리",
+    createdBy: getCurrentUser()?.name ?? "시스템",
     feeRateBrackets: templatePolicy?.feeRateBrackets ?? KEIT_BRACKETS,
     coInstAddonMethod: templatePolicy?.coInstAddonMethod ?? "TIERED",
     coInstFirstRate: templatePolicy?.coInstFirstRate ?? 0.1,

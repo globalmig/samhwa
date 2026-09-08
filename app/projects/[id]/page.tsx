@@ -775,7 +775,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       projectId,
       projectNumber: project!.projectNumber,
       content: issueContent.trim(),
-      author: "김관리",
+      author: getCurrentUser()?.name ?? "시스템",
       createdAt: nowKST(),
       priority: issuePriority,
       status: issueStatus,
