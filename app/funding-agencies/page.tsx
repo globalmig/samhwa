@@ -2,9 +2,9 @@
 
 import { useState, useMemo } from "react";
 import Link from "next/link";
-import { FiEdit2, FiExternalLink } from "react-icons/fi";
-import { useStore, addFundingAgency, updateFundingAgency, updateAgencyGuide } from "@/lib/store";
-import { type FundingAgency, type FeePolicy, type AgencyGuideRow as GuideRow, type AgencyGuideTab as GuideTab } from "@/lib/mock";
+import { FiEdit2, FiExternalLink, FiTrash2, FiPlus, FiX } from "react-icons/fi";
+import { useStore, addFundingAgency, updateFundingAgency, deleteFundingAgency, updateAgencyGuide } from "@/lib/store";
+import { type FundingAgency, type FeePolicy, type AgencyGuideRow as GuideRow, type AgencyGuideTab as GuideTab, type AgencyGuideTable as GuideTable } from "@/lib/mock";
 import { AGENCY_GUIDE } from "@/lib/agency-guide";
 import { fmtDate, fmtWon, todayKST } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
@@ -23,14 +23,64 @@ function AgencyGuideModal({ agency }: { agency: FundingAgency }) {
   const [draft, setDraft] = useState<GuideTab[]>([]);
 
   const displayTabs = isEditing ? draft : baseTabs;
-  const currentTab = displayTabs[Math.min(activeTab, displayTabs.length - 1)];
+  const currentTab = displayTabs[Math.min(Math.max(activeTab, 0), displayTabs.length - 1)];
 
-  function startEdit() { setDraft(JSON.parse(JSON.stringify(baseTabs))); setIsEditing(true); }
+  // 기존 안내가 전혀 없는(새로 추가한) 전담기관도 처음부터 작성을 시작할 수 있어야 하므로, 편집을
+  // 시작할 때 탭이 하나도 없으면 빈 탭 하나를 만들어준다 — 안 그러면 draft가 계속 빈 배열이라
+  // currentTab이 없어 편집 화면 자체가 안 뜬다.
+  function startEdit() {
+    const seeded = baseTabs.length > 0 ? baseTabs : [{ label: "안내", tables: [] }];
+    setDraft(JSON.parse(JSON.stringify(seeded)));
+    setActiveTab(0);
+    setIsEditing(true);
+  }
   function cancelEdit() { setIsEditing(false); }
   function saveEdit() { updateAgencyGuide(agency.shortName, draft); setIsEditing(false); }
 
   function setTabLabel(ti: number, label: string) {
     setDraft((d) => d.map((t, i) => i !== ti ? t : { ...t, label }));
+  }
+  function addTab() {
+    setDraft((d) => [...d, { label: `탭 ${d.length + 1}`, tables: [] }]);
+    setActiveTab(draft.length);
+  }
+  function removeTab(ti: number) {
+    if (!window.confirm("이 탭을 삭제할까요? 탭 안의 내용이 모두 사라집니다.")) return;
+    setDraft((d) => d.filter((_, i) => i !== ti));
+    setActiveTab((a) => Math.max(0, a >= ti ? a - 1 : a));
+  }
+  function addTable(ti: number) {
+    const newTable: GuideTable = { headers: ["구분", "내용"], rows: [{ cells: ["", ""] }] };
+    setDraft((d) => d.map((t, i) => i !== ti ? t : { ...t, tables: [...t.tables, newTable] }));
+  }
+  function removeTable(ti: number, tbi: number) {
+    if (!window.confirm("이 표를 삭제할까요?")) return;
+    setDraft((d) => d.map((t, i) => i !== ti ? t : { ...t, tables: t.tables.filter((_, j) => j !== tbi) }));
+  }
+  function setHeader(ti: number, tbi: number, hi: number, v: string) {
+    setDraft((d) => d.map((t, i) => i !== ti ? t : {
+      ...t, tables: t.tables.map((tbl, j) => j !== tbi ? tbl : {
+        ...tbl, headers: tbl.headers.map((h, k) => k !== hi ? h : v),
+      }),
+    }));
+  }
+  function addColumn(ti: number, tbi: number) {
+    setDraft((d) => d.map((t, i) => i !== ti ? t : {
+      ...t, tables: t.tables.map((tbl, j) => j !== tbi ? tbl : {
+        ...tbl,
+        headers: [...tbl.headers, "새 열"],
+        rows: tbl.rows.map((row) => ({ ...row, cells: [...row.cells, ""] })),
+      }),
+    }));
+  }
+  function removeColumn(ti: number, tbi: number, hi: number) {
+    setDraft((d) => d.map((t, i) => i !== ti ? t : {
+      ...t, tables: t.tables.map((tbl, j) => j !== tbi ? tbl : {
+        ...tbl,
+        headers: tbl.headers.filter((_, k) => k !== hi),
+        rows: tbl.rows.map((row) => ({ ...row, cells: row.cells.filter((_, k) => k !== hi) })),
+      }),
+    }));
   }
   function setCaption(ti: number, tbi: number, v: string) {
     setDraft((d) => d.map((t, i) => i !== ti ? t : {
@@ -84,31 +134,63 @@ function AgencyGuideModal({ agency }: { agency: FundingAgency }) {
     }));
   }
 
-  if (!currentTab) return <div className="p-6 text-center text-sm text-slate-400">운용 안내 정보가 없습니다.</div>;
+  if (!currentTab) {
+    return (
+      <div className="p-10 text-center space-y-3">
+        <p className="text-sm text-slate-400">아직 작성된 운용 안내가 없습니다.</p>
+        {canEdit && (
+          <button onClick={startEdit} className="px-4 py-2 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">
+            운용 안내 작성 시작
+          </button>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div>
       {/* 탭바 + 편집 컨트롤 */}
       <div className="flex items-stretch justify-between border-b border-slate-200 sticky top-0 bg-white z-10">
-        <div className="flex px-2 gap-0.5 overflow-x-auto">
+        <div className="flex px-2 gap-0.5 overflow-x-auto items-stretch">
           {displayTabs.map((tab, i) => (
             <button
               key={i}
               onClick={() => setActiveTab(i)}
-              className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+              className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap flex items-center gap-1.5 ${
                 i === activeTab ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300"
               }`}
             >
               {isEditing ? (
-                <input
-                  value={tab.label}
-                  onChange={(e) => { e.stopPropagation(); setTabLabel(i, e.target.value); }}
-                  onClick={(e) => { e.stopPropagation(); setActiveTab(i); }}
-                  className="bg-transparent outline-none border-b border-dashed border-blue-300 text-sm font-medium w-24 text-center"
-                />
+                <>
+                  <input
+                    value={tab.label}
+                    onChange={(e) => { e.stopPropagation(); setTabLabel(i, e.target.value); }}
+                    onClick={(e) => { e.stopPropagation(); setActiveTab(i); }}
+                    className="bg-transparent outline-none border-b border-dashed border-blue-300 text-sm font-medium w-24 text-center"
+                  />
+                  {displayTabs.length > 1 && (
+                    <span
+                      role="button"
+                      onClick={(e) => { e.stopPropagation(); removeTab(i); }}
+                      title="탭 삭제"
+                      className="text-slate-300 hover:text-red-500 transition-colors"
+                    >
+                      <FiX size={13} />
+                    </span>
+                  )}
+                </>
               ) : tab.label}
             </button>
           ))}
+          {isEditing && (
+            <button
+              onClick={addTab}
+              title="탭 추가"
+              className="px-2.5 my-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors flex items-center"
+            >
+              <FiPlus size={14} />
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-2 px-4 shrink-0 border-l border-slate-100">
           {isEditing ? (
@@ -129,12 +211,21 @@ function AgencyGuideModal({ agency }: { agency: FundingAgency }) {
         {currentTab.tables.map((tbl, tbi) => (
           <div key={tbi} className="space-y-2">
             {isEditing ? (
-              <input
-                value={tbl.caption ?? ""}
-                onChange={(e) => setCaption(activeTab, tbi, e.target.value)}
-                placeholder="표 제목 (선택)"
-                className="text-xs font-semibold text-slate-600 uppercase tracking-wide border-b border-dashed border-slate-300 outline-none bg-transparent w-full placeholder-slate-300"
-              />
+              <div className="flex items-center gap-2">
+                <input
+                  value={tbl.caption ?? ""}
+                  onChange={(e) => setCaption(activeTab, tbi, e.target.value)}
+                  placeholder="표 제목 (선택)"
+                  className="flex-1 text-xs font-semibold text-slate-600 uppercase tracking-wide border-b border-dashed border-slate-300 outline-none bg-transparent placeholder-slate-300"
+                />
+                <button
+                  onClick={() => removeTable(activeTab, tbi)}
+                  title="표 삭제"
+                  className="text-[10px] text-red-400 hover:text-red-600 flex items-center gap-1 shrink-0"
+                >
+                  <FiTrash2 size={11} /> 표 삭제
+                </button>
+              </div>
             ) : tbl.caption && (
               <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{tbl.caption}</p>
             )}
@@ -143,7 +234,22 @@ function AgencyGuideModal({ agency }: { agency: FundingAgency }) {
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200">
                     {tbl.headers.map((h, hi) => (
-                      <th key={hi} className="px-4 py-2.5 text-left text-xs font-semibold text-slate-600 whitespace-nowrap">{h}</th>
+                      <th key={hi} className="px-4 py-2.5 text-left text-xs font-semibold text-slate-600 whitespace-nowrap">
+                        {isEditing ? (
+                          <div className="flex items-center gap-1">
+                            <input
+                              value={h}
+                              onChange={(e) => setHeader(activeTab, tbi, hi, e.target.value)}
+                              className="w-full outline-none bg-transparent border-b border-dashed border-slate-300 focus:border-blue-400 text-xs font-semibold min-w-12"
+                            />
+                            {tbl.headers.length > 1 && (
+                              <span role="button" onClick={() => removeColumn(activeTab, tbi, hi)} title="열 삭제" className="text-slate-300 hover:text-red-500 transition-colors shrink-0">
+                                <FiX size={11} />
+                              </span>
+                            )}
+                          </div>
+                        ) : h}
+                      </th>
                     ))}
                     {isEditing && <th className="px-2 py-2.5 text-xs font-semibold text-slate-400 text-center w-16">조작</th>}
                   </tr>
@@ -195,9 +301,14 @@ function AgencyGuideModal({ agency }: { agency: FundingAgency }) {
               </table>
             </div>
             {isEditing && (
-              <button onClick={() => addRow(activeTab, tbi)} className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1 px-1">
-                + 행 추가
-              </button>
+              <div className="flex items-center gap-3">
+                <button onClick={() => addRow(activeTab, tbi)} className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1 px-1">
+                  + 행 추가
+                </button>
+                <button onClick={() => addColumn(activeTab, tbi)} className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1 px-1">
+                  + 열 추가
+                </button>
+              </div>
             )}
             {isEditing ? (
               <textarea
@@ -212,6 +323,14 @@ function AgencyGuideModal({ agency }: { agency: FundingAgency }) {
             )}
           </div>
         ))}
+        {isEditing && (
+          <button
+            onClick={() => addTable(activeTab)}
+            className="flex items-center gap-1.5 text-xs font-medium text-blue-600 border border-dashed border-blue-200 hover:bg-blue-50 rounded-lg px-3 py-2 transition-colors"
+          >
+            <FiPlus size={12} /> 표 추가
+          </button>
+        )}
       </div>
     </div>
   );
@@ -536,6 +655,12 @@ export default function FundingAgenciesPage() {
     setModal(null);
   }
 
+  function handleDelete(id: string, name: string) {
+    if (!confirm(`"${name}" 전담기관을 삭제하시겠습니까?`)) return;
+    const blockedReason = deleteFundingAgency(id);
+    if (blockedReason) alert(blockedReason);
+  }
+
   const totalProjects = stats.reduce((s, a) => s + a.projectCount, 0);
   const totalFee = stats.reduce((s, a) => s + a.totalFee, 0);
   const activeCount = fundingAgencies.filter((a) => a.status === "ACTIVE").length;
@@ -646,18 +771,21 @@ export default function FundingAgenciesPage() {
                     <td className="px-4 py-4 text-center text-xs text-slate-500 whitespace-nowrap">{fmtDate(agency.registeredAt)}</td>
                     <td className="px-4 py-4 text-center">
                       <div className="flex items-center justify-center gap-1.5">
-                        {AGENCY_GUIDE[agency.shortName] && (
-                          <button
-                            onClick={() => setModal({ mode: "guide", target: agency })}
-                            className="px-2 py-1 text-[11px] font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded transition-colors whitespace-nowrap"
-                          >
-                            운용 안내
-                          </button>
-                        )}
+                        <button
+                          onClick={() => setModal({ mode: "guide", target: agency })}
+                          className="px-2 py-1 text-[11px] font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded transition-colors whitespace-nowrap"
+                        >
+                          운용 안내
+                        </button>
                         {canEdit && (
-                          <button onClick={() => setModal({ mode: "edit", target: agency })} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors" title="수정">
-                            <FiEdit2 size={14} />
-                          </button>
+                          <>
+                            <button onClick={() => setModal({ mode: "edit", target: agency })} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors" title="수정">
+                              <FiEdit2 size={14} />
+                            </button>
+                            <button onClick={() => handleDelete(agency.id, agency.name)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors" title="삭제">
+                              <FiTrash2 size={14} />
+                            </button>
+                          </>
                         )}
                       </div>
                     </td>
