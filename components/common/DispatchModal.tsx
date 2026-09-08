@@ -82,18 +82,27 @@ export type DispatchChoice =
 // fixed 좌표를 직접 계산해 document.body에 포탈로 그린다(이 파일의 InfoEditModal 등과 별개로,
 // 과제 상세 페이지의 explainPopover와 동일한 해법).
 const DISPATCH_MENU_WIDTH = 190;
+// 메뉴 항목 6개 기준 대략적인 높이 — 버튼이 화면 아래쪽에 가까워서 이 공간이 안 나오면
+// 아래로 펼쳤을 때 브라우저 창 경계에 잘려 나머지 항목을 볼 방법이 없어진다(fixed 포지션이라
+// 페이지를 스크롤해도 따라오지 않음). 그럴 땐 버튼 위로 펼친다.
+const DISPATCH_MENU_HEIGHT_ESTIMATE = 250;
 
 export function DispatchDropdown({
   onSelect,
 }: {
   onSelect: (choice: DispatchChoice) => void;
 }) {
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
 
   function toggle(e: React.MouseEvent<HTMLButtonElement>) {
     if (pos) { setPos(null); return; }
     const rect = e.currentTarget.getBoundingClientRect();
-    setPos({ top: rect.bottom + 4, left: Math.max(8, rect.right - DISPATCH_MENU_WIDTH) });
+    const left = Math.max(8, rect.right - DISPATCH_MENU_WIDTH);
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const openUpward = spaceBelow < DISPATCH_MENU_HEIGHT_ESTIMATE && rect.top > spaceBelow;
+    setPos(openUpward
+      ? { bottom: window.innerHeight - rect.top + 4, left }
+      : { top: rect.bottom + 4, left });
   }
 
   function pick(choice: DispatchChoice) {
@@ -116,7 +125,7 @@ export function DispatchDropdown({
           <div className="fixed inset-0 z-40" onClick={() => setPos(null)} />
           <div
             className="fixed z-50 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden"
-            style={{ top: pos.top, left: pos.left, width: DISPATCH_MENU_WIDTH }}
+            style={{ top: pos.top, bottom: pos.bottom, left: pos.left, width: DISPATCH_MENU_WIDTH }}
           >
             <button
               className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-teal-50 hover:text-teal-800 transition-colors"
