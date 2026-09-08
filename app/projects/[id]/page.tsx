@@ -4677,10 +4677,20 @@ function SettlementNoticeModal({
 export default function ProjectDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { projects, fundingAgencies, agencyNoticeTemplates, projectMembers, emailDispatches, termFees, companyInfo } = useStore();
   const canDeleteProject = useCanWrite('projects-delete');
   const canSendNotice = useCanWrite('emails');
-  const [activeTab, setActiveTab] = useState<"info" | "fees">("info");
+  // 탭 상태를 컴포넌트 state가 아니라 URL의 ?tab= 값 자체로 둔다 — 로컬 state로만 관리하면
+  // 뒤로가기를 눌러도 탭이 안 바뀌고, 새로고침하면 항상 "과제 정보"로 돌아가 버렸다. router.push로
+  // 탭을 바꾸면 히스토리 엔트리가 쌓여 뒤로가기도 정상 동작하고, URL에 남아있으니 새로고침해도 유지된다.
+  const activeTab: "info" | "fees" = searchParams.get("tab") === "fees" ? "fees" : "info";
+  function switchTab(tab: "info" | "fees") {
+    const nextParams = new URLSearchParams(searchParams.toString());
+    if (tab === "info") nextParams.delete("tab"); else nextParams.set("tab", tab);
+    const qs = nextParams.toString();
+    router.push(`/projects/${id}${qs ? `?${qs}` : ""}`);
+  }
   const [showNotice, setShowNotice] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
@@ -4819,7 +4829,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           { key: "info" as const, label: "과제 정보" },
           { key: "fees" as const, label: "수수료 관리" },
         ]).map((t) => (
-          <button key={t.key} onClick={() => setActiveTab(t.key)}
+          <button key={t.key} onClick={() => switchTab(t.key)}
             className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors ${
               activeTab === t.key
                 ? "border-blue-600 text-blue-600"
