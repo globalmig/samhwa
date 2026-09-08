@@ -3413,18 +3413,29 @@ function BillingBlock({
         </select>
         <span className="text-[11px] text-slate-400">
           {BILLING_OPTIONS.find((o) => o.value === billingType)?.desc}
+          {/* unit.billingType이 비어 있으면(발행취소로 초기화된 경우 포함) 위 select엔 "정발행"이라는
+              기본값을 보여줄 수밖에 없는데(빈 선택지가 없어서), 그게 실제로 지정된 값인지 그냥 기본값인지
+              구분이 안 되면 "발행취소 후에도 정발행이 그대로 남아있다"고 오해하기 쉽다. */}
+          {!unit.billingType && !project.billingType && (
+            <span className="text-slate-300"> (미지정 — 기본값)</span>
+          )}
         </span>
       </div>
 
       <div className="flex items-start gap-3">
         <span className="text-xs font-semibold text-slate-600 w-24 shrink-0 pt-1">세금계산서</span>
         {unit.invoice ? (
-          <div className="flex-1 flex flex-wrap items-center gap-3">
-            <span className="font-mono text-xs text-slate-700">{unit.invoice.invoiceNumber}</span>
-            <span className="text-xs text-slate-500">{fmtDate(unit.invoice.issuedAt)}</span>
-            <span className="text-xs text-slate-500">공급가 {fmtWonFull(unit.invoice.supplyAmount)}</span>
-            <span className="text-xs text-slate-500">부가세 {fmtWonFull(unit.invoice.taxAmount)}</span>
-            <span className="text-sm font-bold text-slate-800">{fmtWonFull(unit.invoice.totalAmount)}</span>
+          <div className={`flex-1 flex flex-wrap items-center gap-3 ${
+            unit.invoice.status === "CANCELED" ? "rounded-lg border border-red-100 bg-red-50/40 px-3 py-1.5" : ""
+          }`}>
+            {unit.invoice.status === "CANCELED" && (
+              <span className="text-xs font-semibold text-red-500">발행 취소됨 — 재발행 전까지 미발행 상태로 처리</span>
+            )}
+            <span className={`font-mono text-xs ${unit.invoice.status === "CANCELED" ? "text-slate-400 line-through" : "text-slate-700"}`}>{unit.invoice.invoiceNumber}</span>
+            <span className={`text-xs ${unit.invoice.status === "CANCELED" ? "text-slate-400 line-through" : "text-slate-500"}`}>{fmtDate(unit.invoice.issuedAt)}</span>
+            <span className={`text-xs ${unit.invoice.status === "CANCELED" ? "text-slate-400 line-through" : "text-slate-500"}`}>공급가 {fmtWonFull(unit.invoice.supplyAmount)}</span>
+            <span className={`text-xs ${unit.invoice.status === "CANCELED" ? "text-slate-400 line-through" : "text-slate-500"}`}>부가세 {fmtWonFull(unit.invoice.taxAmount)}</span>
+            <span className={`text-sm font-bold ${unit.invoice.status === "CANCELED" ? "text-slate-400 line-through" : "text-slate-800"}`}>{fmtWonFull(unit.invoice.totalAmount)}</span>
             <StatusBadge label={INVOICE_STATUS[unit.invoice.status].label} color={INVOICE_STATUS[unit.invoice.status].color} />
             {/* 공문 발송 - 세금계산서와 동일 행 */}
             <div className="ml-auto flex items-center gap-2">
