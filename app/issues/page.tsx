@@ -50,6 +50,7 @@ export default function IssuesPage() {
   const [statusFilter, setStatusFilter] = useState<"ALL" | "OPEN" | "IN_PROGRESS" | "RESOLVED">("ALL");
   const [agencyFilter, setAgencyFilter] = useState("ALL");
   const [projectNumberFilter, setProjectNumberFilter] = useState("");
+  const [projectNameFilter, setProjectNameFilter] = useState("");
   const [institutionFilter, setInstitutionFilter] = useState("");
   const [authorFilter, setAuthorFilter] = useState("");
   const [showForm, setShowForm] = useState(false);
@@ -80,6 +81,7 @@ export default function IssuesPage() {
     const project = projects.find((p) => p.id === issue.projectId);
     if (agencyFilter !== "ALL" && project?.agencyId !== agencyFilter) return false;
     if (projectNumberFilter !== "" && !issue.projectNumber.includes(projectNumberFilter)) return false;
+    if (projectNameFilter !== "" && !(project?.projectName ?? "").includes(projectNameFilter)) return false;
     if (institutionFilter !== "" && !(project?.leadInstitutionName ?? "").includes(institutionFilter)) return false;
     if (authorFilter !== "" && !issue.author.includes(authorFilter)) return false;
     return true;
@@ -276,7 +278,7 @@ export default function IssuesPage() {
       {/* Filter bar */}
       <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100">
         {/* 검색 필터 */}
-        <div className="px-5 py-3 grid grid-cols-4 gap-3">
+        <div className="px-5 py-3 grid grid-cols-5 gap-3">
           <div>
             <p className="text-[10px] font-medium text-slate-400 mb-1">전담기관</p>
             <select value={agencyFilter} onChange={(e) => setAgencyFilter(e.target.value)}
@@ -289,6 +291,7 @@ export default function IssuesPage() {
           </div>
           {[
             { label: "과제번호", value: projectNumberFilter, onChange: setProjectNumberFilter },
+            { label: "과제명",   value: projectNameFilter,   onChange: setProjectNameFilter    },
             { label: "기관명",   value: institutionFilter,   onChange: setInstitutionFilter   },
             { label: "작성자",   value: authorFilter,        onChange: setAuthorFilter         },
           ].map(({ label, value, onChange }) => (
@@ -334,9 +337,9 @@ export default function IssuesPage() {
             ))}
           </div>
           <div className="flex items-center gap-2 ml-auto">
-            {(agencyFilter !== "ALL" || projectNumberFilter !== "" || institutionFilter !== "" || authorFilter !== "") && (
+            {(agencyFilter !== "ALL" || projectNumberFilter !== "" || projectNameFilter !== "" || institutionFilter !== "" || authorFilter !== "") && (
               <button
-                onClick={() => { setAgencyFilter("ALL"); setProjectNumberFilter(""); setInstitutionFilter(""); setAuthorFilter(""); }}
+                onClick={() => { setAgencyFilter("ALL"); setProjectNumberFilter(""); setProjectNameFilter(""); setInstitutionFilter(""); setAuthorFilter(""); }}
                 className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1 rounded hover:bg-slate-100 transition-colors">
                 초기화
               </button>
@@ -351,7 +354,7 @@ export default function IssuesPage() {
         {filtered.length === 0 ? (
           <div className="py-16 text-center text-sm text-slate-400">
             {priorityFilter !== "ALL" || statusFilter !== "ALL" || agencyFilter !== "ALL"
-              || projectNumberFilter !== "" || institutionFilter !== "" || authorFilter !== ""
+              || projectNumberFilter !== "" || projectNameFilter !== "" || institutionFilter !== "" || authorFilter !== ""
               ? "필터 조건에 맞는 이슈가 없습니다"
               : "등록된 이슈가 없습니다"}
           </div>
