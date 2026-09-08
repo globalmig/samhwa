@@ -280,10 +280,17 @@ function hydrateFundingAgencies(): void {
   const snapshotAtStart = _state.fundingAgencies;
   fetch("/api/funding-agencies")
     .then((res) => res.json())
-    .then((data: { ok: boolean; agencies?: FundingAgency[] }) => {
+    .then((data: { ok: boolean; agencies?: FundingAgency[]; agencyGuides?: Record<string, AgencyGuideTab[]> }) => {
       // 이 요청이 떠 있는 동안 이미 수정이 있었으면 그 전 시점의 이 응답으로 덮어쓰지 않는다(수정 8).
       if (data.ok && data.agencies && _state.fundingAgencies === snapshotAtStart) {
-        _state = { ..._state, fundingAgencies: data.agencies };
+        // agencyGuides(운용 안내)도 여기서 함께 채운다 — 이걸 안 하면 서버엔 저장돼 있어도 화면엔
+        // 항상 빈 상태로 시작해 새로고침할 때마다 방금 작성한 안내가 사라진 것처럼 보였다. 로컬에서
+        // 이미 수정한 값이 있으면(동시에 편집 중이었던 경우) 그쪽을 우선한다.
+        _state = {
+          ..._state,
+          fundingAgencies: data.agencies,
+          agencyGuides: data.agencyGuides ? { ...data.agencyGuides, ..._state.agencyGuides } : _state.agencyGuides,
+        };
         notify();
       }
     })
