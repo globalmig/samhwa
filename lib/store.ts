@@ -2233,14 +2233,51 @@ export function getUnissuedInvoiceGroups(
 }
 
 // ============================================================
-// EMAIL DISPATCHES
+// EMAIL DISPATCHES (공문 발송이력)
 // ============================================================
 
+// 예전엔 addEmailDispatch가 브라우저 메모리에만 쌓아서 새로고침하면 발송이력이 통째로 사라졌다
+// (수정 10) — 게다가 noticeSeq 같은 문서번호 채번이 이 목록 길이를 세서 계산되는 곳도 있어,
+// 세션이 끊길 때마다 과거 세션 발송분을 못 세게 되어 문서번호가 겹칠 수 있는 문제도 있었다.
+let _emailDispatchesHydrated = false;
+function hydrateEmailDispatches(): void {
+  if (_emailDispatchesHydrated || typeof window === "undefined") return;
+  _emailDispatchesHydrated = true;
+  const snapshotAtStart = _state.emailDispatches;
+  fetch("/api/email-dispatches")
+    .then((res) => res.json())
+    .then((data: { ok: boolean; emailDispatches?: EmailDispatch[] }) => {
+      if (data.ok && data.emailDispatches && _state.emailDispatches === snapshotAtStart) {
+        _state = { ..._state, emailDispatches: data.emailDispatches };
+        notify();
+      }
+    })
+    .catch((err) => {
+      console.error("공문 발송이력을 불러오지 못했습니다.", err);
+      _emailDispatchesHydrated = false;
+    });
+}
+if (typeof window !== "undefined") hydrateEmailDispatches();
+
 export function addEmailDispatch(data: Omit<EmailDispatch, "id">): EmailDispatch {
-  const item: EmailDispatch = { ...data, id: genId("em") };
+  const tempId = genId("em");
+  const item: EmailDispatch = { ...data, id: tempId };
   _state = { ..._state, emailDispatches: [..._state.emailDispatches, item] };
-  record("emailDispatch", item.id, `${item.recipientInstitution} · ${item.subject}`, "CREATE");
+  record("emailDispatch", tempId, `${item.recipientInstitution} · ${item.subject}`, "CREATE");
   notify();
+
+  fetch("/api/email-dispatches", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; emailDispatch?: EmailDispatch; error?: string }) => {
+      if (res.ok && res.emailDispatch) {
+        _state = { ..._state, emailDispatches: _state.emailDispatches.map((e) => (e.id === tempId ? res.emailDispatch! : e)) };
+        notify();
+      } else if (!res.ok) {
+        console.error("공문 발송이력 저장 실패:", res.error);
+      }
+    })
+    .catch((err) => console.error("공문 발송이력 저장 실패:", err));
+
   return item;
 }
 

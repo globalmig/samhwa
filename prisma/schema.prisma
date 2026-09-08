@@ -830,6 +830,11 @@ model EmailLog {
   errorMessage           String?   @map("error_message") @db.NVarChar(Max)
   sentBy                 String?   @map("sent_by") @db.UniqueIdentifier
   createdAt              DateTime  @default(now()) @map("created_at") @db.DateTime2
+  // 클라이언트 EmailDispatch가 갖는, 이 테이블 컬럼으로 표현 안 되는 나머지 필드(발신인 표시명,
+  // 기관명 텍스트, 클라이언트에서 붙인 batchId 문자열, 과제번호·연차, 첨부파일명 목록, 정산절차
+  // 안내 공문 서식 스냅샷 등)를 JSON으로 보관 — Project.extraData 등 이 스키마 전반에서 이미 쓰는
+  // 것과 동일한 패턴.
+  extraData              String?   @map("extra_data") @db.NVarChar(Max)
 
   batch                EmailBatch?          @relation(fields: [batchId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   projectTerm          ProjectTerm?         @relation(fields: [projectTermId], references: [id], onDelete: NoAction, onUpdate: NoAction)
