@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { FiX } from "react-icons/fi";
 
 interface UserOption {
@@ -15,20 +16,42 @@ interface Props {
   placeholder?: string;
 }
 
+// 드롭다운 항목 기준 대략적인 높이 — 입력창이 화면/스크롤 컨테이너 아래쪽에 가까워서 이 공간이
+// 안 나오면 위로 펼친다(DispatchModal의 DispatchDropdown과 동일한 이유).
+const DROPDOWN_HEIGHT_ESTIMATE = 192; // max-h-48
+
 // 인원이 늘어나도 스캔하기 쉬운 검색형 다중선택 위젯 — 선택된 사람은 태그로 보여주고,
 // 입력창에 포커스하면 이름으로 걸러지는 드롭다운에서 추가로 고를 수 있다.
 export default function UserMultiSelect({ users, selectedIds, onChange, placeholder }: Props) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
+  // 드롭다운을 형제 요소로 두면(position: absolute) 이슈 등록 폼 같은 스크롤 컨테이너나
+  // overflow-hidden 카드 안에서 아래쪽이 그 경계에 잘려 나머지 후보가 안 보인다 — fixed 좌표를
+  // 계산해 document.body에 포탈로 그린다.
+  const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number; width: number } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (rootRef.current?.contains(target)) return;
+      if (dropdownRef.current?.contains(target)) return;
+      setOpen(false);
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  useEffect(() => {
+    if (!open || !rootRef.current) { setPos(null); return; }
+    const rect = rootRef.current.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const openUpward = spaceBelow < DROPDOWN_HEIGHT_ESTIMATE && rect.top > spaceBelow;
+    setPos(openUpward
+      ? { bottom: window.innerHeight - rect.top + 4, left: rect.left, width: rect.width }
+      : { top: rect.bottom + 4, left: rect.left, width: rect.width });
+  }, [open]);
 
   const selectedUsers = selectedIds
     .map((id) => users.find((u) => u.id === id))
@@ -69,8 +92,12 @@ export default function UserMultiSelect({ users, selectedIds, onChange, placehol
           className="flex-1 min-w-[80px] text-xs outline-none text-slate-700 py-0.5 bg-transparent"
         />
       </div>
-      {open && (
-        <div className="absolute z-20 mt-1 w-full max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-lg">
+      {open && pos && createPortal(
+        <div
+          ref={dropdownRef}
+          className="fixed z-50 max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-lg"
+          style={{ top: pos.top, bottom: pos.bottom, left: pos.left, width: pos.width }}
+        >
           {candidates.length === 0 ? (
             <p className="px-3 py-2 text-xs text-slate-400">
               {users.length === selectedIds.length ? "모든 인원이 선택됨" : "검색 결과 없음"}
@@ -83,7 +110,8 @@ export default function UserMultiSelect({ users, selectedIds, onChange, placehol
               </button>
             ))
           )}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
