@@ -101,11 +101,24 @@ export default function DashboardPage() {
       return entry;
     }
 
-    // 배정건수 — 전담기관에 배정된 과제 수(청구 여부와 무관)
-    for (const p of projects_) {
-      const agency = fundingAgencies.find((a) => a.id === p.agencyId);
+    // 배정건수 — 과제 단위가 아니라 연차(행) 단위로 센다. app/fees/page.tsx의 과제목록이 연차마다
+    // 한 행씩 보여주는 것과 같은 기준 — 예전엔 여기만 과제 수로 세서, 다년차 과제 하나가 fees
+    // 목록에선 5건(5개 연차 행)으로 보이는데 대시보드에선 1건으로 보이는 불일치가 있었다.
+    // RDA2(fa-006)는 fees 목록에서도 참여기관마다(실제 수수료가 발생한 기관만) 행을 따로 만들므로
+    // 그 규칙을 그대로 따르고, 그 외 전담기관은 연차당 1행으로 센다.
+    const termGroups = new Map<string, typeof termFees_>();
+    for (const f of termFees_) {
+      const key = `${f.projectNumber}|${f.termYear}|${f.termNumber}`;
+      const arr = termGroups.get(key);
+      if (arr) arr.push(f); else termGroups.set(key, [f]);
+    }
+    for (const fees of termGroups.values()) {
+      const project = projectByNumber.get(fees[0].projectNumber);
+      const agency = project ? fundingAgencies.find((a) => a.id === project.agencyId) : undefined;
       if (!agency) continue;
-      getEntry(agency.id, agency.name).projectCount += 1;
+      const isRda2 = agency.id === "fa-006";
+      const rowCount = isRda2 ? Math.max(1, fees.filter((f) => f.appliedFee > 0).length) : 1;
+      getEntry(agency.id, agency.name).projectCount += rowCount;
     }
 
     // 수수료 — 연차별 적용 수수료 합계

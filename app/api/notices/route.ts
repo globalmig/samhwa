@@ -40,9 +40,6 @@ export async function POST(request: Request) {
     },
   });
 
-  await prisma.auditLog.create({
-    data: { userId: actor.userId, action: "CREATE", resourceType: "notice", resourceId: created.id, newValues: JSON.stringify({ title: created.title }) },
-  });
-
+  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true, notice: toNotice(created) });
 }

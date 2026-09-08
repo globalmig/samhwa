@@ -3172,6 +3172,7 @@ function BillingBlock({
     // 이미 발행된 계산서가 있으면 새로 만들지 않고 그 레코드를 갱신한다 — 여기서 매번 addTaxInvoice로
     // 새 레코드를 만들면 같은 연차에 계산서가 여러 건 쌓이고, 다른 화면의 taxInvoices.find()는 가장
     // 먼저 생성된(오래된) 레코드를 집어오기 때문에 재발행해도 취소된 옛 건이 계속 보이는 문제가 있었다.
+    let invoiceNumber = unit.invoice?.invoiceNumber;
     if (unit.invoice) {
       updateTaxInvoice(unit.invoice.id, {
         issuedAt: invForm.issuedAt,
@@ -3182,8 +3183,9 @@ function BillingBlock({
       });
     } else {
       const now = new Date();
+      invoiceNumber = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(Date.now()).slice(-5)}`;
       addTaxInvoice({
-        invoiceNumber: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(Date.now()).slice(-5)}`,
+        invoiceNumber,
         projectNumber,
         projectName: project.projectName,
         termYear,
@@ -3198,6 +3200,38 @@ function BillingBlock({
         status: "ISSUED",
       });
     }
+
+    // 세금계산서를 발행하면 수금관리에서 처리할 수 있도록 채권(미수금) 레코드도 함께 생성/갱신한다
+    // (app/fees/page.tsx의 매출발행 처리와 동일한 규칙). 여기서 만들지 않으면 발행 이력은 있는데
+    // 과제목록·수금관리 화면엔 수금표시/미수액이 전혀 뜨지 않는 과제가 생긴다 — 지금까지는 담당자가
+    // 별도로 수금 등록 폼을 열어야만 채권이 생겨서 이 문제가 있었다.
+    if (unit.receivable) {
+      updateReceivable(unit.receivable.id, {
+        billedAt: invForm.issuedAt,
+        billedAmount: invForm.totalAmount,
+        receivableAmount: Math.max(0, invForm.totalAmount - unit.receivable.paidAmount),
+        dueDate: addMonths(invForm.issuedAt, 3),
+      });
+    } else {
+      addReceivable({
+        invoiceNumber: invoiceNumber!,
+        projectNumber,
+        projectName: project.projectName,
+        termYear,
+        termNumber,
+        leadInstitutionId: unit.billingInstitutionId,
+        leadInstitutionName: unit.billingLabel,
+        institutionId: unit.institutionId ?? undefined,
+        billedAt: invForm.issuedAt,
+        billedAmount: invForm.totalAmount,
+        paidAmount: 0,
+        receivableAmount: invForm.totalAmount,
+        dueDate: addMonths(invForm.issuedAt, 3),
+        // 발행 직후 미입금 상태의 기본값은 "미수"(OVERDUE) — app/fees/page.tsx의 매출발행과 동일.
+        status: "OVERDUE",
+      });
+    }
+
     // 실제로 청구서를 받는 기관만 청구완료(BILLED) 처리하고, 나머지(연차 통합 케이스에서 참여기관처럼
     // 개별 청구되지 않은 쪽)는 확정(CONFIRMED)까지만 반영한다.
     unit.billedFees.forEach((f) => { if (f.status !== "BILLED") updateTermFee(f.id, { status: "BILLED" }); });

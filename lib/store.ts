@@ -1896,11 +1896,18 @@ function hydrateProjectIssues(): void {
 }
 if (typeof window !== "undefined") hydrateProjectIssues();
 
+// 변경이력 목록에서 이슈/메모 항목을 클릭하지 않고도 무슨 내용인지 바로 알아볼 수 있도록
+// entityLabel에 실제 내용 일부를 넣는다.
+function issueContentPreview(content: string): string {
+  const trimmed = content.trim();
+  return trimmed.length > 30 ? `${trimmed.slice(0, 30)}…` : trimmed;
+}
+
 export function addProjectIssue(data: Omit<ProjectIssue, "id">): ProjectIssue {
   const tempId = genId("pi");
   const item: ProjectIssue = { ...data, id: tempId };
   _state = { ..._state, projectIssues: [..._state.projectIssues, item] };
-  record("projectIssue", tempId, `${item.projectNumber} 이슈`, "CREATE");
+  record("projectIssue", tempId, `${item.projectNumber} 이슈: ${issueContentPreview(item.content)}`, "CREATE");
   notify();
 
   fetch("/api/project-issues", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
@@ -1931,7 +1938,7 @@ export function updateProjectIssue(id: string, changes: Partial<Omit<ProjectIssu
     ..._state,
     projectIssues: _state.projectIssues.map((i) => (i.id === id ? after : i)),
   };
-  record("projectIssue", id, "이슈 업데이트", "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
+  record("projectIssue", id, `${after.projectNumber} 이슈: ${issueContentPreview(after.content)}`, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   notify();
 
   fetch(`/api/project-issues/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(changes) })
@@ -1946,8 +1953,9 @@ export function updateProjectIssue(id: string, changes: Partial<Omit<ProjectIssu
 }
 
 export function deleteProjectIssue(id: string): void {
+  const before = _state.projectIssues.find((i) => i.id === id);
   _state = { ..._state, projectIssues: _state.projectIssues.filter((i) => i.id !== id) };
-  record("projectIssue", id, "이슈 삭제", "DELETE");
+  record("projectIssue", id, before ? `${before.projectNumber} 이슈: ${issueContentPreview(before.content)}` : "이슈 삭제", "DELETE");
   notify();
 
   fetch(`/api/project-issues/${id}`, { method: "DELETE" })

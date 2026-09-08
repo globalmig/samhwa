@@ -11,9 +11,8 @@ type Extra = { manualOverride?: boolean };
 // 건드리지 않는다(로컬 로직과 동일한 잠금 규칙).
 export async function POST(request: Request, { params }: Params) {
   const { id: projectId } = await params;
-  let actor;
   try {
-    actor = await requireWriteAccess("projects-delete");
+    await requireWriteAccess("projects-delete");
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -81,15 +80,6 @@ export async function POST(request: Request, { params }: Params) {
     }
   }
 
-  await prisma.auditLog.create({
-    data: {
-      userId: actor.userId,
-      action: "DELETE",
-      resourceType: "projectTerms",
-      resourceId: projectId,
-      oldValues: JSON.stringify({ deletedTermNumbers: deletableTermNumbers }),
-    },
-  });
-
+  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true, deletedTermNumbers: deletableTermNumbers });
 }

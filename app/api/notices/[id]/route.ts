@@ -7,9 +7,8 @@ type Params = { params: Promise<{ id: string }> };
 
 export async function DELETE(_request: Request, { params }: Params) {
   const { id } = await params;
-  let actor;
   try {
-    actor = await requireUser();
+    await requireUser();
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -20,9 +19,6 @@ export async function DELETE(_request: Request, { params }: Params) {
 
   await prisma.notice.delete({ where: { id } });
 
-  await prisma.auditLog.create({
-    data: { userId: actor.userId, action: "DELETE", resourceType: "notice", resourceId: id, oldValues: JSON.stringify({ title: target.title }) },
-  });
-
+  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true });
 }

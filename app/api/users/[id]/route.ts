@@ -32,7 +32,6 @@ export async function PATCH(request: Request, { params }: Params) {
     Object.keys(body).length > 0 &&
     Object.keys(body).every((k) => k === "hiworksEmail" || k === "hiworksMailPassword");
 
-  let actorId: string | null = null;
   if (isPasswordOnlyReset) {
     const emailOk = body.verifyEmail?.trim().toLowerCase() === target.email.toLowerCase();
     const nameOk = body.verifyName?.trim() === target.name.trim();
@@ -46,7 +45,6 @@ export async function PATCH(request: Request, { params }: Params) {
       if (actor.role !== "SYSTEM_ADMIN" && !(isSelf && isHiworksOnlyUpdate)) {
         throw new SessionError("시스템 관리자만 사용할 수 있습니다.", 403);
       }
-      actorId = actor.userId;
     } catch (err) {
       if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
       throw err;
@@ -73,25 +71,14 @@ export async function PATCH(request: Request, { params }: Params) {
     },
   });
 
-  await prisma.auditLog.create({
-    data: {
-      userId: actorId,
-      action: "UPDATE",
-      resourceType: "user",
-      resourceId: id,
-      oldValues: JSON.stringify(beforeSnapshot),
-      newValues: JSON.stringify({ name: updated.name, email: updated.email, role: updated.role, status: updated.status }),
-    },
-  });
-
+  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true, user: toSystemUser(updated) });
 }
 
 export async function DELETE(_request: Request, { params }: Params) {
   const { id } = await params;
-  let actor;
   try {
-    actor = await requireAdmin();
+    await requireAdmin();
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -101,9 +88,6 @@ export async function DELETE(_request: Request, { params }: Params) {
   if (!target) return Response.json({ ok: false, error: "사용자를 찾을 수 없습니다." }, { status: 404 });
 
   await prisma.user.delete({ where: { id } });
-  await prisma.auditLog.create({
-    data: { userId: actor.userId, action: "DELETE", resourceType: "user", resourceId: id, oldValues: JSON.stringify({ name: target.name, email: target.email }) },
-  });
-
+  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true });
 }

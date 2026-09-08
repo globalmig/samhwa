@@ -32,10 +32,9 @@ export async function POST(request: Request) {
   // 회원가입(로그인 안 된 상태)은 role=VIEWER, status=PENDING 자기등록만 허용한다 (app/signup/page.tsx).
   // 그 외(관리자가 admin/users 화면에서 직접 계정을 만드는 경우)는 시스템 관리자여야 한다.
   const isSelfRegistration = body.role === "VIEWER" && body.status === "PENDING";
-  let actorId: string | null = null;
   if (!isSelfRegistration) {
     try {
-      actorId = (await requireAdmin()).userId;
+      await requireAdmin();
     } catch (err) {
       if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
       throw err;
@@ -61,9 +60,6 @@ export async function POST(request: Request) {
     },
   });
 
-  await prisma.auditLog.create({
-    data: { userId: actorId, action: "CREATE", resourceType: "user", resourceId: created.id, newValues: JSON.stringify({ name: created.name, email: created.email, role: created.role }) },
-  });
-
+  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true, user: toSystemUser(created) });
 }

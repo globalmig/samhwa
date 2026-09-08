@@ -9,9 +9,8 @@ type Params = { params: Promise<{ id: string }> };
 
 export async function PATCH(request: Request, { params }: Params) {
   const { id } = await params;
-  let actor;
   try {
-    actor = await requireUser();
+    await requireUser();
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -34,15 +33,14 @@ export async function PATCH(request: Request, { params }: Params) {
       defaultAttachments: body.defaultAttachments !== undefined ? JSON.stringify(body.defaultAttachments) : undefined,
     },
   });
-  await prisma.auditLog.create({ data: { userId: actor.userId, action: "UPDATE", resourceType: "feeInvoiceTemplate", resourceId: id, newValues: JSON.stringify({ name: updated.name }) } });
+  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true, template: toFeeInvoiceTemplate(updated) });
 }
 
 export async function DELETE(_request: Request, { params }: Params) {
   const { id } = await params;
-  let actor;
   try {
-    actor = await requireUser();
+    await requireUser();
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -52,6 +50,6 @@ export async function DELETE(_request: Request, { params }: Params) {
   if (target.isDefault) return Response.json({ ok: false, error: "대표양식은 삭제할 수 없습니다. 다른 템플릿을 먼저 대표로 지정해주세요." }, { status: 409 });
 
   await prisma.feeInvoiceTemplate.delete({ where: { id } });
-  await prisma.auditLog.create({ data: { userId: actor.userId, action: "DELETE", resourceType: "feeInvoiceTemplate", resourceId: id, oldValues: JSON.stringify({ name: target.name }) } });
+  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true });
 }

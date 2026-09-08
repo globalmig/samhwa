@@ -10,9 +10,8 @@ type Params = { params: Promise<{ id: string }> };
 
 export async function PATCH(request: Request, { params }: Params) {
   const { id } = await params;
-  let actor;
   try {
-    actor = await requireUser();
+    await requireUser();
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -58,25 +57,14 @@ export async function PATCH(request: Request, { params }: Params) {
 
   const updated = await prisma.institution.findUniqueOrThrow({ where: { id }, include: { contacts: true } });
 
-  await prisma.auditLog.create({
-    data: {
-      userId: actor.userId,
-      action: "UPDATE",
-      resourceType: "institution",
-      resourceId: id,
-      oldValues: JSON.stringify({ name: before.institutionName }),
-      newValues: JSON.stringify({ name: updated.institutionName }),
-    },
-  });
-
+  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true, institution: toInstitution(updated) });
 }
 
 export async function DELETE(_request: Request, { params }: Params) {
   const { id } = await params;
-  let actor;
   try {
-    actor = await requireUser();
+    await requireUser();
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -97,9 +85,6 @@ export async function DELETE(_request: Request, { params }: Params) {
     throw err;
   }
 
-  await prisma.auditLog.create({
-    data: { userId: actor.userId, action: "DELETE", resourceType: "institution", resourceId: id, oldValues: JSON.stringify({ name: target.institutionName }) },
-  });
-
+  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true });
 }

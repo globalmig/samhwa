@@ -11,9 +11,8 @@ type Params = { params: Promise<{ id: string }> };
 
 export async function PATCH(request: Request, { params }: Params) {
   const { id } = await params;
-  let actor;
   try {
-    actor = await requireWriteAccess(["unclaimed", "fees"]);
+    await requireWriteAccess(["unclaimed", "fees"]);
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -38,9 +37,6 @@ export async function PATCH(request: Request, { params }: Params) {
     include: INCLUDE,
   });
 
-  await prisma.auditLog.create({
-    data: { userId: actor.userId, action: "UPDATE", resourceType: "unclaimedFee", resourceId: id, newValues: JSON.stringify({ status: updated.status }) },
-  });
-
+  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true, unclaimedFee: toUnclaimedFee(updated) });
 }

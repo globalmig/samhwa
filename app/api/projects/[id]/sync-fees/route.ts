@@ -16,9 +16,8 @@ const INCLUDE = { projectTermInstitution: { include: { projectTerm: { include: {
 // 이미 계산이 끝난 최종 상태를 그대로 반영(upsert + 빠진 것 정리)만 한다.
 export async function POST(request: Request, { params }: Params) {
   const { id: projectId } = await params;
-  let actor;
   try {
-    actor = await requireWriteAccess(["fees", "projects"]);
+    await requireWriteAccess(["fees", "projects"]);
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -129,15 +128,8 @@ export async function POST(request: Request, { params }: Params) {
     }
   });
 
-  await prisma.auditLog.create({
-    data: {
-      userId: actor.userId,
-      action: "UPDATE",
-      resourceType: "termFeeSync",
-      resourceId: projectId,
-      newValues: JSON.stringify({ termFeeCount: body.termFees.length, termFeeCalcCount: body.termFeeCalcs.length }),
-    },
-  });
-
+  // 이 동작(자동 재계산 반영)은 사용자가 직접 하는 조작이 아니라 내부 시스템 처리라 사람이 보는
+  // 변경이력에는 남기지 않는다 — 예전엔 매번 "termFeeSync" 항목이 찍혀 진짜 사용자 조작(과제 수정
+  // 등)과 뒤섞여 변경이력을 알아보기 어렵게 만들었다.
   return Response.json({ ok: true, termFees: upsertedTermFees.map(toTermFee) });
 }

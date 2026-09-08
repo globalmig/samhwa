@@ -11,9 +11,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  let actor;
   try {
-    actor = await requireUser();
+    await requireUser();
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -45,9 +44,8 @@ export async function POST(request: Request) {
     include: { project: true },
   });
 
-  await prisma.auditLog.create({
-    data: { userId: actor.userId, action: "CREATE", resourceType: "projectIssue", resourceId: created.id, newValues: JSON.stringify({ content: created.content.slice(0, 100) }) },
-  });
-
+  // 이 액션의 변경이력은 클라이언트(lib/store.ts의 record())가 /api/audit-log로 이미 자세히
+  // (내용 요약·필드별 변경사항 포함) 남기므로, 여기서 같은 자원에 대해 부실한(내용 요약만 있는)
+  // 기록을 또 남기지 않는다 — 예전엔 두 기록이 같은 시각에 겹쳐서 화면이 헷갈렸다.
   return Response.json({ ok: true, projectIssue: toProjectIssue(created) });
 }

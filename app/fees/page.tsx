@@ -3826,7 +3826,7 @@ export default function FeesPage() {
         </div>
         <div className="px-4 py-2.5 border-t border-slate-100 flex items-center justify-between gap-3">
           <span className="text-xs text-slate-400">
-            과제 {distinctProjectNumbers.length}건 중 {pagedRows.length}행 표시 (전체 {filtered.length}행)
+            과제 {pagedRows.length}건 표시 (전체 {filtered.length}건)
           </span>
           {totalPages > 1 && (
             <div className="flex items-center gap-1">

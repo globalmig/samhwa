@@ -9,9 +9,8 @@ type Params = { params: Promise<{ id: string }> };
 
 export async function PATCH(request: Request, { params }: Params) {
   const { id } = await params;
-  let actor;
   try {
-    actor = await requireUser();
+    await requireUser();
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -31,15 +30,14 @@ export async function PATCH(request: Request, { params }: Params) {
     data: { name: body.name ?? undefined, content: body.content !== undefined ? JSON.stringify(body.content) : undefined },
     include: { fundingAgency: true },
   });
-  await prisma.auditLog.create({ data: { userId: actor.userId, action: "UPDATE", resourceType: "agencyNoticeTemplate", resourceId: id, newValues: JSON.stringify({ name: updated.name }) } });
+  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true, template: toAgencyNoticeTemplate(updated) });
 }
 
 export async function DELETE(_request: Request, { params }: Params) {
   const { id } = await params;
-  let actor;
   try {
-    actor = await requireUser();
+    await requireUser();
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -48,6 +46,6 @@ export async function DELETE(_request: Request, { params }: Params) {
   if (!target) return Response.json({ ok: false, error: "템플릿을 찾을 수 없습니다." }, { status: 404 });
 
   await prisma.agencyNoticeTemplate.delete({ where: { id } });
-  await prisma.auditLog.create({ data: { userId: actor.userId, action: "DELETE", resourceType: "agencyNoticeTemplate", resourceId: id, oldValues: JSON.stringify({ name: target.name }) } });
+  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true });
 }

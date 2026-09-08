@@ -11,9 +11,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  let actor;
   try {
-    actor = await requireUser();
+    await requireUser();
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -31,6 +30,6 @@ export async function POST(request: Request) {
   const created = await prisma.feeInvoiceTemplate.create({
     data: { category: body.category, name: body.name, content: JSON.stringify(body.content), isDefault: false },
   });
-  await prisma.auditLog.create({ data: { userId: actor.userId, action: "CREATE", resourceType: "feeInvoiceTemplate", resourceId: created.id, newValues: JSON.stringify({ name: created.name }) } });
+  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true, template: toFeeInvoiceTemplate(created) });
 }
