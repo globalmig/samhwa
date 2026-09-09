@@ -63,7 +63,7 @@ export async function PATCH(request: Request, { params }: Params) {
     const role = newRole ?? anchor.role;
     for (const ab of body.annualBudgets) {
       const budget = BigInt(Math.round(ab.cashBudget + ab.inKindBudget));
-      const ptiId = await getOrCreatePti(prisma, projectId, ab.termNumber, institutionId, role, budget);
+      const ptiId = await getOrCreatePti(prisma, projectId, ab.termNumber, institutionId, role, budget, ab.termYear);
       const row = await prisma.projectTermInstitution.findUniqueOrThrow({ where: { id: ptiId } });
       const rowExtra: SharedExtra = row.extraData ? JSON.parse(row.extraData) : {};
       await prisma.projectTermInstitution.update({

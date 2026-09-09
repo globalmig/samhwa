@@ -34,7 +34,7 @@ export async function POST(request: Request) {
   const project = await prisma.project.findUnique({ where: { projectNumber: body.projectNumber } });
   if (!project) return Response.json({ ok: false, error: "과제를 찾을 수 없습니다." }, { status: 404 });
 
-  const ptiId = await getOrCreatePti(prisma, project.id, body.termNumber, body.leadInstitutionId, "MAIN", BigInt(Math.round(body.amount)));
+  const ptiId = await getOrCreatePti(prisma, project.id, body.termNumber, body.leadInstitutionId, "MAIN", BigInt(Math.round(body.amount)), body.termYear);
 
   const created = await prisma.unclaimedFee.create({
     data: {

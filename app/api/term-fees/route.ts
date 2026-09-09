@@ -39,7 +39,7 @@ export async function POST(request: Request) {
     ?? await prisma.feePolicy.findFirst();
   if (!feePolicy) return Response.json({ ok: false, error: "적용 가능한 수수료 정책이 없습니다." }, { status: 400 });
 
-  const ptiId = await getOrCreatePti(prisma, project.id, body.termNumber, body.institutionId, "PARTICIPATING", BigInt(Math.round(body.budget)));
+  const ptiId = await getOrCreatePti(prisma, project.id, body.termNumber, body.institutionId, "PARTICIPATING", BigInt(Math.round(body.budget)), body.termYear);
 
   const created = await prisma.termFee.create({
     data: {

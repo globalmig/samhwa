@@ -43,7 +43,7 @@ export async function POST(request: Request) {
   if (body.annualBudgets && body.annualBudgets.length > 0) {
     for (const ab of body.annualBudgets) {
       const budget = BigInt(Math.round(ab.cashBudget + ab.inKindBudget));
-      const ptiId = await getOrCreatePti(prisma, body.projectId, ab.termNumber, body.institutionId, role, budget);
+      const ptiId = await getOrCreatePti(prisma, body.projectId, ab.termNumber, body.institutionId, role, budget, ab.termYear);
       await prisma.projectTermInstitution.update({
         where: { id: ptiId },
         data: {

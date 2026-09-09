@@ -41,7 +41,7 @@ export async function POST(request: Request) {
   if (!project) return Response.json({ ok: false, error: "과제를 찾을 수 없습니다." }, { status: 404 });
 
   const institutionId = body.institutionId ?? body.leadInstitutionId;
-  const ptiId = await getOrCreatePti(prisma, project.id, body.termNumber, institutionId, "MAIN", BigInt(Math.round(body.billedAmount)));
+  const ptiId = await getOrCreatePti(prisma, project.id, body.termNumber, institutionId, "MAIN", BigInt(Math.round(body.billedAmount)), body.termYear);
 
   const claim = await prisma.claim.create({
     data: {

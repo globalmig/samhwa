@@ -88,7 +88,7 @@ export async function POST(request: Request, { params }: Params) {
     // term_fees: (institutionId, termNumber) 기준으로 PTI를 찾거나 만들어 upsert
     const touchedPtiIds = new Set<string>();
     for (const t of body.termFees) {
-      const ptiId = await getOrCreatePti(tx, projectId, t.termNumber, t.institutionId, "PARTICIPATING", BigInt(Math.round(t.budget)));
+      const ptiId = await getOrCreatePti(tx, projectId, t.termNumber, t.institutionId, "PARTICIPATING", BigInt(Math.round(t.budget)), t.termYear);
       touchedPtiIds.add(ptiId);
       const data = {
         feePolicyId: feePolicy.id,

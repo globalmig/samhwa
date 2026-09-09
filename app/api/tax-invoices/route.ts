@@ -36,7 +36,7 @@ export async function POST(request: Request) {
 
   const institution = await prisma.institution.findUnique({ where: { id: body.institutionId ?? body.leadInstitutionId } });
   const institutionId = body.institutionId ?? body.leadInstitutionId;
-  const ptiId = await getOrCreatePti(prisma, project.id, body.termNumber, institutionId, "MAIN", BigInt(Math.round(body.supplyAmount)));
+  const ptiId = await getOrCreatePti(prisma, project.id, body.termNumber, institutionId, "MAIN", BigInt(Math.round(body.supplyAmount)), body.termYear);
 
   const created = await prisma.taxInvoice.create({
     data: {
