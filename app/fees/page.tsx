@@ -199,6 +199,7 @@ type InfoEditTarget = {
   assignedManager: string;
   assignedManagerPrimary: string;
   registeredAt:   string;
+  auditFirm:      string;
 };
 
 type ModalState =
@@ -772,6 +773,7 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
   const [assignedManagerPrimaryUserId, setAssignedManagerPrimaryUserId] = useState(currentProject?.assignedManagerPrimaryUserId ?? "");
   const [managerPicker, setManagerPicker] = useState<"primary" | "deputy" | null>(null);
   const [registeredAt, setRegisteredAt]       = useState(target.registeredAt);
+  const [auditFirm, setAuditFirm]             = useState(target.auditFirm);
 
   // 연차별로 값이 다를 수 있는(연차별 이력이 있는) 필드는 그 연차 하나만의 값으로 upsert한다 —
   // 값이 비어있으면(기본값과 같아졌으면) 그 연차의 기록 자체를 지운다.
@@ -841,6 +843,7 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
       updateTermFee(target.docFeeId, {
         docRequestDate: docRequestDate || undefined,
         docReplyDate:   docReplyDate || undefined,
+        auditFirm:      auditFirm || undefined,
       });
     }
     // 실무자는 과제 단위 기본값(contactName/contactEmail)이 아니라 이 연차(termNumber)에만 적용되는
@@ -971,7 +974,24 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
           <label className="block text-xs font-medium text-slate-600 mb-1">등록일 (배정일)</label>
           <DateInput value={registeredAt} onChange={setRegisteredAt} className="w-full" />
         </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">
+            회계법인
+            <span className="ml-1 text-slate-400 font-normal">· 이 연차를 담당한 회계법인명</span>
+          </label>
+          <input
+            value={auditFirm}
+            onChange={(e) => setAuditFirm(e.target.value)}
+            placeholder="회계법인명"
+            className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+          />
+        </div>
       </div>
+      {!target.docFeeId && (
+        <p className="text-[11px] text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+          이 연차는 아직 수수료 내역이 생성되지 않아 회계법인은 저장되지 않습니다.
+        </p>
+      )}
       {!registeredAt && (
         <p className="text-[11px] text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
           등록일이 없으면 이 과제는 통합 대시보드의 연도별 집계에서 제외됩니다.
@@ -3805,6 +3825,7 @@ export default function FeesPage() {
                                   assignedManager: row.assignedManager,
                                   assignedManagerPrimary: row.assignedManagerPrimary,
                                   registeredAt:    row.registeredAt,
+                                  auditFirm:       row.auditFirm,
                                 },
                               })
                             }
