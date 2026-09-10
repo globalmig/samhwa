@@ -2214,8 +2214,10 @@ export function getUnissuedInvoiceGroups(
     const [projectNumber, yStr, nStr] = key.split("|");
     const termYear = Number(yStr);
     const termNumber = Number(nStr);
+    // 발행취소(CANCELED)된 세금계산서는 더 이상 "발행됨"이 아니다 — 그대로 두면 취소된 연차가
+    // 재발행 전까지 미발행 목록에서 영영 빠져버린다(app/fees/page.tsx의 activeInvoice 판단과 동일 기준).
     const hasInvoice = taxInvoices.some(
-      (t) => t.projectNumber === projectNumber && t.termYear === termYear && t.termNumber === termNumber,
+      (t) => t.projectNumber === projectNumber && t.termYear === termYear && t.termNumber === termNumber && t.status !== "CANCELED",
     );
     if (hasInvoice) return;
     const project = projects.find((p) => p.projectNumber === projectNumber);

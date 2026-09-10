@@ -55,13 +55,25 @@ export default function DashboardPage() {
     () => (selectedYear === "ALL" ? taxInvoices : taxInvoices.filter((t) => projectNumbers.has(t.projectNumber))),
     [taxInvoices, selectedYear, projectNumbers]
   );
+  // 세금계산서가 발행취소(CANCELED)되면 채권 레코드는 재발행 시 재사용하려고 DB에 그대로 남지만
+  // (app/fees/page.tsx의 hasReceivable 판단과 동일 기준), 그 행은 더 이상 "실제로 청구된 건"이
+  // 아니므로 대시보드의 청구·수금 집계에서는 제외한다 — 예전엔 취소돼도 청구 건수·금액에 그대로
+  // 남아 있어서, 취소한 세금계산서가 여전히 발행된 것처럼 잡히는 문제가 있었다.
+  const canceledInvoiceNumbers = useMemo(
+    () => new Set(taxInvoices_.filter((t) => t.status === "CANCELED").map((t) => t.invoiceNumber)),
+    [taxInvoices_]
+  );
+  const activeReceivables_ = useMemo(
+    () => receivables_.filter((r) => !canceledInvoiceNumbers.has(r.invoiceNumber)),
+    [receivables_, canceledInvoiceNumbers]
+  );
   const projectIssues_ = useMemo(
     () => (selectedYear === "ALL" ? projectIssues : projectIssues.filter((i) => projectNumbers.has(i.projectNumber))),
     [projectIssues, selectedYear, projectNumbers]
   );
 
   // 긴급 처리 집계 임시
-  const overdueReceivables = receivables_.filter((r) => isOverdueByRule(r));
+  const overdueReceivables = activeReceivables_.filter((r) => isOverdueByRule(r));
   const overdueAmount = overdueReceivables.reduce((s, r) => s + r.receivableAmount, 0);
   const highIssues = projectIssues_.filter((i) => i.priority === "HIGH");
   const unissuedGroups = getUnissuedInvoiceGroups(projects_, termFees_, taxInvoices_);
@@ -95,9 +107,9 @@ export default function DashboardPage() {
 
   // 핵심 지표 — termFees·receivables 실집계 (정적 더미 대신 store 기준)
   const totalFee = termFees_.reduce((s, f) => s + f.appliedFee, 0);
-  const totalBilled = receivables_.reduce((s, r) => s + r.billedAmount, 0);
-  const totalReceivable = receivables_.reduce((s, r) => s + r.receivableAmount, 0);
-  const totalCollected = receivables_.reduce((s, r) => s + r.paidAmount, 0);
+  const totalBilled = activeReceivables_.reduce((s, r) => s + r.billedAmount, 0);
+  const totalReceivable = activeReceivables_.reduce((s, r) => s + r.receivableAmount, 0);
+  const totalCollected = activeReceivables_.reduce((s, r) => s + r.paidAmount, 0);
   const collectionRate = totalBilled > 0 ? (totalCollected / totalBilled) * 100 : 0;
 
   // 전담기관별 수금 현황 — 과제(배정)·연차수수료·receivables(청구/수금)를 과제번호로 전담기관에 연결해 집계
@@ -149,8 +161,9 @@ export default function DashboardPage() {
       getEntry(agency.id, agency.name).totalFee += f.appliedFee;
     }
 
-    // 청구/수금 — receivables 기준
-    for (const r of receivables_) {
+    // 청구/수금 — receivables 기준. 발행취소된 세금계산서에 딸린 행은 activeReceivables_에서
+    // 이미 제외됐으므로, 여기 남은 건 전부 실제로 발행된(취소되지 않은) 청구 건이다.
+    for (const r of activeReceivables_) {
       const project = projectByNumber.get(r.projectNumber);
       const agency = project ? fundingAgencies.find((a) => a.id === project.agencyId) : undefined;
       if (!agency) continue;
@@ -162,7 +175,7 @@ export default function DashboardPage() {
     }
 
     return Array.from(map.values()).sort((a, b) => b.issuedAmount - a.issuedAmount);
-  }, [projects_, termFees_, receivables_, fundingAgencies]);
+  }, [projects_, termFees_, activeReceivables_, fundingAgencies]);
 
   const totalProjectCount = agencyRows.reduce((s, r) => s + r.projectCount, 0);
   const totalFeeSum = agencyRows.reduce((s, r) => s + r.totalFee, 0);
