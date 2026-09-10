@@ -1,7 +1,8 @@
 import { prisma } from "@/lib/db";
-import { requireWriteAccess, SessionError } from "@/lib/session";
+import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
 import { toTaxInvoice, MOCK_TO_DB_STATUS } from "@/lib/tax-invoice-mapper";
 import { getOrCreatePti } from "@/lib/pti-helper";
+import { writeAuditLog } from "@/lib/audit";
 import type { TaxInvoice } from "@/lib/mock";
 
 export const runtime = "nodejs";
@@ -9,13 +10,20 @@ export const runtime = "nodejs";
 const INCLUDE = { projectTermInstitution: { include: { projectTerm: { include: { project: true } }, institution: true } } } as const;
 
 export async function GET() {
+  try {
+    await requireUser();
+  } catch (err) {
+    if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
+    throw err;
+  }
   const rows = await prisma.taxInvoice.findMany({ include: INCLUDE });
   return Response.json({ ok: true, taxInvoices: rows.map(toTaxInvoice) });
 }
 
 export async function POST(request: Request) {
+  let actor;
   try {
-    await requireWriteAccess(["tax-invoices", "fees-sales"]);
+    actor = await requireWriteAccess(["tax-invoices", "fees-sales"]);
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -50,21 +58,30 @@ export async function POST(request: Request) {
     return Response.json({ ok: true, taxInvoice: toTaxInvoice(existingActive) });
   }
 
-  const created = await prisma.taxInvoice.create({
-    data: {
-      projectTermInstitutionId: ptiId,
-      invoiceNumber: body.invoiceNumber,
-      issueDate: body.issuedAt ? new Date(body.issuedAt) : new Date(),
-      supplyAmount: BigInt(Math.round(body.supplyAmount)),
-      taxAmount: BigInt(Math.round(body.taxAmount)),
-      totalAmount: BigInt(Math.round(body.totalAmount)),
-      buyerName: body.leadInstitutionName,
-      buyerBusinessNumber: institution?.businessNumber ?? "",
-      status: MOCK_TO_DB_STATUS[body.status] ?? "ISSUED",
-    },
-    include: INCLUDE,
+  const created = await prisma.$transaction(async (tx) => {
+    const row = await tx.taxInvoice.create({
+      data: {
+        projectTermInstitutionId: ptiId,
+        invoiceNumber: body.invoiceNumber,
+        issueDate: body.issuedAt ? new Date(body.issuedAt) : new Date(),
+        supplyAmount: BigInt(Math.round(body.supplyAmount)),
+        taxAmount: BigInt(Math.round(body.taxAmount)),
+        totalAmount: BigInt(Math.round(body.totalAmount)),
+        buyerName: body.leadInstitutionName,
+        buyerBusinessNumber: institution?.businessNumber ?? "",
+        status: MOCK_TO_DB_STATUS[body.status] ?? "ISSUED",
+      },
+      include: INCLUDE,
+    });
+    await writeAuditLog(tx, {
+      actorUserId: actor.userId,
+      entityType: "taxInvoice",
+      entityId: row.id,
+      entityLabel: toTaxInvoice(row).invoiceNumber,
+      action: "CREATE",
+    });
+    return row;
   });
 
-  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true, taxInvoice: toTaxInvoice(created) });
 }

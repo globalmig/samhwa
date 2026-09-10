@@ -251,7 +251,7 @@ export default function UserDetailPage({ params }: { params: Promise<{ id: strin
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">메일 전용 비밀번호</label>
                 <input type="password" value={draftHiworksPassword} onChange={(e) => setDraftHiworksPassword(e.target.value)}
-                  placeholder={user.hiworksMailPassword ? "변경하려면 새 값을 입력..." : "미등록"}
+                  placeholder={user.hiworksMailConfigured ? "변경하려면 새 값을 입력..." : "미등록"}
                   className="w-full text-sm border border-slate-200 rounded-lg px-3 py-1.5 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400" />
                 <p className="text-[10px] text-slate-400 mt-1">하이웍스 로그인 비밀번호가 아닌, 개인설정 &gt; 보안설정에서 발급하는 메일 전용 비밀번호를 입력하세요. 비워두면 기존 값이 유지됩니다.</p>
               </div>
@@ -264,7 +264,7 @@ export default function UserDetailPage({ params }: { params: Promise<{ id: strin
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-xs text-slate-400">메일 전용 비밀번호</span>
-                <StatusBadge label={user.hiworksMailPassword ? "등록됨" : "미등록"} color={user.hiworksMailPassword ? "green" : "slate"} />
+                <StatusBadge label={user.hiworksMailConfigured ? "등록됨" : "미등록"} color={user.hiworksMailConfigured ? "green" : "slate"} />
               </div>
             </div>
           )}

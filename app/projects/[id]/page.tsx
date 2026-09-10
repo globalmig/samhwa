@@ -4558,14 +4558,14 @@ function SettlementNoticeModal({
   // 보이는 발신 이메일만 전담기관별로 등록된 공용메일 주소로 바꿔치기한다(funding-agencies 관리
   // 화면에서 등록) — 전담기관마다 실제 메일 비밀번호를 따로 발급·등록할 필요가 없도록 한 것.
   const senderUser = users.find((u) => u.id === getCurrentUser()?.id) ?? null;
-  const canSendMail = !!agency.noticeSenderEmail && !!senderUser?.hiworksEmail && !!senderUser?.hiworksMailPassword;
+  const canSendMail = !!agency.noticeSenderEmail && !!senderUser?.hiworksEmail && !!senderUser?.hiworksMailConfigured;
 
   async function send() {
     if (!agency.noticeSenderEmail) {
       setSendError("발신 이메일(하이웍스 공용메일 주소)이 등록되어 있지 않습니다. 전담기관 관리에서 먼저 등록해주세요.");
       return;
     }
-    if (!senderUser?.hiworksEmail || !senderUser?.hiworksMailPassword) {
+    if (!senderUser?.hiworksEmail || !senderUser?.hiworksMailConfigured) {
       setSendError("본인 계정에 하이웍스 메일이 등록되어 있지 않습니다. 프로필에서 먼저 등록해주세요.");
       return;
     }
@@ -4585,8 +4585,6 @@ function SettlementNoticeModal({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          senderEmail: senderUser.hiworksEmail,
-          senderPassword: senderUser.hiworksMailPassword,
           fromEmail: agency.noticeSenderEmail,
           senderName: companyInfo.name,
           to: [toEmail],

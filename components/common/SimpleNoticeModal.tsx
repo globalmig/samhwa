@@ -69,7 +69,7 @@ export function fillTokens(template: string, t: SimpleNoticeTarget): string {
 export default function SimpleNoticeModal({ target, onClose }: { target: SimpleNoticeTarget; onClose: () => void }) {
   const { users, simpleNoticeTemplates } = useStore();
   const senderUser = users.find((u) => u.id === getCurrentUser()?.id) ?? null;
-  const canSendMail = !!senderUser?.hiworksEmail && !!senderUser?.hiworksMailPassword;
+  const canSendMail = !!senderUser?.hiworksEmail && !!senderUser?.hiworksMailConfigured;
 
   // 공문 양식 관리(/notice-templates/invoices)에 등록된 대표양식을 우선 쓰고, 혹시 못 찾으면(등록
   // 전 등) 최소한 발송은 되도록 과거 하드코딩 문구로 대체한다.
@@ -87,7 +87,7 @@ export default function SimpleNoticeModal({ target, onClose }: { target: SimpleN
   const canSend = emailValid && !!subject.trim() && !sending && canSendMail;
 
   async function handleSend() {
-    if (!canSend || !senderUser?.hiworksEmail || !senderUser?.hiworksMailPassword) return;
+    if (!canSend || !senderUser?.hiworksEmail || !senderUser?.hiworksMailConfigured) return;
     setSending(true);
     setSendError("");
 
@@ -97,8 +97,6 @@ export default function SimpleNoticeModal({ target, onClose }: { target: SimpleN
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          senderEmail: senderUser.hiworksEmail,
-          senderPassword: senderUser.hiworksMailPassword,
           senderName: senderUser.name,
           to: [toEmail.trim()],
           subject,

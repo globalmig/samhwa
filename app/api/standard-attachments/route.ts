@@ -1,17 +1,25 @@
 import { prisma } from "@/lib/db";
-import { requireUser, SessionError } from "@/lib/session";
+import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
 import { toStandardAttachment } from "@/lib/notice-template-mapper";
+import { writeAuditLog } from "@/lib/audit";
 
 export const runtime = "nodejs";
 
 export async function GET() {
+  try {
+    await requireUser();
+  } catch (err) {
+    if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
+    throw err;
+  }
   const rows = await prisma.standardAttachment.findMany({ orderBy: { updatedAt: "asc" } });
   return Response.json({ ok: true, attachments: rows.map(toStandardAttachment) });
 }
 
 export async function POST(request: Request) {
+  let actor;
   try {
-    await requireUser();
+    actor = await requireWriteAccess("standard-attachments");
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -24,7 +32,16 @@ export async function POST(request: Request) {
   }
   if (!body.name) return Response.json({ ok: false, error: "이름은 필수입니다." }, { status: 400 });
 
-  const created = await prisma.standardAttachment.create({ data: { name: body.name } });
-  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
+  const created = await prisma.$transaction(async (tx) => {
+    const row = await tx.standardAttachment.create({ data: { name: body.name } });
+    await writeAuditLog(tx, {
+      actorUserId: actor.userId,
+      entityType: "standardAttachment",
+      entityId: row.id,
+      entityLabel: row.name,
+      action: "CREATE",
+    });
+    return row;
+  });
   return Response.json({ ok: true, attachment: toStandardAttachment(created) });
 }

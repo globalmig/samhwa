@@ -1,7 +1,8 @@
 import { prisma } from "@/lib/db";
-import { requireUser, SessionError } from "@/lib/session";
+import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
 import { groupPtisToMembers } from "@/lib/project-member-mapper";
 import { getOrCreatePti } from "@/lib/pti-helper";
+import { writeAuditLog } from "@/lib/audit";
 import type { ProjectMember } from "@/lib/mock";
 
 export const runtime = "nodejs";
@@ -9,13 +10,22 @@ export const runtime = "nodejs";
 const PTI_INCLUDE = { projectTerm: { include: { project: true } }, institution: true } as const;
 
 export async function GET() {
+  try {
+    await requireUser();
+  } catch (err) {
+    if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
+    throw err;
+  }
   const rows = await prisma.projectTermInstitution.findMany({ include: PTI_INCLUDE });
   return Response.json({ ok: true, members: groupPtisToMembers(rows) });
 }
 
 export async function POST(request: Request) {
+  let actor;
   try {
-    await requireUser();
+    // 과제상세의 참여기관 추가("projects" 권한)뿐 아니라 수수료청구관리의 RCMS 엑셀 일괄등록
+    // ("fees" 권한)도 참여기관을 새로 만든다.
+    actor = await requireWriteAccess(["projects", "fees"]);
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -40,36 +50,48 @@ export async function POST(request: Request) {
     exemptRefGrade: body.exemptRefGrade, role: body.role,
   };
 
-  if (body.annualBudgets && body.annualBudgets.length > 0) {
-    for (const ab of body.annualBudgets) {
-      const budget = BigInt(Math.round(ab.cashBudget + ab.inKindBudget));
-      const ptiId = await getOrCreatePti(prisma, body.projectId, ab.termNumber, body.institutionId, role, budget, ab.termYear);
-      await prisma.projectTermInstitution.update({
+  const member = await prisma.$transaction(async (tx) => {
+    if (body.annualBudgets && body.annualBudgets.length > 0) {
+      for (const ab of body.annualBudgets) {
+        const budget = BigInt(Math.round(ab.cashBudget + ab.inKindBudget));
+        const ptiId = await getOrCreatePti(tx, body.projectId, ab.termNumber, body.institutionId, role, budget, ab.termYear);
+        await tx.projectTermInstitution.update({
+          where: { id: ptiId },
+          data: {
+            extraData: JSON.stringify({
+              ...sharedExtra, cashBudget: ab.cashBudget, inKindBudget: ab.inKindBudget,
+              termStartDate: ab.termStartDate, termEndDate: ab.termEndDate, auditFirm: ab.auditFirm,
+            }),
+          },
+        });
+      }
+    } else {
+      const project = await tx.project.findUnique({ where: { id: body.projectId } });
+      const extra = project?.extraData ? (JSON.parse(project.extraData) as { currentTerm?: number }) : {};
+      const budget = BigInt(Math.round(body.budget ?? 0));
+      const ptiId = await getOrCreatePti(tx, body.projectId, extra.currentTerm ?? 1, body.institutionId, role, budget);
+      await tx.projectTermInstitution.update({
         where: { id: ptiId },
-        data: {
-          extraData: JSON.stringify({
-            ...sharedExtra, cashBudget: ab.cashBudget, inKindBudget: ab.inKindBudget,
-            termStartDate: ab.termStartDate, termEndDate: ab.termEndDate, auditFirm: ab.auditFirm,
-          }),
-        },
+        data: { extraData: JSON.stringify({ ...sharedExtra, cashBudget: body.cashBudget ?? body.budget, inKindBudget: body.inKindBudget ?? 0 }) },
       });
     }
-  } else {
-    const project = await prisma.project.findUnique({ where: { id: body.projectId } });
-    const extra = project?.extraData ? (JSON.parse(project.extraData) as { currentTerm?: number }) : {};
-    const budget = BigInt(Math.round(body.budget ?? 0));
-    const ptiId = await getOrCreatePti(prisma, body.projectId, extra.currentTerm ?? 1, body.institutionId, role, budget);
-    await prisma.projectTermInstitution.update({
-      where: { id: ptiId },
-      data: { extraData: JSON.stringify({ ...sharedExtra, cashBudget: body.cashBudget ?? body.budget, inKindBudget: body.inKindBudget ?? 0 }) },
-    });
-  }
 
-  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
-  const rows = await prisma.projectTermInstitution.findMany({
-    where: { institutionId: body.institutionId, projectTerm: { projectId: body.projectId } },
-    include: PTI_INCLUDE,
+    const rows = await tx.projectTermInstitution.findMany({
+      where: { institutionId: body.institutionId, projectTerm: { projectId: body.projectId } },
+      include: PTI_INCLUDE,
+    });
+    const [createdMember] = groupPtisToMembers(rows);
+
+    await writeAuditLog(tx, {
+      actorUserId: actor.userId,
+      entityType: "projectMember",
+      entityId: createdMember.id,
+      entityLabel: `${createdMember.projectNumber} · ${createdMember.institutionName}`,
+      action: "CREATE",
+    });
+
+    return createdMember;
   });
-  const [member] = groupPtisToMembers(rows);
+
   return Response.json({ ok: true, member });
 }

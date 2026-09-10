@@ -1,11 +1,18 @@
 import { prisma } from "@/lib/db";
-import { requireWriteAccess, SessionError } from "@/lib/session";
+import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
 import { toProject } from "@/lib/project-mapper";
+import { writeAuditLog } from "@/lib/audit";
 import type { Project } from "@/lib/mock";
 
 export const runtime = "nodejs";
 
 export async function GET() {
+  try {
+    await requireUser();
+  } catch (err) {
+    if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
+    throw err;
+  }
   const rows = await prisma.project.findMany({ orderBy: { createdAt: "asc" } });
   return Response.json({ ok: true, projects: rows.map(toProject) });
 }
@@ -32,41 +39,50 @@ export async function POST(request: Request) {
   const startYear = body.startDate ? new Date(body.startDate).getUTCFullYear() : new Date().getUTCFullYear();
   const endYear = body.endDate ? new Date(body.endDate).getUTCFullYear() : startYear;
 
-  const created = await prisma.project.create({
-    data: {
-      projectNumber: body.projectNumber,
-      projectName: body.projectName,
-      projectType: body.projectType ?? "GENERAL",
-      agency: body.agency ?? null,
-      fundingAgencyId: body.agencyId || null,
-      settlementType: body.autonomySettlementType ?? "위탁정산",
-      startYear,
-      endYear: endYear >= startYear ? endYear : startYear,
-      totalTerms: body.totalTerms ?? 1,
-      status: body.status ?? "ACTIVE",
-      createdBy: actor.userId,
-      extraData: JSON.stringify({
-        firstStartDate: body.firstStartDate, finalEndDate: body.finalEndDate,
-        stageStartDate: body.stageStartDate, stageEndDate: body.stageEndDate,
-        annualFinancials: body.annualFinancials, usageReportDeadline: body.usageReportDeadline,
-        agencyAssignedAt: body.agencyAssignedAt, internalAssignedAt: body.internalAssignedAt,
-        projectCategory: body.projectCategory, researchLead: body.researchLead,
-        researchLeadEmail: body.researchLeadEmail, researchLeadOverrides: body.researchLeadOverrides,
-        projectCode: body.projectCode, termCodes: body.termCodes, projectDivision: body.projectDivision,
-        billingType: body.billingType, agreementType: body.agreementType, stages: body.stages,
-        autonomySettlementType: body.autonomySettlementType, programType: body.programType,
-        assignedManagerPrimary: body.assignedManagerPrimary,
-        assignedManagerPrimaryHistory: body.assignedManagerPrimaryHistory,
-        assignedManagerPrimaryUserId: body.assignedManagerPrimaryUserId,
-        assignedManager: body.assignedManager, assignedManagerHistory: body.assignedManagerHistory,
-        assignedManagerUserId: body.assignedManagerUserId,
-        currentTerm: body.currentTerm ?? 1, leadInstitutionId: body.leadInstitutionId,
-        leadInstitutionName: body.leadInstitutionName, totalBudget: body.totalBudget ?? 0,
-        govGrant: body.govGrant, privateCash: body.privateCash, privateInKind: body.privateInKind,
-      }),
-    },
+  const created = await prisma.$transaction(async (tx) => {
+    const row = await tx.project.create({
+      data: {
+        projectNumber: body.projectNumber,
+        projectName: body.projectName,
+        projectType: body.projectType ?? "GENERAL",
+        agency: body.agency ?? null,
+        fundingAgencyId: body.agencyId || null,
+        settlementType: body.autonomySettlementType ?? "위탁정산",
+        startYear,
+        endYear: endYear >= startYear ? endYear : startYear,
+        totalTerms: body.totalTerms ?? 1,
+        status: body.status ?? "ACTIVE",
+        createdBy: actor.userId,
+        extraData: JSON.stringify({
+          firstStartDate: body.firstStartDate, finalEndDate: body.finalEndDate,
+          stageStartDate: body.stageStartDate, stageEndDate: body.stageEndDate,
+          annualFinancials: body.annualFinancials, usageReportDeadline: body.usageReportDeadline,
+          agencyAssignedAt: body.agencyAssignedAt, internalAssignedAt: body.internalAssignedAt,
+          projectCategory: body.projectCategory, researchLead: body.researchLead,
+          researchLeadEmail: body.researchLeadEmail, researchLeadOverrides: body.researchLeadOverrides,
+          projectCode: body.projectCode, termCodes: body.termCodes, projectDivision: body.projectDivision,
+          billingType: body.billingType, agreementType: body.agreementType, stages: body.stages,
+          autonomySettlementType: body.autonomySettlementType, programType: body.programType,
+          assignedManagerPrimary: body.assignedManagerPrimary,
+          assignedManagerPrimaryHistory: body.assignedManagerPrimaryHistory,
+          assignedManagerPrimaryUserId: body.assignedManagerPrimaryUserId,
+          assignedManager: body.assignedManager, assignedManagerHistory: body.assignedManagerHistory,
+          assignedManagerUserId: body.assignedManagerUserId,
+          currentTerm: body.currentTerm ?? 1, leadInstitutionId: body.leadInstitutionId,
+          leadInstitutionName: body.leadInstitutionName, totalBudget: body.totalBudget ?? 0,
+          govGrant: body.govGrant, privateCash: body.privateCash, privateInKind: body.privateInKind,
+        }),
+      },
+    });
+    await writeAuditLog(tx, {
+      actorUserId: actor.userId,
+      entityType: "project",
+      entityId: row.id,
+      entityLabel: toProject(row).projectName,
+      action: "CREATE",
+    });
+    return row;
   });
 
-  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true, project: toProject(created) });
 }

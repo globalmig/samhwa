@@ -2040,7 +2040,7 @@ function BulkSettlementNoticeModal({
   // 보이는 발신 이메일만 전담기관별로 등록된 공용메일 주소(FundingAgency.noticeSenderEmail)로
   // 바꿔치기한다 — 전담기관마다 실제 메일 비밀번호를 따로 발급·등록할 필요가 없도록 한 것.
   const senderUser = users.find((u) => u.id === getCurrentUser()?.id) ?? null;
-  const senderAccountMissing = !senderUser?.hiworksEmail || !senderUser?.hiworksMailPassword;
+  const senderAccountMissing = !senderUser?.hiworksEmail || !senderUser?.hiworksMailConfigured;
   const agencyByShortName = useMemo(() => new Map(fundingAgencies.map((a) => [a.shortName, a])), [fundingAgencies]);
   const hasSenderEmail = (shortName: string) => !!agencyByShortName.get(shortName)?.noticeSenderEmail;
   // 공문 양식이 없는 전담기관 과제는 보낼 방법이 없어 건너뛰고, 수신 이메일이 없는 과제/발신
@@ -2084,7 +2084,7 @@ function BulkSettlementNoticeModal({
   }
 
   async function sendAll() {
-    if (!senderUser?.hiworksEmail || !senderUser?.hiworksMailPassword) return;
+    if (!senderUser?.hiworksEmail || !senderUser?.hiworksMailConfigured) return;
     setSending(true);
     const now = new Date();
     const issuedDate = now.toISOString().slice(0, 10).replace(/-/g, ".");
@@ -2116,8 +2116,6 @@ function BulkSettlementNoticeModal({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            senderEmail: senderUser.hiworksEmail,
-            senderPassword: senderUser.hiworksMailPassword,
             fromEmail: senderAgency.noticeSenderEmail,
             senderName: companyInfo.name,
             to: [t.recipientEmail],
@@ -2344,7 +2342,7 @@ function BulkSimpleNoticeModal({
   const [done, setDone] = useState(false);
   const [results, setResults] = useState<{ projectName: string; email: string; status: "SUCCESS" | "FAILED"; error?: string }[]>([]);
 
-  const canSendMail = !!senderUser?.hiworksEmail && !!senderUser?.hiworksMailPassword;
+  const canSendMail = !!senderUser?.hiworksEmail && !!senderUser?.hiworksMailConfigured;
   const toSend = eligible.filter((t) => !excluded.has(t.rowKey));
 
   function toggleExclude(rowKey: string) {
@@ -2356,7 +2354,7 @@ function BulkSimpleNoticeModal({
   }
 
   async function sendAll() {
-    if (!template || !senderUser?.hiworksEmail || !senderUser?.hiworksMailPassword) return;
+    if (!template || !senderUser?.hiworksEmail || !senderUser?.hiworksMailConfigured) return;
     setSending(true);
     const batchId = generateBatchId();
     const newResults: typeof results = [];
@@ -2372,8 +2370,6 @@ function BulkSimpleNoticeModal({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            senderEmail: senderUser.hiworksEmail,
-            senderPassword: senderUser.hiworksMailPassword,
             senderName: senderUser.name,
             to: [t.recipientEmail],
             subject,
@@ -2961,10 +2957,19 @@ export default function FeesPage() {
       case "endDate":
         return <span className="text-xs text-slate-600">{row.endDate ? fmtDate(row.endDate) : "—"}</span>;
 
-      case "billingType":
+      case "billingType": {
+        // TermFee.billingType은 세금계산서와 별개로 저장되는 값이라, 발행취소(CANCELED) 후에도
+        // 앱의 매출취소 흐름을 거치지 않고 남아있으면 "정발행" 같은 예전 표시가 그대로 보일 수 있다.
+        // 계산서일자·금액 칸이 발행취소를 "—"·예상 금액으로 표시하는 것과 기준을 맞춰, 발행취소된
+        // 연차는 발행구분 대신 "발행취소" 배지를 보여준다.
+        const isCanceled = !!row.taxInvoiceId && row.taxInvoiceStatus === "CANCELED";
         return (
           <div className="flex flex-col items-center gap-0.5">
-            {row.billingType ? (
+            {isCanceled ? (
+              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded whitespace-nowrap bg-red-50 text-red-500" title="세금계산서가 발행취소되어 재발행 전까지는 미발행 상태입니다.">
+                발행취소
+              </span>
+            ) : row.billingType ? (
               <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded whitespace-nowrap ${BILLING_TYPE_COLOR[row.billingType] ?? "bg-slate-100 text-slate-600"}`}>
                 {row.billingType}
               </span>
@@ -2979,6 +2984,7 @@ export default function FeesPage() {
             )}
           </div>
         );
+      }
 
       case "invoiceIssuedAt":
         return <span className="text-xs text-slate-600">{row.invoiceIssuedAt ? fmtDate(row.invoiceIssuedAt) : "—"}</span>;

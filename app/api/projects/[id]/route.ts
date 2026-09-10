@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { requireWriteAccess, SessionError } from "@/lib/session";
 import { toProject } from "@/lib/project-mapper";
+import { writeAuditLog } from "@/lib/audit";
 import type { Project } from "@/lib/mock";
 
 export const runtime = "nodejs";
@@ -9,8 +10,9 @@ type Params = { params: Promise<{ id: string }> };
 
 export async function PATCH(request: Request, { params }: Params) {
   const { id } = await params;
+  let actor;
   try {
-    await requireWriteAccess(["projects", "fees", "fees-info-edit"]);
+    actor = await requireWriteAccess(["projects", "fees", "fees-info-edit"]);
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -44,31 +46,44 @@ export async function PATCH(request: Request, { params }: Params) {
   const startYear = body.startDate ? new Date(body.startDate).getUTCFullYear() : undefined;
   const endYear = body.endDate ? new Date(body.endDate).getUTCFullYear() : undefined;
 
-  const updated = await prisma.project.update({
-    where: { id },
-    data: {
-      projectNumber: body.projectNumber ?? undefined,
-      projectName: body.projectName ?? undefined,
-      projectType: body.projectType ?? undefined,
-      agency: body.agency !== undefined ? body.agency : undefined,
-      fundingAgencyId: body.agencyId !== undefined ? body.agencyId || null : undefined,
-      settlementType: body.autonomySettlementType ?? undefined,
-      startYear: startYear ?? undefined,
-      endYear: endYear ?? undefined,
-      totalTerms: body.totalTerms ?? undefined,
-      status: body.status ?? undefined,
-      extraData: JSON.stringify(nextExtra),
-    },
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await tx.project.update({
+      where: { id },
+      data: {
+        projectNumber: body.projectNumber ?? undefined,
+        projectName: body.projectName ?? undefined,
+        projectType: body.projectType ?? undefined,
+        agency: body.agency !== undefined ? body.agency : undefined,
+        fundingAgencyId: body.agencyId !== undefined ? body.agencyId || null : undefined,
+        settlementType: body.autonomySettlementType ?? undefined,
+        startYear: startYear ?? undefined,
+        endYear: endYear ?? undefined,
+        totalTerms: body.totalTerms ?? undefined,
+        status: body.status ?? undefined,
+        extraData: JSON.stringify(nextExtra),
+      },
+    });
+    const afterProject = toProject(row);
+    await writeAuditLog(tx, {
+      actorUserId: actor.userId,
+      entityType: "project",
+      entityId: row.id,
+      entityLabel: afterProject.projectName,
+      action: "UPDATE",
+      before: toProject(before) as unknown as Record<string, unknown>,
+      after: afterProject as unknown as Record<string, unknown>,
+    });
+    return row;
   });
 
-  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true, project: toProject(updated) });
 }
 
 export async function DELETE(_request: Request, { params }: Params) {
   const { id } = await params;
+  let actor;
   try {
-    await requireWriteAccess("projects-delete");
+    actor = await requireWriteAccess("projects-delete");
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -88,23 +103,30 @@ export async function DELETE(_request: Request, { params }: Params) {
   const settlements = await prisma.settlement.findMany({ where: { projectTermInstitutionId: { in: ptiIds } }, select: { id: true } });
   const settlementIds = settlements.map((s) => s.id);
 
-  await prisma.$transaction([
-    prisma.paymentHistory.deleteMany({ where: { receivableId: { in: receivableIds } } }),
-    prisma.taxInvoiceHistory.deleteMany({ where: { taxInvoiceId: { in: taxInvoiceIds } } }),
-    prisma.settlementHistory.deleteMany({ where: { settlementId: { in: settlementIds } } }),
-    prisma.receivable.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } }),
-    prisma.taxInvoice.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } }),
-    prisma.claim.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } }),
-    prisma.termFee.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } }),
-    prisma.unclaimedFee.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } }),
-    prisma.settlement.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } }),
-    prisma.projectTermInstitution.deleteMany({ where: { id: { in: ptiIds } } }),
-    prisma.projectTerm.deleteMany({ where: { projectId: id } }),
-    prisma.termFeeCalc.deleteMany({ where: { projectId: id } }),
-    prisma.projectIssue.deleteMany({ where: { projectId: id } }),
-    prisma.project.delete({ where: { id } }),
-  ]);
+  await prisma.$transaction(async (tx) => {
+    await tx.paymentHistory.deleteMany({ where: { receivableId: { in: receivableIds } } });
+    await tx.taxInvoiceHistory.deleteMany({ where: { taxInvoiceId: { in: taxInvoiceIds } } });
+    await tx.settlementHistory.deleteMany({ where: { settlementId: { in: settlementIds } } });
+    await tx.receivable.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } });
+    await tx.taxInvoice.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } });
+    await tx.claim.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } });
+    await tx.termFee.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } });
+    await tx.unclaimedFee.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } });
+    await tx.settlement.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } });
+    await tx.projectTermInstitution.deleteMany({ where: { id: { in: ptiIds } } });
+    await tx.projectTerm.deleteMany({ where: { projectId: id } });
+    await tx.termFeeCalc.deleteMany({ where: { projectId: id } });
+    await tx.projectIssue.deleteMany({ where: { projectId: id } });
+    await tx.project.delete({ where: { id } });
 
-  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
+    await writeAuditLog(tx, {
+      actorUserId: actor.userId,
+      entityType: "project",
+      entityId: target.id,
+      entityLabel: target.projectName,
+      action: "DELETE",
+    });
+  });
+
   return Response.json({ ok: true });
 }

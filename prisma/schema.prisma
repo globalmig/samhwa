@@ -54,6 +54,9 @@ model User {
   name         String    @db.NVarChar(100)
   role         String    @db.NVarChar(20) // user_role
   status       String    @default("ACTIVE") @db.NVarChar(20) // ACTIVE | INACTIVE | PENDING (회원가입 승인 대기)
+  // 비밀번호 변경·계정 정지·권한 변경 시 증가시켜 기존에 발급된 세션 JWT(최대 7일 유효)를
+  // 즉시 무효화한다 — requireUser()가 매 요청마다 토큰에 담긴 값과 이 값을 비교한다.
+  sessionVersion Int     @default(0) @map("session_version")
   hiworksEmail String?   @map("hiworks_email") @db.NVarChar(255)
   hiworksMailPassword String? @map("hiworks_mail_password") @db.NVarChar(255)
   phone        String?   @db.NVarChar(30)

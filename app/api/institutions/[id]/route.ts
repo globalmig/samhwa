@@ -1,7 +1,8 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { requireUser, SessionError } from "@/lib/session";
+import { requireWriteAccess, SessionError } from "@/lib/session";
 import { toInstitution } from "@/lib/institution-mapper";
+import { writeAuditLog } from "@/lib/audit";
 import type { Institution } from "@/lib/mock";
 
 export const runtime = "nodejs";
@@ -10,8 +11,9 @@ type Params = { params: Promise<{ id: string }> };
 
 export async function PATCH(request: Request, { params }: Params) {
   const { id } = await params;
+  let actor;
   try {
-    await requireUser();
+    actor = await requireWriteAccess("institutions");
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -27,44 +29,57 @@ export async function PATCH(request: Request, { params }: Params) {
   const before = await prisma.institution.findUnique({ where: { id }, include: { contacts: true } });
   if (!before) return Response.json({ ok: false, error: "기관을 찾을 수 없습니다." }, { status: 404 });
 
-  await prisma.institution.update({
-    where: { id },
-    data: {
-      institutionName: body.name ?? undefined,
-      businessNumber: body.bizNumber !== undefined ? body.bizNumber || null : undefined,
-      institutionType: body.type ?? undefined,
-      representativeName: body.representativeName !== undefined ? body.representativeName || null : undefined,
-      phone: body.contactPhone !== undefined ? body.contactPhone || null : undefined,
-      email: body.contactEmail !== undefined ? body.contactEmail || null : undefined,
-      isActive: body.status !== undefined ? body.status !== "INACTIVE" : undefined,
-      notes: body.note !== undefined ? body.note ?? null : undefined,
-    },
+  const updated = await prisma.$transaction(async (tx) => {
+    await tx.institution.update({
+      where: { id },
+      data: {
+        institutionName: body.name ?? undefined,
+        businessNumber: body.bizNumber !== undefined ? body.bizNumber || null : undefined,
+        institutionType: body.type ?? undefined,
+        representativeName: body.representativeName !== undefined ? body.representativeName || null : undefined,
+        phone: body.contactPhone !== undefined ? body.contactPhone || null : undefined,
+        email: body.contactEmail !== undefined ? body.contactEmail || null : undefined,
+        isActive: body.status !== undefined ? body.status !== "INACTIVE" : undefined,
+        notes: body.note !== undefined ? body.note ?? null : undefined,
+      },
+    });
+
+    if (body.contactName !== undefined) {
+      const primary = before.contacts.find((c) => c.isPrimary) ?? before.contacts[0];
+      if (primary) {
+        await tx.institutionContact.update({
+          where: { id: primary.id },
+          data: { name: body.contactName, phone: body.contactPhone ?? primary.phone, email: body.contactEmail ?? primary.email },
+        });
+      } else if (body.contactName) {
+        await tx.institutionContact.create({
+          data: { institutionId: id, name: body.contactName, phone: body.contactPhone || null, email: body.contactEmail || null, isPrimary: true },
+        });
+      }
+    }
+
+    const full = await tx.institution.findUniqueOrThrow({ where: { id }, include: { contacts: true } });
+    const afterInstitution = toInstitution(full);
+    await writeAuditLog(tx, {
+      actorUserId: actor.userId,
+      entityType: "institution",
+      entityId: id,
+      entityLabel: afterInstitution.name,
+      action: "UPDATE",
+      before: toInstitution(before) as unknown as Record<string, unknown>,
+      after: afterInstitution as unknown as Record<string, unknown>,
+    });
+    return full;
   });
 
-  if (body.contactName !== undefined) {
-    const primary = before.contacts.find((c) => c.isPrimary) ?? before.contacts[0];
-    if (primary) {
-      await prisma.institutionContact.update({
-        where: { id: primary.id },
-        data: { name: body.contactName, phone: body.contactPhone ?? primary.phone, email: body.contactEmail ?? primary.email },
-      });
-    } else if (body.contactName) {
-      await prisma.institutionContact.create({
-        data: { institutionId: id, name: body.contactName, phone: body.contactPhone || null, email: body.contactEmail || null, isPrimary: true },
-      });
-    }
-  }
-
-  const updated = await prisma.institution.findUniqueOrThrow({ where: { id }, include: { contacts: true } });
-
-  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true, institution: toInstitution(updated) });
 }
 
 export async function DELETE(_request: Request, { params }: Params) {
   const { id } = await params;
+  let actor;
   try {
-    await requireUser();
+    actor = await requireWriteAccess("institutions");
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -74,7 +89,16 @@ export async function DELETE(_request: Request, { params }: Params) {
   if (!target) return Response.json({ ok: false, error: "기관을 찾을 수 없습니다." }, { status: 404 });
 
   try {
-    await prisma.institution.delete({ where: { id } });
+    await prisma.$transaction(async (tx) => {
+      await tx.institution.delete({ where: { id } });
+      await writeAuditLog(tx, {
+        actorUserId: actor.userId,
+        entityType: "institution",
+        entityId: target.id,
+        entityLabel: target.institutionName,
+        action: "DELETE",
+      });
+    });
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && (err.code === "P2003" || err.code === "P2014")) {
       return Response.json(
@@ -85,6 +109,5 @@ export async function DELETE(_request: Request, { params }: Params) {
     throw err;
   }
 
-  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true });
 }

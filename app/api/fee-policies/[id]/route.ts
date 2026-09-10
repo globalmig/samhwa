@@ -1,7 +1,8 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { requireUser, SessionError } from "@/lib/session";
+import { requireWriteAccess, SessionError } from "@/lib/session";
 import { toFeePolicy, MOCK_TO_DB_STATUS, type FeePolicyWithRelations } from "@/lib/fee-policy-mapper";
+import { writeAuditLog } from "@/lib/audit";
 import type { FeePolicy } from "@/lib/mock";
 
 export const runtime = "nodejs";
@@ -12,8 +13,9 @@ type Params = { params: Promise<{ id: string }> };
 
 export async function PATCH(request: Request, { params }: Params) {
   const { id } = await params;
+  let actor;
   try {
-    await requireUser();
+    actor = await requireWriteAccess("company-class");
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -26,7 +28,7 @@ export async function PATCH(request: Request, { params }: Params) {
     return Response.json({ ok: false, error: "잘못된 요청입니다." }, { status: 400 });
   }
 
-  const before = await prisma.feePolicy.findUnique({ where: { id } });
+  const before = await prisma.feePolicy.findUnique({ where: { id }, include: INCLUDE });
   if (!before) return Response.json({ ok: false, error: "수수료 정책을 찾을 수 없습니다." }, { status: 404 });
 
   const updated = await prisma.$transaction(async (tx) => {
@@ -75,17 +77,28 @@ export async function PATCH(request: Request, { params }: Params) {
       }
     }
 
-    return tx.feePolicy.findUniqueOrThrow({ where: { id }, include: INCLUDE });
+    const full = await tx.feePolicy.findUniqueOrThrow({ where: { id }, include: INCLUDE });
+    const afterPolicy = toFeePolicy(full as FeePolicyWithRelations);
+    await writeAuditLog(tx, {
+      actorUserId: actor.userId,
+      entityType: "feePolicy",
+      entityId: id,
+      entityLabel: afterPolicy.name,
+      action: "UPDATE",
+      before: toFeePolicy(before as FeePolicyWithRelations) as unknown as Record<string, unknown>,
+      after: afterPolicy as unknown as Record<string, unknown>,
+    });
+    return full;
   });
 
-  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true, policy: toFeePolicy(updated as FeePolicyWithRelations) });
 }
 
 export async function DELETE(_request: Request, { params }: Params) {
   const { id } = await params;
+  let actor;
   try {
-    await requireUser();
+    actor = await requireWriteAccess("company-class");
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -95,11 +108,18 @@ export async function DELETE(_request: Request, { params }: Params) {
   if (!target) return Response.json({ ok: false, error: "수수료 정책을 찾을 수 없습니다." }, { status: 404 });
 
   try {
-    await prisma.$transaction([
-      prisma.feePolicyBudgetRule.deleteMany({ where: { policyId: id } }),
-      prisma.feePolicyExemptGrade.deleteMany({ where: { policyId: id } }),
-      prisma.feePolicy.delete({ where: { id } }),
-    ]);
+    await prisma.$transaction(async (tx) => {
+      await tx.feePolicyBudgetRule.deleteMany({ where: { policyId: id } });
+      await tx.feePolicyExemptGrade.deleteMany({ where: { policyId: id } });
+      await tx.feePolicy.delete({ where: { id } });
+      await writeAuditLog(tx, {
+        actorUserId: actor.userId,
+        entityType: "feePolicy",
+        entityId: target.id,
+        entityLabel: target.policyName,
+        action: "DELETE",
+      });
+    });
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && (err.code === "P2003" || err.code === "P2014")) {
       return Response.json(
@@ -110,6 +130,5 @@ export async function DELETE(_request: Request, { params }: Params) {
     throw err;
   }
 
-  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true });
 }

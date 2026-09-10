@@ -1,9 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
+import Script from "next/script";
 import { useStore, addUser } from "@/lib/store";
 import { todayKST } from "@/lib/utils";
+import { verifyTurnstileToken } from "@/lib/turnstile";
+
+const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
 
 const inputCls = "w-full text-sm border border-slate-200 rounded-lg px-3 py-2.5 text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-colors";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -19,7 +24,7 @@ export default function SignupPage() {
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const trimmedName = name.trim();
     const normalizedEmail = email.trim().toLowerCase();
@@ -44,9 +49,21 @@ export default function SignupPage() {
       setError("이미 등록된 이메일입니다.");
       return;
     }
+    const turnstileToken = new FormData(e.currentTarget).get("cf-turnstile-response") as string | null;
+    if (!turnstileToken) {
+      setError("보안 확인 체크박스를 완료해 주세요.");
+      return;
+    }
 
     setSubmitting(true);
     setError("");
+    const verified = await verifyTurnstileToken(turnstileToken);
+    if (!verified) {
+      setSubmitting(false);
+      setError("보안 확인에 실패했습니다. 다시 시도해 주세요.");
+      window.turnstile?.reset();
+      return;
+    }
     addUser({
       name: trimmedName,
       email: normalizedEmail,
@@ -65,13 +82,11 @@ export default function SignupPage() {
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-blue-600 mb-4">
-            <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" className="w-6 h-6">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
+          <div className="inline-flex items-center justify-center mb-4">
+            <Image src="/simbol.png" alt="Samhwa Flow" width={55} height={40} />
           </div>
-          <h1 className="text-xl font-bold text-slate-800">Samhwa ERP</h1>
-          <p className="text-sm text-slate-500 mt-1">국가지원사업 수수료 통합 관리 시스템</p>
+          <h1 className="text-xl font-bold text-slate-800">Samhwa Flow</h1>
+          <p className="text-sm text-slate-500 mt-1">수수료 통합관리</p>
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-8">
@@ -117,6 +132,8 @@ export default function SignupPage() {
                   <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="비밀번호를 다시 입력하세요" autoComplete="new-password" className={inputCls} />
                 </div>
 
+                <div className="cf-turnstile" data-sitekey={TURNSTILE_SITE_KEY} data-action="turnstile-spin-v1" />
+
                 {error && (
                   <div className="flex items-center gap-2 text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2.5">
                     <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 shrink-0">
@@ -130,6 +147,8 @@ export default function SignupPage() {
                   {submitting ? "처리 중..." : "가입 신청"}
                 </button>
               </form>
+
+              <Script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer strategy="afterInteractive" />
 
               <p className="text-center text-xs text-slate-500 mt-5">
                 이미 계정이 있으신가요?{" "}

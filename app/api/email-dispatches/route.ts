@@ -1,11 +1,17 @@
 import { prisma } from "@/lib/db";
-import { requireUser, SessionError } from "@/lib/session";
+import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
 import { toEmailDispatch } from "@/lib/email-dispatch-mapper";
 import type { EmailDispatch } from "@/lib/mock";
 
 export const runtime = "nodejs";
 
 export async function GET() {
+  try {
+    await requireUser();
+  } catch (err) {
+    if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
+    throw err;
+  }
   const rows = await prisma.emailLog.findMany({ orderBy: { createdAt: "desc" }, take: 2000 });
   return Response.json({ ok: true, emailDispatches: rows.map(toEmailDispatch) });
 }
@@ -13,7 +19,7 @@ export async function GET() {
 export async function POST(request: Request) {
   let actor;
   try {
-    actor = await requireUser();
+    actor = await requireWriteAccess(["emails", "simple-notices"]);
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;

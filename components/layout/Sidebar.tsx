@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { FiChevronDown } from "react-icons/fi";
@@ -285,22 +286,18 @@ export default function Sidebar() {
             type="button"
             onClick={() => setCollapsed(false)}
             title="사이드바 펼치기"
-            className="group relative flex items-center justify-center w-8 h-8 rounded-lg bg-blue-600 shrink-0"
+            className="group relative flex items-center justify-center w-8 h-8 rounded-lg bg-white/5 shrink-0"
           >
-            <svg viewBox="0 0 20 20" fill="white" className="w-4 h-4 transition-opacity group-hover:opacity-0">
-              <path d="M2 4a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4zm9 0a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1V4zm0 7a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1v-5zM2 13a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1v-3z" />
-            </svg>
+            <Image src="/simbol.png" alt="Samhwa Flow" width={28} height={20} className="transition-opacity group-hover:opacity-0" />
             <LuPanelLeft size={16} className="absolute inset-0 m-auto text-white opacity-0 transition-opacity group-hover:opacity-100" />
           </button>
         ) : (
           <>
-            <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-blue-600 shrink-0">
-              <svg viewBox="0 0 20 20" fill="white" className="w-4 h-4">
-                <path d="M2 4a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4zm9 0a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1V4zm0 7a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-5a1 1 0 0 1-1-1v-5zM2 13a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1v-3z" />
-              </svg>
+            <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-white/5 shrink-0">
+              <Image src="/simbol.png" alt="Samhwa Flow" width={28} height={20} />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-white truncate">Samhwa ERP</p>
+              <p className="text-sm font-semibold text-white truncate">Samhwa Flow</p>
               <p className="text-[10px] text-slate-400 leading-tight truncate">수수료 통합관리</p>
             </div>
             <button

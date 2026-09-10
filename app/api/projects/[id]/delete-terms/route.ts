@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { requireWriteAccess, SessionError } from "@/lib/session";
+import { writeAuditLog } from "@/lib/audit";
 
 export const runtime = "nodejs";
 
@@ -11,8 +12,9 @@ type Extra = { manualOverride?: boolean };
 // 건드리지 않는다(로컬 로직과 동일한 잠금 규칙).
 export async function POST(request: Request, { params }: Params) {
   const { id: projectId } = await params;
+  let actor;
   try {
-    await requireWriteAccess("projects-delete");
+    actor = await requireWriteAccess("projects-delete");
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -64,6 +66,16 @@ export async function POST(request: Request, { params }: Params) {
     await tx.termFee.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } });
     await tx.unclaimedFee.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } });
     await tx.termFeeCalc.deleteMany({ where: { projectId, termNumber: { in: deletableTermNumbers } } });
+
+    const project = await tx.project.findUnique({ where: { id: projectId } });
+    await writeAuditLog(tx, {
+      actorUserId: actor.userId,
+      entityType: "project",
+      entityId: projectId,
+      entityLabel: project?.projectName ?? projectId,
+      action: "DELETE",
+      changedFields: { deletedTerms: { before: [], after: deletableTermNumbers.map((n) => `${n}연차`) } },
+    });
   });
 
   const project = await prisma.project.findUnique({ where: { id: projectId } });
@@ -80,6 +92,5 @@ export async function POST(request: Request, { params }: Params) {
     }
   }
 
-  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true, deletedTermNumbers: deletableTermNumbers });
 }

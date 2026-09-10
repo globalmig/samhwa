@@ -212,7 +212,7 @@ export default function DispatchModal({ target, onClose }: { target: DispatchTar
   // getCurrentUser()는 로그인 시점 스냅샷이라 이후 등록된 하이웍스 계정 정보가 반영되지 않으므로,
   // 실시간 store에서 같은 id의 사용자 레코드를 다시 찾아 발신 계정으로 사용한다.
   const senderUser = users.find((u) => u.id === getCurrentUser()?.id) ?? null;
-  const canSendMail = !!senderUser?.hiworksEmail && !!senderUser?.hiworksMailPassword;
+  const canSendMail = !!senderUser?.hiworksEmail && !!senderUser?.hiworksMailConfigured;
   const isOther = target.kind === "OTHER";
   const termLabel = `${target.termNumber}연차`;
 
@@ -457,7 +457,7 @@ ${companyInfo.name} 드림`;
   }
 
   async function handleSend() {
-    if (!canSend || !senderUser?.hiworksEmail || !senderUser?.hiworksMailPassword) return;
+    if (!canSend || !senderUser?.hiworksEmail || !senderUser?.hiworksMailConfigured) return;
     setSending(true);
     setSendError("");
 
@@ -472,8 +472,6 @@ ${companyInfo.name} 드림`;
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          senderEmail: senderUser.hiworksEmail,
-          senderPassword: senderUser.hiworksMailPassword,
           senderName: senderUser.name,
           to: emails,
           subject,

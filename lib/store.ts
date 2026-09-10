@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { getCurrentUser } from "./auth";
 import { nowKST, todayKST } from "./utils";
+import { diffForAudit } from "./audit-diff";
 import { ADMIN_ONLY_LOCKED_PAGES } from "./permission-constants";
 import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveProjectCodeForTerm, type CalcMember } from "./fee-calculator";
 import {
@@ -227,27 +228,9 @@ function genId(prefix: string): string {
   return `${prefix}-${Date.now()}-${_idSeq}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function diff(
-  before: Record<string, unknown>,
-  after: Record<string, unknown>
-): Record<string, { before: unknown; after: unknown }> | undefined {
-  const changes: Record<string, { before: unknown; after: unknown }> = {};
-  for (const k of new Set([...Object.keys(before), ...Object.keys(after)])) {
-    if (k === "id") continue;
-    // 배열·객체 필드(stages/annualFinancials/gradeOverrides 등)는 String()으로 비교하면 서로
-    // 다른 값도 전부 "[object Object]"로 뭉개져 실제로는 바뀌었는데 변경 없음으로 놓칠 수 있다
-    // — JSON.stringify로 값 자체를 비교한다(이 앱의 엔티티는 함수/순환참조가 없는 순수 데이터라 안전).
-    const b = before[k];
-    const a = after[k];
-    const same = (b !== null && typeof b === "object") || (a !== null && typeof a === "object")
-      ? JSON.stringify(b) === JSON.stringify(a)
-      : String(b) === String(a);
-    if (!same) {
-      changes[k] = { before: b, after: a };
-    }
-  }
-  return Object.keys(changes).length > 0 ? changes : undefined;
-}
+// diff 로직 자체는 lib/audit-diff.ts로 옮겨 서버(lib/audit.ts)와 공유한다 — 여기 남은 얇은 래퍼는
+// 기존 호출부(diff(before, after))를 그대로 유지하기 위한 것.
+const diff = diffForAudit;
 
 function record(
   entityType: string,
@@ -268,14 +251,13 @@ function record(
   };
   _state = { ..._state, auditLog: [entry, ..._state.auditLog] };
 
-  // 서버(audit_log 테이블)에 영구 저장한다 — 예전엔 이 함수가 브라우저 메모리에만 쌓아서 새로고침하면
-  // "전체 변경이력"이 통째로 사라졌다(수정 9). 실패해도 이미 화면엔 반영됐고 이 기록을 트리거한
-  // 실제 동작(과제 수정 등)은 이미 끝난 뒤라, 굳이 되돌리지 않고 콘솔에만 남긴다.
-  fetch("/api/audit-log", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ entityType, entityId, entityLabel, action, changedFields }),
-  }).catch((err) => console.error("변경이력 저장 실패:", err));
+  // 보안 조치(2026-09-10): 예전엔 여기서 /api/audit-log에 직접 POST해 서버에 영구 저장했는데,
+  // 그 라우트는 로그인만 했으면 누구나 호출할 수 있어 실제로 하지 않은 변경을 지어내 기록하거나
+  // 반대로 진짜 변경 API만 직접 호출해 기록을 생략할 수 있었다(감사 기록 신뢰성이 클라이언트에
+  // 좌우됨). 지금은 실제 DB 변경을 처리하는 각 API 라우트가 그 변경과 같은 트랜잭션 안에서
+  // lib/audit.ts의 writeAuditLog()를 직접 호출해 서버가 스스로 기록을 남긴다 — 그게 유일한 정본
+  // 기록이다. 여기 남은 로컬 push는 새로고침 전까지 화면에 바로 보이게 하는 낙관적 갱신일 뿐이며,
+  // 다음 hydrateAuditLog()에서 서버의 정본 기록으로 자연스럽게 대체된다.
 }
 
 // audit_log는 추가 전용(append-only) 데이터라 다른 hydrate*와 달리 "그 사이 로컬 변경이 있으면
@@ -2548,15 +2530,21 @@ export function updateUserHiworksCredentials(
   const before = _state.users.find((u) => u.id === id);
   if (!before || before.role === "VIEWER") return;
 
-  const after = { ...before, ...data };
+  // hiworksMailPassword는 응답에 절대 실리지 않는 쓰기 전용 필드라 서버가 답하기 전까지는
+  // hiworksMailConfigured로 낙관적 업데이트한다(실제 값은 서버 응답이 오면 덮어써진다).
+  const after: SystemUser = {
+    ...before,
+    ...(data.hiworksEmail !== undefined ? { hiworksEmail: data.hiworksEmail } : {}),
+    ...(data.hiworksMailPassword ? { hiworksMailConfigured: true } : {}),
+  };
   _state = { ..._state, users: _state.users.map((u) => (u.id === id ? after : u)) };
 
   const changedFields: Record<string, { before: unknown; after: unknown }> = {};
   if (data.hiworksEmail !== undefined && data.hiworksEmail !== before.hiworksEmail) {
     changedFields.hiworksEmail = { before: before.hiworksEmail ?? "미등록", after: data.hiworksEmail };
   }
-  if (data.hiworksMailPassword !== undefined && data.hiworksMailPassword !== before.hiworksMailPassword) {
-    changedFields.hiworksMailPassword = { before: before.hiworksMailPassword ? "등록됨" : "미등록", after: "등록됨" };
+  if (data.hiworksMailPassword) {
+    changedFields.hiworksMailPassword = { before: before.hiworksMailConfigured ? "등록됨" : "미등록", after: "등록됨" };
   }
   record("user", id, after.name, "UPDATE", Object.keys(changedFields).length > 0 ? changedFields : undefined);
   notify();

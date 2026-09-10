@@ -15,6 +15,14 @@ if errorlevel 1 (
   exit /b 1
 )
 
+echo === prisma migrate deploy ===
+call npx prisma migrate deploy
+if errorlevel 1 (
+  echo prisma migrate deploy failed - restarting previous build
+  call nssm.exe start SamhwaApp
+  exit /b 1
+)
+
 echo === prisma generate ===
 call npx prisma generate
 if errorlevel 1 (

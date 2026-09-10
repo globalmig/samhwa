@@ -1,11 +1,18 @@
 import { prisma } from "@/lib/db";
-import { requireUser, SessionError } from "@/lib/session";
+import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
 import { toFundingAgency } from "@/lib/funding-agency-mapper";
+import { writeAuditLog } from "@/lib/audit";
 import type { FundingAgency, AgencyGuideTab } from "@/lib/mock";
 
 export const runtime = "nodejs";
 
 export async function GET() {
+  try {
+    await requireUser();
+  } catch (err) {
+    if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
+    throw err;
+  }
   const agencies = await prisma.fundingAgency.findMany({ orderBy: { createdAt: "asc" } });
   // guideContent(운용 안내)는 fundingAgency 레코드 자체엔 있지만 toFundingAgency엔 포함하지 않는다 —
   // 클라이언트 store는 이걸 agencyGuides(약칭을 키로 하는 별도 딕셔너리)로 따로 들고 있으므로
@@ -24,8 +31,11 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  let actor;
   try {
-    await requireUser();
+    // "전담기관 관리" 화면뿐 아니라, 수수료청구관리의 RCMS 엑셀 일괄등록("fees" 권한)도 인식 못한
+    // 전담기관을 그 자리에서 새로 만들 수 있다.
+    actor = await requireWriteAccess(["funding-agencies", "fees"]);
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -41,26 +51,35 @@ export async function POST(request: Request) {
     return Response.json({ ok: false, error: "정식명칭, 약칭, 기관코드는 필수입니다." }, { status: 400 });
   }
 
-  const created = await prisma.fundingAgency.create({
-    data: {
-      name: body.name,
-      shortName: body.shortName,
-      code: body.code,
-      contactName: body.contactName ?? "",
-      contactEmail: body.contactEmail ?? "",
-      contactPhone: body.contactPhone ?? "",
-      noticeSenderEmail: body.noticeSenderEmail ?? null,
-      noticeSenderMailPassword: body.noticeSenderMailPassword ?? null,
-      status: body.status ?? "ACTIVE",
-      registeredAt: body.registeredAt ? new Date(body.registeredAt) : new Date(),
-      website: body.website ?? null,
-      noticeRecipientScope: body.noticeRecipientScope ?? "LEAD_ONLY",
-      autoDetectByLeadInstitution: !!body.autoDetectByLeadInstitution,
-      affiliatedInstitutionNames: body.affiliatedInstitutionNames ? JSON.stringify(body.affiliatedInstitutionNames) : null,
-      specialNotes: body.specialNotes ? JSON.stringify(body.specialNotes) : null,
-    },
+  const created = await prisma.$transaction(async (tx) => {
+    const row = await tx.fundingAgency.create({
+      data: {
+        name: body.name,
+        shortName: body.shortName,
+        code: body.code,
+        contactName: body.contactName ?? "",
+        contactEmail: body.contactEmail ?? "",
+        contactPhone: body.contactPhone ?? "",
+        noticeSenderEmail: body.noticeSenderEmail ?? null,
+        noticeSenderMailPassword: body.noticeSenderMailPassword ?? null,
+        status: body.status ?? "ACTIVE",
+        registeredAt: body.registeredAt ? new Date(body.registeredAt) : new Date(),
+        website: body.website ?? null,
+        noticeRecipientScope: body.noticeRecipientScope ?? "LEAD_ONLY",
+        autoDetectByLeadInstitution: !!body.autoDetectByLeadInstitution,
+        affiliatedInstitutionNames: body.affiliatedInstitutionNames ? JSON.stringify(body.affiliatedInstitutionNames) : null,
+        specialNotes: body.specialNotes ? JSON.stringify(body.specialNotes) : null,
+      },
+    });
+    await writeAuditLog(tx, {
+      actorUserId: actor.userId,
+      entityType: "fundingAgency",
+      entityId: row.id,
+      entityLabel: row.name,
+      action: "CREATE",
+    });
+    return row;
   });
 
-  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true, agency: toFundingAgency(created) });
 }

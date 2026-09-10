@@ -6,8 +6,8 @@ import AuthGuard from "@/components/layout/AuthGuard";
 import LayoutShell from "@/components/layout/LayoutShell";
 
 export const metadata: Metadata = {
-  title: "Samhwa ERP",
-  description: "국가지원사업 수수료 통합 관리 시스템",
+  title: "Samhwa Flow",
+  description: "수수료 통합관리",
 };
 
 export default function RootLayout({

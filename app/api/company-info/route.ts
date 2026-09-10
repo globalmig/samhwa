@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
-import { requireUser, SessionError } from "@/lib/session";
+import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
+import { writeAuditLog } from "@/lib/audit";
 import { COMPANY_INFO, type CompanyInfo } from "@/lib/mock";
 import type { CompanyInfo as PrismaCompanyInfo } from "@prisma/client";
 
@@ -37,13 +38,23 @@ async function ensureRow() {
 }
 
 export async function GET() {
+  try {
+    await requireUser();
+  } catch (err) {
+    if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
+    throw err;
+  }
   const row = await ensureRow();
   return Response.json({ ok: true, companyInfo: toCompanyInfo(row) });
 }
 
 export async function PATCH(request: Request) {
+  // 회사정보에는 직인 이미지·입금계좌 안내가 포함돼 청구서·공문 위변조로 이어질 수 있어,
+  // 로그인 여부만이 아니라 공문 양식 편집 화면과 같은 쓰기 권한(notice-templates)을 요구한다 —
+  // 화면(app/notice-templates/invoices)도 이 권한으로 편집모드 진입을 막고 있다.
+  let actor;
   try {
-    await requireUser();
+    actor = await requireWriteAccess("notice-templates");
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -57,24 +68,36 @@ export async function PATCH(request: Request) {
   }
 
   const existing = await ensureRow();
-  const updated = await prisma.companyInfo.update({
-    where: { id: existing.id },
-    data: {
-      name: body.name ?? undefined,
-      addressLine: body.addressLine ?? undefined,
-      tel: body.tel ?? undefined,
-      fax: body.fax ?? undefined,
-      preparedBy: body.preparedBy ?? undefined,
-      ceoName: body.ceoName ?? undefined,
-      docNumberPrefix: body.docNumberPrefix ?? undefined,
-      managerName: body.managerName ?? undefined,
-      managerEmail: body.managerEmail ?? undefined,
-      managerPhone: body.managerPhone ?? undefined,
-      depositAccountNote: body.depositAccountNote ?? undefined,
-      stampDataUrl: "stampDataUrl" in body ? (body.stampDataUrl ?? null) : undefined,
-    },
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await tx.companyInfo.update({
+      where: { id: existing.id },
+      data: {
+        name: body.name ?? undefined,
+        addressLine: body.addressLine ?? undefined,
+        tel: body.tel ?? undefined,
+        fax: body.fax ?? undefined,
+        preparedBy: body.preparedBy ?? undefined,
+        ceoName: body.ceoName ?? undefined,
+        docNumberPrefix: body.docNumberPrefix ?? undefined,
+        managerName: body.managerName ?? undefined,
+        managerEmail: body.managerEmail ?? undefined,
+        managerPhone: body.managerPhone ?? undefined,
+        depositAccountNote: body.depositAccountNote ?? undefined,
+        stampDataUrl: "stampDataUrl" in body ? (body.stampDataUrl ?? null) : undefined,
+      },
+    });
+    const afterInfo = toCompanyInfo(row);
+    await writeAuditLog(tx, {
+      actorUserId: actor.userId,
+      entityType: "companyInfo",
+      entityId: "company-info",
+      entityLabel: afterInfo.name,
+      action: "UPDATE",
+      before: toCompanyInfo(existing) as unknown as Record<string, unknown>,
+      after: afterInfo as unknown as Record<string, unknown>,
+    });
+    return row;
   });
 
-  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true, companyInfo: toCompanyInfo(updated) });
 }

@@ -2872,8 +2872,15 @@ export interface SystemUser {
   password?: string;
   /** 하이웍스 개인 메일 계정 (조회 전용 계정은 대상 아님) */
   hiworksEmail?: string;
-  /** 하이웍스 메일 전용 비밀번호 (로그인 비밀번호 아님, SMTP 발송용) */
+  /** 하이웍스 메일 전용 비밀번호 (로그인 비밀번호 아님, SMTP 발송용) — 쓰기 전용 필드로,
+   *  updateUserHiworksCredentials()가 저장 요청을 보낼 때만 값을 담는다. API 응답(toSystemUser)은
+   *  이 필드를 절대 채우지 않으므로 브라우저에는 항상 undefined로 보인다 — 실제 발송도
+   *  서버(/api/notices/send)가 세션 사용자 기준으로 DB에서 직접 조회해 쓰지, 클라이언트가
+   *  값을 들고 다니지 않는다. */
   hiworksMailPassword?: string;
+  /** 하이웍스 메일 연동 여부(이메일+메일 비밀번호가 둘 다 등록됐는지)만 나타내는 읽기 전용 플래그.
+   *  실제 비밀번호 값 대신 이것으로 등록 여부를 판단한다. */
+  hiworksMailConfigured?: boolean;
   /** 연락처(전화번호) — 과제담당자(정)/(부)로 지정됐을 때 공문 발송 시 이 사용자 이름으로 찾아
    *  문의사항 연락처 표에 자동으로 채워 넣는 데 쓰인다(lib/notice-contacts.ts). */
   phone?: string;

@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { requireWriteAccess, SessionError } from "@/lib/session";
 import { toTermFee } from "@/lib/term-fee-mapper";
+import { writeAuditLog } from "@/lib/audit";
 import type { TermFee } from "@/lib/mock";
 
 export const runtime = "nodejs";
@@ -13,8 +14,9 @@ type Extra = Record<string, unknown>;
 
 export async function PATCH(request: Request, { params }: Params) {
   const { id } = await params;
+  let actor;
   try {
-    await requireWriteAccess(["fees", "fees-sales", "fees-info-edit"]);
+    actor = await requireWriteAccess(["fees", "fees-sales", "fees-info-edit"]);
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -27,7 +29,7 @@ export async function PATCH(request: Request, { params }: Params) {
     return Response.json({ ok: false, error: "잘못된 요청입니다." }, { status: 400 });
   }
 
-  const before = await prisma.termFee.findUnique({ where: { id } });
+  const before = await prisma.termFee.findUnique({ where: { id }, include: INCLUDE });
   if (!before) return Response.json({ ok: false, error: "연차수수료를 찾을 수 없습니다." }, { status: 404 });
 
   const prevExtra: Extra = before.extraData ? JSON.parse(before.extraData) : {};
@@ -40,20 +42,32 @@ export async function PATCH(request: Request, { params }: Params) {
     if (key in body) nextExtra[key] = (body as Record<string, unknown>)[key];
   }
 
-  const updated = await prisma.termFee.update({
-    where: { id },
-    data: {
-      projectBudget: body.budget !== undefined ? BigInt(Math.round(body.budget)) : undefined,
-      standardFee: body.standardFee !== undefined ? BigInt(Math.round(body.standardFee)) : undefined,
-      appliedFee: body.appliedFee !== undefined ? BigInt(Math.round(body.appliedFee)) : undefined,
-      billedFee: body.status === "BILLED" && body.appliedFee !== undefined ? BigInt(Math.round(body.appliedFee)) : undefined,
-      status: body.status !== undefined ? MOCK_TO_DB_STATUS[body.status] ?? undefined : undefined,
-      notes: body.manualOverrideReason !== undefined ? body.manualOverrideReason ?? null : undefined,
-      extraData: JSON.stringify(nextExtra),
-    },
-    include: INCLUDE,
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await tx.termFee.update({
+      where: { id },
+      data: {
+        projectBudget: body.budget !== undefined ? BigInt(Math.round(body.budget)) : undefined,
+        standardFee: body.standardFee !== undefined ? BigInt(Math.round(body.standardFee)) : undefined,
+        appliedFee: body.appliedFee !== undefined ? BigInt(Math.round(body.appliedFee)) : undefined,
+        billedFee: body.status === "BILLED" && body.appliedFee !== undefined ? BigInt(Math.round(body.appliedFee)) : undefined,
+        status: body.status !== undefined ? MOCK_TO_DB_STATUS[body.status] ?? undefined : undefined,
+        notes: body.manualOverrideReason !== undefined ? body.manualOverrideReason ?? null : undefined,
+        extraData: JSON.stringify(nextExtra),
+      },
+      include: INCLUDE,
+    });
+    const afterFee = toTermFee(row);
+    await writeAuditLog(tx, {
+      actorUserId: actor.userId,
+      entityType: "termFee",
+      entityId: row.id,
+      entityLabel: `${afterFee.projectNumber} · ${afterFee.institutionName}`,
+      action: "UPDATE",
+      before: toTermFee(before) as unknown as Record<string, unknown>,
+      after: afterFee as unknown as Record<string, unknown>,
+    });
+    return row;
   });
 
-  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true, termFee: toTermFee(updated) });
 }

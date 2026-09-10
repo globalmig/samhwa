@@ -2,9 +2,13 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import Link from "next/link";
+import Script from "next/script";
 import { login, useAuth, initAuth, getCurrentUser } from "@/lib/auth";
 import { defaultLandingPath } from "@/lib/permissions";
+
+const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
 
 export default function LoginPage() {
   const router = useRouter();
@@ -24,20 +28,29 @@ export default function LoginPage() {
     }
   }, [user, isLoading, router]);
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!email || !password) {
       setError("이메일과 비밀번호를 입력해 주세요.");
       return;
     }
+    const turnstileToken = new FormData(e.currentTarget).get("cf-turnstile-response") as string | null;
+    if (!turnstileToken) {
+      setError("보안 확인 체크박스를 완료해 주세요.");
+      return;
+    }
     setSubmitting(true);
     setError("");
-    const result = await login(email, password);
+    // Turnstile 토큰 검증은 서버(/api/auth/login)에서 한다 — 토큰은 1회용이라 여기서
+    // 먼저 검증해버리면 서버 쪽 검증이 항상 실패한다. 클라이언트에서만 검증하면
+    // API를 직접 호출해 캡차를 우회할 수 있는 문제도 있었다.
+    const result = await login(email, password, turnstileToken);
     setSubmitting(false);
     if (result.ok) {
       router.replace(defaultLandingPath(getCurrentUser()?.role as "ADMIN" | "ACCOUNTANT" | "SETTLEMENT" | "VIEWER" | undefined));
     } else {
       setError(result.error ?? "로그인에 실패했습니다.");
+      window.turnstile?.reset();
     }
   }
 
@@ -48,13 +61,11 @@ export default function LoginPage() {
       <div className="w-full max-w-sm">
         {/* 로고/타이틀 */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-blue-600 mb-4">
-            <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" className="w-6 h-6">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
+          <div className="inline-flex items-center justify-center mb-4">
+            <Image src="/simbol.png" alt="Samhwa Flow" width={55} height={40} />
           </div>
-          <h1 className="text-xl font-bold text-slate-800">Samhwa ERP</h1>
-          <p className="text-sm text-slate-500 mt-1">국가지원사업 수수료 통합 관리 시스템</p>
+          <h1 className="text-xl font-bold text-slate-800">Samhwa Flow</h1>
+          <p className="text-sm text-slate-500 mt-1">수수료 통합관리</p>
         </div>
 
         {/* 로그인 카드 */}
@@ -86,6 +97,8 @@ export default function LoginPage() {
               />
             </div>
 
+            <div className="cf-turnstile" data-sitekey={TURNSTILE_SITE_KEY} data-action="turnstile-spin-v1" />
+
             {error && (
               <div className="flex items-center gap-2 text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2.5">
                 <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 shrink-0">
@@ -103,6 +116,8 @@ export default function LoginPage() {
               {submitting ? "로그인 중..." : "로그인"}
             </button>
           </form>
+
+          <Script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer strategy="afterInteractive" />
 
           <div className="flex items-center justify-center gap-3 mt-5 text-xs text-slate-500">
             <Link href="/find-id" className="hover:text-blue-600 hover:underline transition-colors">아이디 찾기</Link>

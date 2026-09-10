@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
-import { requireUser, SessionError } from "@/lib/session";
+import { requireWriteAccess, SessionError } from "@/lib/session";
 import { toSimpleNoticeTemplate } from "@/lib/notice-template-mapper";
+import { writeAuditLog } from "@/lib/audit";
 
 export const runtime = "nodejs";
 
@@ -8,8 +9,9 @@ type Params = { params: Promise<{ id: string }> };
 
 export async function POST(_request: Request, { params }: Params) {
   const { id } = await params;
+  let actor;
   try {
-    await requireUser();
+    actor = await requireWriteAccess("notice-templates");
   } catch (err) {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
@@ -20,9 +22,17 @@ export async function POST(_request: Request, { params }: Params) {
 
   const updated = await prisma.$transaction(async (tx) => {
     await tx.simpleNoticeTemplate.updateMany({ where: { category: target.category, NOT: { id } }, data: { isDefault: false } });
-    return tx.simpleNoticeTemplate.update({ where: { id }, data: { isDefault: true } });
+    const row = await tx.simpleNoticeTemplate.update({ where: { id }, data: { isDefault: true } });
+    await writeAuditLog(tx, {
+      actorUserId: actor.userId,
+      entityType: "simpleNoticeTemplate",
+      entityId: row.id,
+      entityLabel: `${row.name} 대표양식으로 지정`,
+      action: "UPDATE",
+      changedFields: { isDefault: { before: false, after: true } },
+    });
+    return row;
   });
 
-  // 변경이력은 클라이언트 record()가 /api/audit-log로 남긴다(중복 방지).
   return Response.json({ ok: true, template: toSimpleNoticeTemplate(updated) });
 }

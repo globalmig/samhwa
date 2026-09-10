@@ -31,12 +31,12 @@ export async function initAuth() {
   notify();
 }
 
-export async function login(email: string, password: string): Promise<{ ok: boolean; error?: string }> {
+export async function login(email: string, password: string, turnstileToken: string): Promise<{ ok: boolean; error?: string }> {
   try {
     const res = await fetch("/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, turnstileToken }),
     });
     const data: { ok: boolean; user?: SystemUser; error?: string } = await res.json();
     if (!data.ok || !data.user) {

@@ -5,11 +5,6 @@ import type { AuditEntry } from "@/lib/store";
 
 export const runtime = "nodejs";
 
-// audit_log.resource_id는 UNIQUEIDENTIFIER 컬럼이라 진짜 UUID가 아니면 저장이 거부된다 — 이 화면의
-// entityId 중에는 "page:/fees"(권한 항목) 같은 UUID가 아닌 값도 있어, 그런 경우엔 resourceId를
-// 비워두고 실제 entityId는 newValues 안에 함께 넣어 잃어버리지 않게 한다.
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 interface StoredPayload {
   entityId?: string;
   entityLabel?: string;
@@ -52,6 +47,12 @@ function toAuditEntry(row: {
 }
 
 export async function GET() {
+  try {
+    await requireUser();
+  } catch (err) {
+    if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
+    throw err;
+  }
   const rows = await prisma.auditLog.findMany({
     orderBy: { createdAt: "desc" },
     take: 1000,
@@ -60,34 +61,10 @@ export async function GET() {
   return Response.json({ ok: true, entries: rows.map(toAuditEntry) });
 }
 
-export async function POST(request: Request) {
-  let actor;
-  try {
-    actor = await requireUser();
-  } catch (err) {
-    if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
-    throw err;
-  }
-
-  let body: { entityType: string; entityId: string; entityLabel: string; action: AuditEntry["action"]; changedFields?: AuditEntry["changedFields"] };
-  try {
-    body = await request.json();
-  } catch {
-    return Response.json({ ok: false, error: "잘못된 요청입니다." }, { status: 400 });
-  }
-  if (!body.entityType || !body.action) {
-    return Response.json({ ok: false, error: "entityType, action은 필수입니다." }, { status: 400 });
-  }
-
-  const created = await prisma.auditLog.create({
-    data: {
-      userId: actor.userId,
-      action: body.action,
-      resourceType: body.entityType,
-      resourceId: body.entityId && UUID_RE.test(body.entityId) ? body.entityId : null,
-      newValues: JSON.stringify({ entityId: body.entityId, entityLabel: body.entityLabel, changedFields: body.changedFields }),
-    },
-  });
-
-  return Response.json({ ok: true, id: created.id });
-}
+// 보안 조치(2026-09-10): 이 라우트는 예전엔 POST도 받아서, 브라우저(lib/store.ts의 record())가
+// "방금 내가 무엇을 바꿨다"고 스스로 보고하는 값을 그대로 감사 기록으로 저장했다. 로그인만 했으면
+// 실제로는 하지 않은 변경을 지어내 기록하거나, 반대로 실제 변경 API(PATCH 등)만 직접 호출해 기록
+// 자체를 생략할 수 있었다 — 감사 기록의 신뢰성이 클라이언트에 좌우되는 구조였다.
+// 지금은 각 변경 API 라우트가 실제 DB 변경과 같은 prisma.$transaction 안에서 lib/audit.ts의
+// writeAuditLog()를 직접 호출해 기록을 남긴다(actor도 body가 아니라 서버가 확인한 세션에서 가져온다).
+// 그래서 브라우저가 감사 기록을 "제출"할 경로 자체가 더 이상 필요 없다 — 조회(GET)만 남긴다.
