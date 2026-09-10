@@ -43,6 +43,15 @@ export async function POST(request: Request) {
   const institutionId = body.institutionId ?? body.leadInstitutionId;
   const ptiId = await getOrCreatePti(prisma, project.id, body.termNumber, institutionId, "MAIN", BigInt(Math.round(body.billedAmount)), body.termYear);
 
+  // 채권은 연차·기관당 항상 1건만 존재해야 한다(세금계산서와 달리 취소 이력 개념이 없다) — 이미
+  // 있으면 새로 만들지 않고 그대로 돌려준다. updateReceivable로 수정해야 할 요청이 화면 버그 등으로
+  // "신규 생성" 경로를 다시 타도 중복 채권이 쌓이지 않도록 막는 방어선이다.
+  const existing = await prisma.receivable.findFirst({ where: { projectTermInstitutionId: ptiId }, include: INCLUDE });
+  if (existing) {
+    const invMap = await invoiceNumberMap();
+    return Response.json({ ok: true, receivable: toReceivable(existing, invMap) });
+  }
+
   const claim = await prisma.claim.create({
     data: {
       projectTermInstitutionId: ptiId,

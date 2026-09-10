@@ -38,6 +38,18 @@ export async function POST(request: Request) {
   const institutionId = body.institutionId ?? body.leadInstitutionId;
   const ptiId = await getOrCreatePti(prisma, project.id, body.termNumber, institutionId, "MAIN", BigInt(Math.round(body.supplyAmount)), body.termYear);
 
+  // 이미 발행(취소되지 않은) 세금계산서가 이 연차·기관에 있으면 새로 만들지 않고 그 레코드를
+  // 그대로 돌려준다 — 화면이 실제로는 이미 발행된 건을 "발행 전"으로 잘못 보여주는 동안(예: 위
+  // getOrCreatePti의 연도 버그) 사용자가 "저장 & 발행"을 여러 번 눌러도 같은 연차·기관에 계산서가
+  // 중복 생성되지 않도록 막는 방어선이다.
+  const existingActive = await prisma.taxInvoice.findFirst({
+    where: { projectTermInstitutionId: ptiId, status: { not: "CANCELLED" } },
+    include: INCLUDE,
+  });
+  if (existingActive) {
+    return Response.json({ ok: true, taxInvoice: toTaxInvoice(existingActive) });
+  }
+
   const created = await prisma.taxInvoice.create({
     data: {
       projectTermInstitutionId: ptiId,
