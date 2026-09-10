@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useAuth, logout } from "@/lib/auth";
 import { useStore, markNotificationRead, markAllNotificationsRead, dismissNotification, hydrateNotificationState } from "@/lib/store";
 import { computeOverdueAlerts, computeIssueAlerts, isAlertVisibleToUser, isIssueVisibleToUser } from "@/lib/notifications";
@@ -63,7 +63,6 @@ function NotifActions({ onRead, onDismiss }: { onRead: () => void; onDismiss: ()
 
 export default function Header() {
   const pathname = usePathname();
-  const router = useRouter();
   const { user } = useAuth();
   const { receivables, projects, notices, projectIssues, notificationState } = useStore();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -84,7 +83,9 @@ export default function Header() {
 
   function handleLogout() {
     logout();
-    router.replace("/login");
+    // 로그인 때와 같은 이유로 풀 리로드를 쓴다 — lib/store.ts에 남아있는 이전 세션의 업무
+    // 데이터를 완전히 비우고, 다음 로그인이 새 세션 쿠키로 처음부터 다시 조회하게 한다.
+    window.location.href = "/login";
   }
 
   const initials = user?.name ? user.name[0] : "?";

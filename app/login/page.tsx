@@ -45,13 +45,19 @@ export default function LoginPage() {
     // 먼저 검증해버리면 서버 쪽 검증이 항상 실패한다. 클라이언트에서만 검증하면
     // API를 직접 호출해 캡차를 우회할 수 있는 문제도 있었다.
     const result = await login(email, password, turnstileToken);
-    setSubmitting(false);
     if (result.ok) {
-      router.replace(defaultLandingPath(getCurrentUser()?.role as "ADMIN" | "ACCOUNTANT" | "SETTLEMENT" | "VIEWER" | undefined));
-    } else {
-      setError(result.error ?? "로그인에 실패했습니다.");
-      window.turnstile?.reset();
+      // router.replace(SPA 전환)이 아니라 풀 리로드를 쓴다 — lib/store.ts의 각 컬렉션은
+      // 로그인 세션이 생기기 전(이 페이지가 처음 열렸을 때) 이미 한 번 인증 없이 조회를
+      // 시도했다가 401을 받고 "조회 완료" 상태로 멈춰 있어(재시도 없음), SPA로만 넘어가면
+      // 로그인 후에도 그 값이 다시 채워지지 않는다(비어있거나 예전 목업 데이터로 보임).
+      // 풀 리로드로 페이지를 통째로 다시 열면 이번엔 세션 쿠키가 있는 상태로 처음부터
+      // 조회하므로 실제 데이터가 들어온다.
+      window.location.href = defaultLandingPath(getCurrentUser()?.role as "ADMIN" | "ACCOUNTANT" | "SETTLEMENT" | "VIEWER" | undefined);
+      return;
     }
+    setSubmitting(false);
+    setError(result.error ?? "로그인에 실패했습니다.");
+    window.turnstile?.reset();
   }
 
   if (isLoading) return null;
