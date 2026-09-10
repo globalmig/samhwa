@@ -4773,7 +4773,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const currentStageStartDate = currentStage?.stageStartDate ?? project.stageStartDate ?? project.startDate;
   const currentStageEndDate = currentStage?.stageEndDate ?? project.stageEndDate ?? project.endDate;
   const noticeStatusRows: NoticeStatusRow[] = [
-    { label: "과제번호 (RCMS)", value: project.projectNumber },
+    { label: "과제번호", value: project.projectNumber },
     { label: "과제명", value: project.projectName },
     { label: "단계연구개발기간", value: `${fmtDate(currentStageStartDate)} ~ ${fmtDate(currentStageEndDate)}` },
     { label: "대상기간", value: `${fmtDate(project.firstStartDate ?? project.startDate)} ~ ${fmtDate(project.finalEndDate ?? project.endDate)}` },

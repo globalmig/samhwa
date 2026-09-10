@@ -16,7 +16,7 @@ function spaced(label: string) {
   return label.split("").join(" ");
 }
 
-// "과제번호 (RCMS)" 같은 괄호 부기는 붙여두고 한글 라벨만 자간을 벌린다.
+// "당해 미청구액(15%)" 같은 괄호 부기는 붙여두고 한글 라벨만 자간을 벌린다.
 function spacedLabel(label: string) {
   const match = label.match(/^(.*?)\s*(\(.+\))$/);
   if (match) return `${spaced(match[1])} ${match[2]}`;

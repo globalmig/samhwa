@@ -11,7 +11,7 @@ import Modal from "@/components/common/Modal";
 // 과제현황 표 — 실제 발송 시 선택한 과제 데이터로 자동 치환되는 영역.
 // 템플릿에는 포함되지 않으므로 편집 불가하며, 예시 값으로 미리보기만 제공한다.
 const SAMPLE_PROJECT_STATUS: NoticeStatusRow[] = [
-  { label: "과제번호 (RCMS)", value: "00269575" },
+  { label: "과제번호", value: "00269575" },
   { label: "과제명", value: "리튬이차전지용 NMP 용매 대체 저유해성 코팅 소재 및 에너지 저감형 고용량 양극 공정기술 개발" },
   { label: "단계연구개발기간", value: "2023 년 07 월 01 일 ~ 2026 년 12 월 31 일" },
   { label: "대상기간", value: "2023 년 07 월 01 일 ~ 2026 년 12 월 31 일" },
