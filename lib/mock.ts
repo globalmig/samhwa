@@ -2954,6 +2954,9 @@ export interface Notice {
   title: string;
   content: string;
   authorName: string;
+  /** 작성자 계정 id — 수정·삭제 권한을 이름이 아니라 이 값으로 판단한다(동명이인 오판 방지).
+   *  과거 데이터 등 작성자 계정을 특정할 수 없는 경우 없을 수 있다. */
+  authorId?: string;
   authorRole: SystemUser["role"];
   createdAt: string; // "YYYY-MM-DD HH:mm"
 }
@@ -2964,6 +2967,7 @@ export const notices: Notice[] = [
     title: "12월 세금계산서 마감 안내",
     content: "12월 세금계산서는 12/27(금)까지 발행 요청 부탁드립니다. 이후 요청 건은 익월로 이월됩니다.",
     authorName: "이회계",
+    authorId: "u-002",
     authorRole: "ACCOUNTANT",
     createdAt: "2024-12-05 10:00",
   },

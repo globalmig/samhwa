@@ -1982,6 +1982,28 @@ export function addNotice(data: Omit<Notice, "id">): Notice {
   return item;
 }
 
+export function updateNotice(id: string, data: { title?: string; content?: string }): void {
+  const before = _state.notices.find((n) => n.id === id);
+  if (!before) return;
+  const after = { ...before, ...data };
+  _state = { ..._state, notices: _state.notices.map((n) => (n.id === id ? after : n)) };
+  record("notice", id, after.title, "UPDATE",
+    diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
+  notify();
+
+  fetch(`/api/notices/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .then((res) => res.json())
+    .then((res: { ok: boolean; notice?: Notice; error?: string }) => {
+      if (res.ok && res.notice) {
+        _state = { ..._state, notices: _state.notices.map((n) => (n.id === id ? res.notice! : n)) };
+        notify();
+      } else if (!res.ok) {
+        console.error("공지사항 수정 실패:", res.error);
+      }
+    })
+    .catch((err) => console.error("공지사항 수정 실패:", err));
+}
+
 export function deleteNotice(id: string): void {
   const item = _state.notices.find((n) => n.id === id);
   if (!item) return;

@@ -12,6 +12,7 @@ export function toNotice(n: PrismaNotice): Notice {
     title: n.title,
     content: n.content,
     authorName: n.authorName,
+    authorId: n.authorId ?? undefined,
     authorRole: dbRoleToApp(n.authorRole) as Notice["authorRole"],
     createdAt: toDateTimeStr(n.createdAt),
   };
