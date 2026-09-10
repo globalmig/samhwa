@@ -67,10 +67,30 @@ export default function DashboardPage() {
   const unissuedGroups = getUnissuedInvoiceGroups(projects_, termFees_, taxInvoices_);
   const unissuedAmount = unissuedGroups.reduce((s, g) => s + g.amount, 0);
 
-  // 과제 파이프라인
-  const activeCount = projects_.filter((p) => p.status === "ACTIVE").length;
-  const completedCount = projects_.filter((p) => p.status === "COMPLETED").length;
-  const suspendedCount = projects_.filter((p) => p.status === "SUSPENDED").length;
+  // 과제 파이프라인 — 4구역 전담기관별 집계(배정 건수)와 동일하게 연차 단위로 센다. 다년차 과제는
+  // 연차마다 한 건으로 잡히므로, 과제 수가 아니라 진행중인 연차 행 수 기준의 진행중/완료/중단 건수다.
+  const pipelineCounts = useMemo(() => {
+    const projectByNumber = new Map(projects_.map((p) => [p.projectNumber, p]));
+    const termGroups = new Map<string, typeof termFees_>();
+    for (const f of termFees_) {
+      const key = `${f.projectNumber}|${f.termYear}|${f.termNumber}`;
+      const arr = termGroups.get(key);
+      if (arr) arr.push(f); else termGroups.set(key, [f]);
+    }
+    const counts = { ACTIVE: 0, COMPLETED: 0, SUSPENDED: 0 };
+    for (const fees of termGroups.values()) {
+      const project = projectByNumber.get(fees[0].projectNumber);
+      if (!project || !(project.status in counts)) continue;
+      const isRda2 = project.agencyId === "fa-006";
+      const rowCount = isRda2 ? Math.max(1, fees.filter((f) => f.appliedFee > 0).length) : 1;
+      counts[project.status as keyof typeof counts] += rowCount;
+    }
+    return counts;
+  }, [projects_, termFees_]);
+  const activeCount = pipelineCounts.ACTIVE;
+  const completedCount = pipelineCounts.COMPLETED;
+  const suspendedCount = pipelineCounts.SUSPENDED;
+  const pipelineTotal = activeCount + completedCount + suspendedCount;
   const totalProjects = projects_.length;
 
   // 핵심 지표 — termFees·receivables 실집계 (정적 더미 대신 store 기준)
@@ -278,9 +298,9 @@ export default function DashboardPage() {
                 <span className="text-sm font-normal ml-1">건</span>
               </p>
               <div className="mt-2 h-1.5 bg-white/70 rounded-full overflow-hidden">
-                <div className={`h-full ${item.bar} rounded-full`} style={{ width: totalProjects > 0 ? `${(item.count / totalProjects) * 100}%` : "0%" }} />
+                <div className={`h-full ${item.bar} rounded-full`} style={{ width: pipelineTotal > 0 ? `${(item.count / pipelineTotal) * 100}%` : "0%" }} />
               </div>
-              <p className="text-[10px] text-slate-400 mt-1">{totalProjects > 0 ? Math.round((item.count / totalProjects) * 100) : 0}%</p>
+              <p className="text-[10px] text-slate-400 mt-1">{pipelineTotal > 0 ? Math.round((item.count / pipelineTotal) * 100) : 0}%</p>
             </Link>
           ))}
         </div>
