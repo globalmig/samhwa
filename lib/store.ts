@@ -5,25 +5,6 @@ import { diffForAudit } from "./audit-diff";
 import { ADMIN_ONLY_LOCKED_PAGES } from "./permission-constants";
 import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveProjectCodeForTerm, type CalcMember } from "./fee-calculator";
 import {
-  institutions as initialInstitutions,
-  projects as initialProjects,
-  projectMembers as initialProjectMembers,
-  feePolicies as initialFeePolicies,
-  termFees as initialTermFees,
-  termFeeCalcs as initialTermFeeCalcs,
-  unclaimedFees as initialUnclaimed,
-  receivables as initialReceivables,
-  settlements as initialSettlements,
-  taxInvoices as initialInvoices,
-  emailDispatches as initialEmails,
-  systemUsers as initialUsers,
-  projectIssues as initialIssues,
-  fundingAgencies as initialFundingAgencies,
-  agencyNoticeTemplates as initialAgencyNoticeTemplates,
-  feeInvoiceTemplates as initialFeeInvoiceTemplates,
-  simpleNoticeTemplates as initialSimpleNoticeTemplates,
-  notices as initialNotices,
-  standardAttachments as initialStandardAttachments,
   COMPANY_INFO as initialCompanyInfo,
   initialPageAccess,
   initialWriteAccess,
@@ -176,31 +157,35 @@ interface StoreState {
   feesFilters: FeesFilters;
 }
 
-const INITIAL_AUDIT_LOG: AuditEntry[] = [];
-
+// 각 컬렉션은 lib/mock.ts의 하드코딩된 예전 프로토타입 데이터가 아니라 빈 배열로 시작한다 —
+// 실제 데이터는 항상 아래 hydrate*()가 DB(/api/...)에서 받아와 채운다. 과거엔 여기가
+// mock.ts의 샘플 레코드로 채워져 있어서, 로그인 화면이 뜨는 순간(로그인 전) 그 컬렉션의
+// hydrate가 401로 실패하면 화면에 실제 데이터 대신 예전 샘플 데이터가 그대로 보이는
+// 문제가 있었다(로그인해도 안 사라짐). prisma/seed.ts가 최초 DB 시딩에 mock.ts를 쓰는 것과는
+// 별개 — 그쪽은 그대로 둔다.
 let _state: StoreState = {
-  fundingAgencies: [...initialFundingAgencies],
-  institutions: [...initialInstitutions],
-  projects: [...initialProjects],
-  projectIssues: [...initialIssues],
-  projectMembers: [...initialProjectMembers],
-  feePolicies: [...initialFeePolicies],
-  termFees: [...initialTermFees],
-  termFeeCalcs: [...initialTermFeeCalcs],
-  unclaimedFees: [...initialUnclaimed],
-  receivables: [...initialReceivables],
-  settlements: [...initialSettlements],
-  taxInvoices: [...initialInvoices],
-  emailDispatches: [...initialEmails],
-  users: [...initialUsers],
-  notices: [...initialNotices],
+  fundingAgencies: [],
+  institutions: [],
+  projects: [],
+  projectIssues: [],
+  projectMembers: [],
+  feePolicies: [],
+  termFees: [],
+  termFeeCalcs: [],
+  unclaimedFees: [],
+  receivables: [],
+  settlements: [],
+  taxInvoices: [],
+  emailDispatches: [],
+  users: [],
+  notices: [],
   notificationState: {},
-  auditLog: [...INITIAL_AUDIT_LOG],
+  auditLog: [],
   agencyGuides: {},
-  agencyNoticeTemplates: [...initialAgencyNoticeTemplates],
-  feeInvoiceTemplates: [...initialFeeInvoiceTemplates],
-  simpleNoticeTemplates: [...initialSimpleNoticeTemplates],
-  standardAttachments: [...initialStandardAttachments],
+  agencyNoticeTemplates: [],
+  feeInvoiceTemplates: [],
+  simpleNoticeTemplates: [],
+  standardAttachments: [],
   companyInfo: { ...initialCompanyInfo },
   pageAccess: Object.fromEntries(Object.entries(initialPageAccess).map(([k, v]) => [k, [...v]])),
   writeAccess: Object.fromEntries(Object.entries(initialWriteAccess).map(([k, v]) => [k, [...v]])),
