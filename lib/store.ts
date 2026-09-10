@@ -62,11 +62,13 @@ export const ENTITY_NAMES: Record<string, string> = {
   projectMember: "참여기관",
   feePolicy: "수수료정책",
   termFee: "연차수수료",
+  termFeeCalc: "연차수수료산정",
   unclaimed: "미청구액",
   receivable: "미수금",
   settlement: "정산",
   taxInvoice: "세금계산서",
   emailDispatch: "이메일 발송",
+  noticeMailSend: "공문 메일 발송",
   user: "사용자",
   projectIssue: "이슈/메모",
   notice: "공지사항",
@@ -2463,14 +2465,14 @@ function hydrateUsers(): void {
 }
 if (typeof window !== "undefined") hydrateUsers();
 
-export function addUser(data: Omit<SystemUser, "id">): SystemUser {
+export function addUser(data: Omit<SystemUser, "id">, turnstileToken?: string): SystemUser {
   const tempId = genId("u");
   const item: SystemUser = { ...data, id: tempId };
   _state = { ..._state, users: [..._state.users, item] };
   record("user", tempId, item.name, "CREATE");
   notify();
 
-  fetch("/api/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+  fetch("/api/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(turnstileToken ? { ...data, turnstileToken } : data) })
     .then((res) => res.json())
     .then((res: { ok: boolean; user?: SystemUser; error?: string }) => {
       if (res.ok && res.user) {

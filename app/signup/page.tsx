@@ -73,7 +73,7 @@ export default function SignupPage() {
       status: "PENDING",
       lastLoginAt: null,
       registeredAt: todayKST(),
-    });
+    }, turnstileToken);
     setSubmitting(false);
     setDone(true);
   }

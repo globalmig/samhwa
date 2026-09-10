@@ -1,6 +1,9 @@
+import { randomUUID } from "node:crypto";
 import nodemailer from "nodemailer";
 import { prisma } from "@/lib/db";
 import { requireWriteAccess, SessionError } from "@/lib/session";
+import { writeAuditLog } from "@/lib/audit";
+import { consumeQuota } from "@/lib/rate-limit";
 
 // nodemailer는 Node의 net/tls 모듈이 필요해 Edge 런타임에서 동작하지 않는다.
 export const runtime = "nodejs";
@@ -100,11 +103,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const rateLimitWindowStart = new Date(Date.now() - RATE_LIMIT_WINDOW_MS);
-  const recentSendCount = await prisma.auditLog.count({
-    where: { userId: session.userId, resourceType: "notice-mail-send", createdAt: { gte: rateLimitWindowStart } },
-  });
-  if (recentSendCount >= RATE_LIMIT_MAX_SENDS) {
+  if (!consumeQuota(`notice-send:${session.userId}`, RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX_SENDS)) {
     return Response.json(
       { ok: false, error: "메일 발송 횟수 제한을 초과했습니다. 잠시 후 다시 시도해주세요." },
       { status: 429 }
@@ -144,19 +143,19 @@ export async function POST(request: Request) {
 
   // 발송 결과는 클라이언트가 별도로 호출하는 이력 API(/api/email-dispatches) 여부와 무관하게
   // 서버가 직접 남긴다 — 그쪽은 화면 흐름을 벗어난 직접 호출(curl 등)에서는 아예 호출되지 않는다.
-  await prisma.auditLog.create({
-    data: {
-      userId: session.userId,
-      action: result.ok ? "CREATE" : "UPDATE",
-      resourceType: "notice-mail-send",
-      newValues: JSON.stringify({
-        to,
-        subject,
-        attachmentCount: mappedAttachments.length,
-        attachmentTotalBytes,
-        status: result.ok ? "SUCCESS" : "FAILED",
-        error: result.ok ? undefined : result.error,
-      }),
+  // DB에 남는 엔티티 행이 없는 발송 이벤트라 $transaction 없이 prisma를 그대로 넘긴다(lib/audit.ts 참고).
+  await writeAuditLog(prisma, {
+    actorUserId: session.userId,
+    entityType: "noticeMailSend",
+    entityId: randomUUID(),
+    entityLabel: subject,
+    action: result.ok ? "CREATE" : "UPDATE",
+    changedFields: {
+      to: { before: undefined, after: to },
+      attachmentCount: { before: undefined, after: mappedAttachments.length },
+      attachmentTotalBytes: { before: undefined, after: attachmentTotalBytes },
+      status: { before: undefined, after: result.ok ? "SUCCESS" : "FAILED" },
+      error: { before: undefined, after: result.ok ? undefined : result.error },
     },
   });
 

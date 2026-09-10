@@ -28,15 +28,37 @@ function lockedResponse(retryAfterSeconds: number) {
   );
 }
 
+// Content-Length 헤더는 클라이언트가 생략하거나(예: chunked transfer-encoding) 거짓으로 보낼 수
+// 있어 그 값만으로는 413을 보장할 수 없다 — 실제로 읽은 바이트 수를 스트림 단계에서 직접 센다.
+async function readBodyWithLimit(request: Request, maxBytes: number): Promise<string | null> {
+  const reader = request.body?.getReader();
+  if (!reader) return "";
+  const decoder = new TextDecoder();
+  let text = "";
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      return null;
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  text += decoder.decode();
+  return text;
+}
+
 export async function POST(request: Request) {
-  const contentLength = Number(request.headers.get("content-length") ?? "0");
-  if (contentLength > MAX_BODY_BYTES) {
+  const rawBody = await readBodyWithLimit(request, MAX_BODY_BYTES);
+  if (rawBody === null) {
     return Response.json({ ok: false, error: "요청이 너무 큽니다." }, { status: 413 });
   }
 
   let body: LoginBody;
   try {
-    body = await request.json();
+    body = JSON.parse(rawBody);
   } catch {
     return Response.json({ ok: false, error: "잘못된 요청입니다." }, { status: 400 });
   }
@@ -57,11 +79,13 @@ export async function POST(request: Request) {
   }
 
   // 계정 단위·IP 단위로 각각 제한한다 — 계정 하나를 노리는 크리덴셜 스터핑과, 한 IP가 여러
-  // 계정을 순회하며 시도하는 브루트포스를 모두 막기 위함(lib/rate-limit.ts 참고).
+  // 계정을 순회하며 시도하는 브루트포스를 모두 막기 위함(lib/rate-limit.ts 참고). 신뢰 가능한
+  // 프록시가 없어 클라이언트 IP를 알 수 없는 배포에서는 ipKey 없이 이메일 기준 제한만 적용한다.
   const emailKey = `email:${email.trim().toLowerCase()}`;
-  const ipKey = `ip:${getClientIp(request)}`;
+  const clientIp = getClientIp(request);
+  const ipKey = clientIp ? `ip:${clientIp}` : null;
   const emailLimit = checkLoginRateLimit(emailKey);
-  const ipLimit = checkLoginRateLimit(ipKey);
+  const ipLimit = ipKey ? checkLoginRateLimit(ipKey) : { allowed: true };
   if (!emailLimit.allowed || !ipLimit.allowed) {
     return lockedResponse(Math.max(emailLimit.retryAfterSeconds ?? 0, ipLimit.retryAfterSeconds ?? 0));
   }
@@ -70,14 +94,14 @@ export async function POST(request: Request) {
   // 직접 호출해 캡차 자체를 우회할 수 있다.
   const turnstileOk = await verifyTurnstileToken(turnstileToken);
   if (!turnstileOk) {
-    recordLoginFailure(ipKey);
+    if (ipKey) recordLoginFailure(ipKey);
     return Response.json({ ok: false, error: "보안 확인에 실패했습니다. 다시 시도해주세요." }, { status: 400 });
   }
 
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user) {
     const result = recordLoginFailure(emailKey);
-    recordLoginFailure(ipKey);
+    if (ipKey) recordLoginFailure(ipKey);
     if (!result.allowed) return lockedResponse(result.retryAfterSeconds!);
     return Response.json({ ok: false, error: "이메일 또는 비밀번호가 올바르지 않습니다." }, { status: 401 });
   }
@@ -91,13 +115,13 @@ export async function POST(request: Request) {
   const validPassword = await bcrypt.compare(password, user.passwordHash);
   if (!validPassword) {
     const result = recordLoginFailure(emailKey);
-    recordLoginFailure(ipKey);
+    if (ipKey) recordLoginFailure(ipKey);
     if (!result.allowed) return lockedResponse(result.retryAfterSeconds!);
     return Response.json({ ok: false, error: "이메일 또는 비밀번호가 올바르지 않습니다." }, { status: 401 });
   }
 
   resetLoginRateLimit(emailKey);
-  resetLoginRateLimit(ipKey);
+  if (ipKey) resetLoginRateLimit(ipKey);
   await createSessionCookie(user.id, user.sessionVersion);
   const updated = await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
 

@@ -4,6 +4,7 @@ import { getSessionUser, requireAdmin, SessionError } from "@/lib/session";
 import { toSystemUser } from "@/lib/user-mapper";
 import { appRoleToDb } from "@/lib/role-map";
 import { writeAuditLog } from "@/lib/audit";
+import { verifyTurnstileToken } from "@/lib/turnstile";
 import type { SystemUser } from "@/lib/mock";
 
 export const runtime = "nodejs";
@@ -31,7 +32,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  let body: Omit<SystemUser, "id">;
+  let body: Omit<SystemUser, "id"> & { turnstileToken?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -54,6 +55,12 @@ export async function POST(request: Request) {
     } catch (err) {
       if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
       throw err;
+    }
+  } else {
+    // Turnstile 검증은 반드시 서버에서 한다 — 클라이언트에서만 검증하면 이 API를 직접
+    // 호출해 캡차 자체를 우회할 수 있다(app/api/auth/login/route.ts와 동일한 이유).
+    if (typeof body.turnstileToken !== "string" || !(await verifyTurnstileToken(body.turnstileToken))) {
+      return Response.json({ ok: false, error: "보안 확인에 실패했습니다. 다시 시도해주세요." }, { status: 400 });
     }
   }
 
