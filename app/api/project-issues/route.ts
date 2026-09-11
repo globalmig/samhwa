@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/db";
+import { prisma, withDbWriteSlot } from "@/lib/db";
 import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
 import { toProjectIssue } from "@/lib/project-issue-mapper";
 import { writeAuditLog } from "@/lib/audit";
@@ -45,7 +45,7 @@ export async function POST(request: Request) {
     return Response.json({ ok: false, error: "과제, 내용은 필수입니다." }, { status: 400 });
   }
 
-  const created = await prisma.$transaction(async (tx) => {
+  const created = await withDbWriteSlot(() => prisma.$transaction(async (tx) => {
     const row = await tx.projectIssue.create({
       data: {
         projectId: body.projectId,
@@ -69,7 +69,7 @@ export async function POST(request: Request) {
       action: "CREATE",
     });
     return row;
-  });
+  }));
 
   return Response.json({ ok: true, projectIssue: toProjectIssue(created) });
 }

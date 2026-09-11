@@ -17,7 +17,7 @@ import {
 import {
   useStore,
   addFundingAgency,
-  addInstitution,
+  addInstitutionsBulk,
   addProject,
   addProjectMember,
   addProjectIssue,
@@ -25,6 +25,8 @@ import {
   updateProjectMember,
   recalcProjectTotalBudget,
   setTermOtherFirmHandled,
+  beginSyncBatch,
+  endSyncBatchAndWait,
 } from "@/lib/store";
 import type { Project, ProjectMember, AnnualBudget, AnnualFinancials, Institution, SystemUser, FundingAgency } from "@/lib/mock";
 import { getCurrentUser } from "@/lib/auth";
@@ -1050,13 +1052,32 @@ function computeProjectUpdates(
   stageAggregates: Map<string, ProjectStageInfo>,
   scalarAggregates: Map<string, ProjectScalarInfo>
 ): ProjectUpdateInfo[] {
+  // 아래 루프는 파일에 등장한 고유 과제 수(U)만큼 도는데, 그 안에서 projects/institutions/
+  // projectMembers 전체를 매번 .find()/.some()으로 훑으면 비용이 "U × 기존 누적 데이터 규모"로
+  // 커진다. 이 함수는 등록 실행(doRegister) 중에도 projects/institutions/projectMembers가
+  // add*/update*로 바뀔 때마다(각 서버 응답이 돌아올 때마다) useMemo 의존성 때문에 다시 호출되므로,
+  // 인덱스 없이는 회계법인이 몇 년치 데이터를 쌓아둔 상태에서 대량 업로드를 등록할 때 이 재계산만으로
+  // 몇 분~몇십 분씩 걸릴 수 있다. 한 번만 인덱스를 만들어 전부 O(1) 조회로 바꾼다.
+  const projectByNormNum = new Map<string, Project>();
+  for (const p of projects) projectByNormNum.set(normProjectNum(p.projectNumber), p);
+  const institutionIdByNormBiz = new Map<string, string>();
+  for (const i of institutions) institutionIdByNormBiz.set(normBiz(i.bizNumber), i.id);
+  const memberAggregatesByNormNum = new Map<string, MemberAggregate[]>();
+  for (const agg of memberAggregates) {
+    const key = normProjectNum(agg.projectNumber);
+    const list = memberAggregatesByNormNum.get(key);
+    if (list) list.push(agg); else memberAggregatesByNormNum.set(key, [agg]);
+  }
+  const projectMemberByProjectAndInst = new Map<string, Pick<ProjectMember, "projectId" | "institutionId" | "contactEmail" | "contactName">>();
+  for (const pm of projectMembers) projectMemberByProjectAndInst.set(`${pm.projectId}|${pm.institutionId}`, pm);
+
   const normNums = new Set(memberAggregates.map((m) => normProjectNum(m.projectNumber)));
   // 단계기관별 시트만 있고 연차별기관별 시트엔 해당 과제 행이 없는 업로드도 잡아내기 위해,
   // 단계 정보로만 알려진 과제번호도 비교 대상에 포함한다.
   for (const normNum of stageAggregates.keys()) normNums.add(normNum);
   const updates: ProjectUpdateInfo[] = [];
   for (const normNum of normNums) {
-    const existing = projects.find((p) => normProjectNum(p.projectNumber) === normNum);
+    const existing = projectByNormNum.get(normNum);
     if (!existing) continue; // 신규 과제는 별도 처리
     const currentTerm = existing.currentTerm ?? 1;
     // 엑셀에 연차 정보가 없으면(단계기관별 시트만 있는 경우 등) 동일 연차로 보수적으로 취급해
@@ -1108,11 +1129,10 @@ function computeProjectUpdates(
       (agencyAssignedAt !== undefined && agencyAssignedAt !== existing.agencyAssignedAt) ||
       (internalAssignedAt !== undefined && internalAssignedAt !== existing.internalAssignedAt);
 
-    const hasMemberContactChange = memberAggregates.some((agg) => {
-      if (normProjectNum(agg.projectNumber) !== normNum) return false;
-      const institutionId = institutions.find((i) => normBiz(i.bizNumber) === normBiz(agg.bizNumber))?.id;
+    const hasMemberContactChange = (memberAggregatesByNormNum.get(normNum) ?? []).some((agg) => {
+      const institutionId = institutionIdByNormBiz.get(normBiz(agg.bizNumber));
       const existingMember = institutionId
-        ? projectMembers.find((m) => m.projectId === existing.id && m.institutionId === institutionId)
+        ? projectMemberByProjectAndInst.get(`${existing.id}|${institutionId}`)
         : undefined;
       if (agg.contactEmail && agg.contactEmail !== (existingMember?.contactEmail ?? "")) return true;
       if (agg.contactName && agg.contactName !== (existingMember?.contactName ?? "")) return true;
@@ -1164,9 +1184,12 @@ function computeTermCalendarMismatches(
   stageAggregates: Map<string, ProjectStageInfo>,
   today: string
 ): TermCalendarMismatch[] {
+  const projectByNormNum = new Map<string, Project>();
+  for (const p of projects) projectByNormNum.set(normProjectNum(p.projectNumber), p);
+
   const mismatches: TermCalendarMismatch[] = [];
   for (const [normNum, excelTerm] of projectMaxTerm) {
-    const existingProject = projects.find((p) => normProjectNum(p.projectNumber) === normNum);
+    const existingProject = projectByNormNum.get(normNum);
     const scalarInfo = scalarAggregates.get(normNum);
     // 신규 과제(아직 Project가 없음)는 이번 엑셀에서 시작일이 하나로 특정될 때만 계산할 수 있다.
     const startDate = existingProject?.startDate
@@ -1997,6 +2020,9 @@ interface DoneResult {
   projectAdvanced: number;
   stageAlerts: number;
   renamed: number;
+  // 낙관적으로는 등록됐지만(위 카운트에 포함됨) 실제 서버 저장이 실패한 건수 — 대량 업로드 중
+  // 일부 요청이 실패해도 화면상 카운트만으로는 알 수 없어 별도로 안내한다.
+  syncFailures: number;
 }
 
 function DoneStep({ result, onClose }: { result: DoneResult; onClose: () => void }) {
@@ -2045,6 +2071,15 @@ function DoneStep({ result, onClose }: { result: DoneResult; onClose: () => void
           <p className="mt-0.5 text-blue-600">
             과제코드 또는 과제명·시작일·종료일이 같아 기존 과제로 판단해 과제번호만 새로 갱신했습니다(새 과제로 만들지 않음).
             이전 과제번호는 각 과제의 변경이력에서 확인할 수 있습니다.
+          </p>
+        </div>
+      )}
+      {result.syncFailures > 0 && (
+        <div className="w-full rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
+          <p className="font-semibold">서버 저장 실패 — {result.syncFailures}건</p>
+          <p className="mt-0.5 text-red-600">
+            화면에는 반영됐지만 서버에는 저장되지 못한 항목이 있습니다(네트워크 오류 또는 서버 처리 실패).
+            잠시 후 새로고침해 값이 그대로 남아있는지 확인하고, 사라진 항목이 있으면 해당 부분만 다시 업로드해주세요.
           </p>
         </div>
       )}
@@ -2475,7 +2510,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
   const [matchedSheets, setMatchedSheets] = useState<{ sheetName: string; def: SheetDef }[]>([]);
   const [parsedSheets, setParsedSheets] = useState<ParsedSheet[]>([]);
   const [previewRows, setPreviewRows] = useState<PreviewRow[]>([]);
-  const [doneResult, setDoneResult] = useState<DoneResult>({ agency: 0, project: 0, inst: 0, member: 0, memberUpdated: 0, projectAdvanced: 0, stageAlerts: 0, renamed: 0 });
+  const [doneResult, setDoneResult] = useState<DoneResult>({ agency: 0, project: 0, inst: 0, member: 0, memberUpdated: 0, projectAdvanced: 0, stageAlerts: 0, renamed: 0, syncFailures: 0 });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [previewBackStep, setPreviewBackStep] = useState<Step>("mapping");
@@ -2546,10 +2581,15 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
   // "단계기관별" 시트에서 일부 행이 값 문제로 통째로 걸러진 과제 — 등록 전 미리보기에서 바로 알려준다.
   // (예: 정산대상시작단계가 비어있거나, 시작단계≠종료단계인 행은 그 단계 정보 없이 조용히 진행된다.)
   const stageSkipWarnings = useMemo(() => {
+    // projects 전체를 매번 .find()로 훑지 않고 한 번만 인덱싱 — 아래 memberDataWarnings/newMembers와
+    // 동일한 이유(등록 실행 중 재계산 시 누적 데이터 규모만큼 매번 느려지는 것을 방지).
+    const projectByNormNum = new Map<string, Project>();
+    for (const p of projects) projectByNormNum.set(normProjectNum(p.projectNumber), p);
+
     const warnings: { normNum: string; projectNumber: string; projectName: string; reasons: string[] }[] = [];
     for (const [normNum, info] of stageAggregates) {
       if (!info.hasMissing || info.skipReasons.length === 0) continue;
-      const existing = projects.find((p) => normProjectNum(p.projectNumber) === normNum);
+      const existing = projectByNormNum.get(normNum);
       const scalarInfo = scalarAggregates.get(normNum);
       warnings.push({
         normNum,
@@ -2567,13 +2607,23 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
   // 경고한다. 이미 기존 참여기관에 그 값이 있고 이번 파일이 그걸 지우는 게 아니라면(단순 갱신) 대상에서
   // 뺀다 — 매번 같은 값을 반복 경고하면 정작 새로 비게 된 경우를 놓치기 쉬워진다.
   const memberDataWarnings = useMemo(() => {
+    // 아래 루프는 파일에 등장한 고유 참여기관 수만큼 도는데, 그 안에서 projects/institutions/
+    // projectMembers 전체를 매번 .find()로 훑으면 기존 누적 데이터 규모만큼 느려진다(등록 실행 중
+    // 서버 응답이 돌아올 때마다 이 useMemo가 재계산되므로 특히 문제). 한 번만 인덱싱한다.
+    const projectByNormNum = new Map<string, Project>();
+    for (const p of projects) projectByNormNum.set(normProjectNum(p.projectNumber), p);
+    const institutionByNormBiz = new Map<string, Institution>();
+    for (const i of institutions) institutionByNormBiz.set(normBiz(i.bizNumber), i);
+    const memberByProjectAndInst = new Map<string, ProjectMember>();
+    for (const pm of projectMembers) memberByProjectAndInst.set(`${pm.projectId}|${pm.institutionId}`, pm);
+
     const warnings: { key: string; projectNumber: string; projectName: string; institutionName: string; missing: string[] }[] = [];
     for (const agg of memberAggregates) {
       const normNum = normProjectNum(agg.projectNumber);
-      const existingProject = projects.find((p) => normProjectNum(p.projectNumber) === normNum);
-      const existingInst = institutions.find((i) => normBiz(i.bizNumber) === normBiz(agg.bizNumber));
+      const existingProject = projectByNormNum.get(normNum);
+      const existingInst = institutionByNormBiz.get(normBiz(agg.bizNumber));
       const existingMember = existingProject && existingInst
-        ? projectMembers.find((pm) => pm.projectId === existingProject.id && pm.institutionId === existingInst.id)
+        ? memberByProjectAndInst.get(`${existingProject.id}|${existingInst.id}`)
         : undefined;
 
       const hasContact = !!agg.contactEmail || !!existingMember?.contactEmail;
@@ -2601,12 +2651,21 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
     setProjectUpdateChoices((prev) => ({ ...prev, [normNum]: next }));
   }
 
-  // 이미 참여기관으로 연결된 (과제, 기관) 쌍은 제외하고 새로 등록될 참여기관 목록을 계산
+  // 이미 참여기관으로 연결된 (과제, 기관) 쌍은 제외하고 새로 등록될 참여기관 목록을 계산.
+  // projectMembers는 파일 내용과 무관하게 시스템에 누적된 전체 참여기관 레코드라, 이 루프 안에서
+  // projects/institutions를 매번 .find()로 훑으면(기존엔 그랬음) 파일 크기와 상관없이 "누적
+  // 참여기관 수 × 누적 과제·기관 수"로 느려진다 — 몇 년치 데이터가 쌓이면 이게 가장 무거운
+  // 재계산이 될 수 있어(등록 실행 중에도 반복 재계산됨) id 인덱스로 O(1) 조회로 바꾼다.
   const newMembers = useMemo(() => {
+    const projectById = new Map<string, Project>();
+    for (const p of projects) projectById.set(p.id, p);
+    const institutionById = new Map<string, Institution>();
+    for (const i of institutions) institutionById.set(i.id, i);
+
     const existingKeys = new Set<string>();
     for (const pm of projectMembers) {
-      const proj = projects.find((p) => p.id === pm.projectId);
-      const inst = institutions.find((i) => i.id === pm.institutionId);
+      const proj = projectById.get(pm.projectId);
+      const inst = institutionById.get(pm.institutionId);
       if (proj && inst) existingKeys.add(`${normProjectNum(proj.projectNumber)}|${normBiz(inst.bizNumber)}`);
     }
     return memberAggregates.filter((m) => !existingKeys.has(m.key));
@@ -2709,6 +2768,40 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
 
     const extracted = Array.from(rowMap.values());
 
+    // ── 중복 검사 사전 인덱스 ────────────────────────────────────
+    // 정확일치는 Map으로 O(1) 조회. 기존엔 행마다 fundingAgencies/projects/institutions 전체를
+    // 순회했는데(과제는 유사도까지 계산), 기존 과제가 수천 건만 쌓여도 "엑셀 신규 항목 수 × 기존
+    // 과제 수"로 비교 횟수가 폭발해 미리보기 단계에서 브라우저가 몇 분씩 멈췄다. 과제 "유사" 후보는
+    // 정규화된 과제번호의 앞 8자리(형식상 보통 기관코드+연도까지 해당)로 버킷을 나눠, 레벤슈타인
+    // 비교를 그 버킷 안에서만 수행한다 — 실무에서 흔한 오타(뒷자리 숫자 하나 틀림)는 그대로 잡히고,
+    // 앞자리까지 다른 우연한 유사 후보와의 비교는 건너뛴다. 전담기관은 보통 수십 개 이하라 버킷 없이
+    // 그대로 돈다.
+    const agencyExactMap = new Map<string, FundingAgency>();
+    for (const a of fundingAgencies) {
+      agencyExactMap.set(a.name, a);
+      if (a.shortName) agencyExactMap.set(a.shortName, a);
+      if (a.code) agencyExactMap.set(a.code, a);
+    }
+
+    const PROJECT_BUCKET_LEN = 8;
+    const projectExactMap = new Map<string, Project>();
+    const projectBuckets = new Map<string, Project[]>();
+    for (const p of projects) {
+      const norm = normProjectNum(p.projectNumber);
+      projectExactMap.set(norm, p);
+      const bucketKey = norm.slice(0, PROJECT_BUCKET_LEN);
+      const bucket = projectBuckets.get(bucketKey);
+      if (bucket) bucket.push(p);
+      else projectBuckets.set(bucketKey, [p]);
+    }
+
+    const institutionExactMap = new Map<string, Institution>();
+    for (const i of institutions) institutionExactMap.set(normBiz(i.bizNumber), i);
+
+    // 앞자리 버킷 하나가 비정상적으로 커도(같은 형식의 과제가 아주 많은 경우) 행 하나당 유사도
+    // 비교 횟수에 상한을 둬 최악의 경우에도 미리보기가 오래 걸리지 않게 한다.
+    const MAX_SIMILARITY_COMPARISONS = 150;
+
     // 중복 검사
     const preview: PreviewRow[] = extracted.map((row) => {
       const duplicates: DuplicateInfo[] = [];
@@ -2716,9 +2809,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       // 전담기관 중복 — 엑셀엔 정식명("농촌진흥청") 대신 약칭/코드("RDA1")가 적혀 있는 경우도 있어,
       // 이름뿐 아니라 shortName·code까지 정확히 일치하면 같은 기관으로 본다(RDA1/RDA2처럼 이름이
       // 겹치는 전담기관을 약칭으로 정확히 지목한 경우, "RDA1"이라는 이름의 가짜 기관이 새로 생기는 걸 막는다).
-      const existingAgency = fundingAgencies.find(
-        (a) => a.name === row.agencyName || a.shortName === row.agencyName || a.code === row.agencyName
-      );
+      const existingAgency = agencyExactMap.get(row.agencyName);
       if (existingAgency) {
         duplicates.push({ type: "agency", key: row.agencyName, existing: existingAgency.name, status: "exact" });
       } else {
@@ -2731,41 +2822,42 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         }
       }
 
-      // 과제 중복
+      // 과제 중복 — 정확일치는 Map 조회, "유사"는 같은 앞자리 버킷 안에서만 비교.
       const normNum = normProjectNum(row.projectNumber);
-      const existingProj = projects.find((p) => normProjectNum(p.projectNumber) === normNum);
+      const existingProj = projectExactMap.get(normNum);
       if (existingProj) {
         duplicates.push({ type: "project", key: row.projectNumber, label: row.projectName, existing: existingProj.projectName, status: "exact" });
       } else {
-        for (const p of projects) {
-          const sc = strSimilarity(normNum, normProjectNum(p.projectNumber));
-          if (sc >= 85) {
-            duplicates.push({ type: "project", key: row.projectNumber, label: row.projectName, existing: p.projectNumber, status: "similar", score: sc });
-            break;
+        const bucket = projectBuckets.get(normNum.slice(0, PROJECT_BUCKET_LEN));
+        if (bucket) {
+          for (let i = 0; i < bucket.length && i < MAX_SIMILARITY_COMPARISONS; i++) {
+            const sc = strSimilarity(normNum, normProjectNum(bucket[i].projectNumber));
+            if (sc >= 85) {
+              duplicates.push({ type: "project", key: row.projectNumber, label: row.projectName, existing: bucket[i].projectNumber, status: "similar", score: sc });
+              break;
+            }
           }
         }
       }
 
       // 기관 중복
       const normBizNum = normBiz(row.bizNumber);
-      if (normBizNum) {
-        const existingInst = institutions.find((i) => normBiz(i.bizNumber) === normBizNum);
-        if (existingInst) {
-          duplicates.push({ type: "institution", key: row.bizNumber, label: row.institutionName, existing: existingInst.name, status: "exact" });
-        }
+      const existingInst = normBizNum ? institutionExactMap.get(normBizNum) : undefined;
+      if (existingInst) {
+        duplicates.push({ type: "institution", key: row.bizNumber, label: row.institutionName, existing: existingInst.name, status: "exact" });
       }
 
-      const agencyDup = duplicates.some((d) => d.type === "agency");
-      const projectDup = duplicates.some((d) => d.type === "project");
-      const instDup = duplicates.some((d) => d.type === "institution");
-
+      // 등록 여부(willRegister)는 "정확일치"에서만 막는다 — "유사"(오타로 의심되는 근접 후보)는
+      // 화면에 경고만 띄운다. 과제번호가 우연히 다른 과제와 비슷해 보인다는 이유만으로 신규 과제
+      // 등록이나 개명 인식(resolveRenamedProject, 과제명+기간 기준이라 이 유사도 판정과는 무관하게
+      // 별도로 동작함)까지 조용히 건너뛰면 안 된다 — 실제로 그렇게 막고 있던 게 이전 동작이었다.
       return {
         ...row,
         duplicates,
         willRegister: {
-          agency: !agencyDup,
-          project: !projectDup,
-          institution: !instDup && !!normBizNum,
+          agency: !existingAgency,
+          project: !existingProj,
+          institution: !existingInst && !!normBizNum,
         },
       };
     });
@@ -2790,12 +2882,16 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
 
   // ── 등록 실행 ───────────────────────────────────────────────
 
-  function doRegister() {
+  async function doRegister() {
     // 미리보기의 "등록" 버튼이 이미 막아주지만, 방어적으로 한 번 더 확인한다 — 동명이인이나
     // [권한관리]에 없는 담당자를 해소하지 않은 채로 등록하면 공문 발송 시 연락처가 엉뚱한 사람
     // 것으로 나가거나 아예 연동되지 않을 수 있다.
     if (unresolvedManagerAmbiguities.length > 0 || unresolvedManagerNotFound.length > 0) return;
     setLoading(true);
+    // 대량 업로드(행 수천 건)로 아래 loop가 add*/update*를 수백~수천 번 호출할 수 있어, 그 서버
+    // 동기화가 실제로 몇 건 실패했는지 이 구간에서 집계해 완료 화면에 안내한다(lib/store.ts의
+    // throttledFetch가 동시 요청 수도 함께 제한한다).
+    beginSyncBatch();
     const today = todayKST();
 
     const registeredAgencies = new Map<string, string>(); // name → id
@@ -2834,6 +2930,50 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
     for (const p of projects) registeredProjects.set(normProjectNum(p.projectNumber), p.id);
     for (const i of institutions) registeredInst.set(normBiz(i.bizNumber), i.id);
 
+    // 신규 기관 일괄 등록 — 아래 본 루프에서 기관 하나당 건별로 addInstitution을 부르면(과거 방식)
+    // 대량 업로드 시 요청이 수천 건까지 쌓여 서버에 부담을 준다(여러 사용자가 동시에 올리면 더욱).
+    // previewRows만으로 신규 기관 목록을 미리 뽑을 수 있으므로(사업자번호 중복은 이 파일 안에서도
+    // 걸러야 함), 본 루프를 돌기 전에 한 번에 만들어 registeredInst를 먼저 채운다 — 본 루프의 과제·
+    // 참여기관 등록은 이 값을 그대로 참조하기만 하고 새로 만들지 않으므로 순서를 바꿔도 안전하다.
+    const newInstitutionPayloads: { normBizNum: string; data: Omit<Institution, "id"> }[] = [];
+    for (const row of previewRows) {
+      const normBizNum = normBiz(row.bizNumber);
+      if (!row.willRegister.institution || !normBizNum || registeredInst.has(normBizNum)) continue;
+      registeredInst.set(normBizNum, ""); // 이 파일 안에서 같은 사업자번호가 또 나와도 중복 수집 안 되게 임시 표시
+      newInstitutionPayloads.push({
+        normBizNum,
+        data: {
+          name: row.institutionName || "미입력",
+          type: "중소기업",
+          // 엑셀에 하이픈 없이 숫자만 입력했어도 등록 시 000-00-00000 형식으로 자동 변환한다 —
+          // 하이픈을 직접 입력하지 않아도 되게 하되, 저장되는 값은 항상 같은 형식으로 맞춘다.
+          bizNumber: formatBizNumber(row.bizNumber),
+          representativeName: "",
+          contactName: "",
+          contactEmail: "",
+          contactPhone: "",
+          registeredAt: today,
+          status: "ACTIVE",
+        },
+      });
+    }
+    if (newInstitutionPayloads.length > 0) {
+      const createdInstitutions = await addInstitutionsBulk(newInstitutionPayloads.map((p) => p.data));
+      // 실패한 항목은 addInstitutionsBulk가 로컬 상태에서 이미 롤백했고 syncFailures로도 집계된다 —
+      // 여기선 registeredInst의 임시 표시를 지워 "이미 등록됨"으로 오인해 참여기관 연결이 조용히
+      // 스킵되지 않게 한다(생성 실패한 기관은 이번 실행에서 등록되지 않은 것으로 남는다).
+      const createdByBiz = new Map(createdInstitutions.map((inst) => [normBiz(inst.bizNumber), inst]));
+      for (const { normBizNum } of newInstitutionPayloads) {
+        const created = createdByBiz.get(normBizNum);
+        if (created) {
+          registeredInst.set(normBizNum, created.id);
+          instCount++;
+        } else {
+          registeredInst.delete(normBizNum);
+        }
+      }
+    }
+
     for (const row of previewRows) {
       // 전담기관 — registeredAgencies는 name으로만 미리 채워져 있어, 엑셀에 약칭/코드("RDA1")가
       // 적힌 행은 여기서 안 걸린다. 새로 만들기 전에 shortName·code까지 한 번 더 대조해서, RDA1/RDA2처럼
@@ -2861,25 +3001,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         }
       }
 
-      // 기관
-      const normBizNum = normBiz(row.bizNumber);
-      if (row.willRegister.institution && normBizNum && !registeredInst.has(normBizNum)) {
-        const created = addInstitution({
-          name: row.institutionName || "미입력",
-          type: "중소기업",
-          // 엑셀에 하이픈 없이 숫자만 입력했어도 등록 시 000-00-00000 형식으로 자동 변환한다 —
-          // 하이픈을 직접 입력하지 않아도 되게 하되, 저장되는 값은 항상 같은 형식으로 맞춘다.
-          bizNumber: formatBizNumber(row.bizNumber),
-          representativeName: "",
-          contactName: "",
-          contactEmail: "",
-          contactPhone: "",
-          registeredAt: today,
-          status: "ACTIVE",
-        });
-        registeredInst.set(normBizNum, created.id);
-        instCount++;
-      }
+      // 기관은 본 루프 진입 전에 이미 일괄 등록해 registeredInst에 채워뒀다(위 참고).
 
       // 과제
       const normNum = normProjectNum(row.projectNumber);
@@ -3656,6 +3778,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       stageAlertCount++;
     }
 
+    const syncFailures = await endSyncBatchAndWait();
     setDoneResult({
       agency: agencyCount,
       project: projectCount,
@@ -3665,6 +3788,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       projectAdvanced: advancedProjectCount,
       stageAlerts: stageAlertCount,
       renamed: renamedCount,
+      syncFailures,
     });
     setLoading(false);
     setStep("done");

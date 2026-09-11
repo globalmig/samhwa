@@ -273,6 +273,79 @@ function hydrateAuditLog(): void {
 if (typeof window !== "undefined") hydrateAuditLog();
 
 // ============================================================
+// 대량 동기화 스로틀링 (RCMS 엑셀 업로드 등)
+// ============================================================
+// 엑셀 업로드처럼 한 loop 안에서 수백~수천 건의 add*/update*가 호출되면, 그 안에서 쏘는 fetch가
+// 전부 동시에 서버로 몰려 DB 커넥션 풀에 부담을 줄 수 있다. 동시 in-flight 요청 수를 제한해
+// 나머지는 앞선 요청이 끝나는 대로 순서대로 나가게 한다 — 평소 단건 조작(폼 저장 등)은 동시에
+// 몇 건 안 되니 이 제한에 사실상 걸리지 않는다.
+const MAX_CONCURRENT_SYNC = 6;
+let _activeSyncCount = 0;
+const _syncQueue: (() => void)[] = [];
+
+function throttledFetch(input: string, init?: RequestInit): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const run = () => {
+      _activeSyncCount++;
+      fetch(input, init)
+        .then(resolve, reject)
+        .finally(() => {
+          _activeSyncCount--;
+          _syncQueue.shift()?.();
+        });
+    };
+    if (_activeSyncCount < MAX_CONCURRENT_SYNC) run();
+    else _syncQueue.push(run);
+  });
+}
+
+// 엑셀 업로드 같은 일괄 등록 구간에서 서버 동기화가 실제로 몇 건 실패했는지 세어 결과 화면에
+// 안내하는 데 쓴다. beginSyncBatch()로 집계를 시작하고, endSyncBatchAndWait()으로 그 구간에서
+// 발사된(아직 응답이 안 끝난 것 포함) 모든 동기화가 끝날 때까지 기다린 뒤 실패 건수를 돌려받는다.
+let _batchDepth = 0;
+let _batchFailures = 0;
+let _pendingSyncCount = 0;
+let _pendingSyncResolvers: (() => void)[] = [];
+
+export function beginSyncBatch(): void {
+  _batchDepth++;
+  _batchFailures = 0;
+}
+
+export function endSyncBatchAndWait(): Promise<number> {
+  _batchDepth = Math.max(0, _batchDepth - 1);
+  return new Promise((resolve) => {
+    const check = () => {
+      if (_pendingSyncCount === 0) resolve(_batchFailures);
+      else _pendingSyncResolvers.push(check);
+    };
+    check();
+  });
+}
+
+// add*/update*의 fetch(...).then(...).catch(...) 체인 전체를 감싸 "이 동기화가 언제 끝나는지"를
+// endSyncBatchAndWait()이 알 수 있게 한다. 체인 자체는 이미 내부에서 성공/실패를 전부 처리해
+// 절대 reject하지 않으므로 그대로 통과시킨다.
+function trackSync<T>(promise: Promise<T>): Promise<T> {
+  _pendingSyncCount++;
+  return promise.finally(() => {
+    _pendingSyncCount--;
+    if (_pendingSyncCount === 0) {
+      const resolvers = _pendingSyncResolvers;
+      _pendingSyncResolvers = [];
+      resolvers.forEach((r) => r());
+    }
+  });
+}
+
+// 위 체인의 실패 분기(res.ok===false 또는 catch)에서 호출 — beginSyncBatch() 구간 밖(평소 단건
+// 조작)에서는 집계하지 않는다. count는 벌크 생성처럼 요청 하나가 여러 건을 한 번에 담고 있어
+// 실패 시 그만큼을 한꺼번에 실패로 셀 때 쓴다(addInstitutionsBulk 등).
+function reportSyncFailure(count = 1): void {
+  if (_batchDepth > 0) _batchFailures += count;
+}
+
+// ============================================================
 // FUNDING AGENCIES (전담기관)
 // ============================================================
 
@@ -311,22 +384,26 @@ export function addFundingAgency(data: Omit<FundingAgency, "id">): FundingAgency
   record("fundingAgency", tempId, item.name, "CREATE");
   notify();
 
-  fetch("/api/funding-agencies", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
-    .then((res) => res.json())
-    .then((res: { ok: boolean; agency?: FundingAgency; error?: string }) => {
-      if (res.ok && res.agency) {
-        _state = { ..._state, fundingAgencies: _state.fundingAgencies.map((a) => (a.id === tempId ? res.agency! : a)) };
-      } else {
+  trackSync(
+    throttledFetch("/api/funding-agencies", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+      .then((res) => res.json())
+      .then((res: { ok: boolean; agency?: FundingAgency; error?: string }) => {
+        if (res.ok && res.agency) {
+          _state = { ..._state, fundingAgencies: _state.fundingAgencies.map((a) => (a.id === tempId ? res.agency! : a)) };
+        } else {
+          _state = { ..._state, fundingAgencies: _state.fundingAgencies.filter((a) => a.id !== tempId) };
+          console.error("전담기관 생성 실패:", res.error);
+          reportSyncFailure();
+        }
+        notify();
+      })
+      .catch((err) => {
         _state = { ..._state, fundingAgencies: _state.fundingAgencies.filter((a) => a.id !== tempId) };
-        console.error("전담기관 생성 실패:", res.error);
-      }
-      notify();
-    })
-    .catch((err) => {
-      _state = { ..._state, fundingAgencies: _state.fundingAgencies.filter((a) => a.id !== tempId) };
-      notify();
-      console.error("전담기관 생성 실패:", err);
-    });
+        notify();
+        console.error("전담기관 생성 실패:", err);
+        reportSyncFailure();
+      })
+  );
 
   return item;
 }
@@ -435,24 +512,69 @@ export function addInstitution(data: Omit<Institution, "id">): Institution {
   record("institution", tempId, item.name, "CREATE");
   notify();
 
-  fetch("/api/institutions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
-    .then((res) => res.json())
-    .then((res: { ok: boolean; institution?: Institution; error?: string }) => {
-      if (res.ok && res.institution) {
-        _state = { ..._state, institutions: _state.institutions.map((i) => (i.id === tempId ? res.institution! : i)) };
-      } else {
+  trackSync(
+    throttledFetch("/api/institutions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+      .then((res) => res.json())
+      .then((res: { ok: boolean; institution?: Institution; error?: string }) => {
+        if (res.ok && res.institution) {
+          _state = { ..._state, institutions: _state.institutions.map((i) => (i.id === tempId ? res.institution! : i)) };
+        } else {
+          _state = { ..._state, institutions: _state.institutions.filter((i) => i.id !== tempId) };
+          console.error("기관 생성 실패:", res.error);
+          reportSyncFailure();
+        }
+        notify();
+      })
+      .catch((err) => {
         _state = { ..._state, institutions: _state.institutions.filter((i) => i.id !== tempId) };
-        console.error("기관 생성 실패:", res.error);
-      }
-      notify();
-    })
-    .catch((err) => {
-      _state = { ..._state, institutions: _state.institutions.filter((i) => i.id !== tempId) };
-      notify();
-      console.error("기관 생성 실패:", err);
-    });
+        notify();
+        console.error("기관 생성 실패:", err);
+        reportSyncFailure();
+      })
+  );
 
   return item;
+}
+
+// RCMS 엑셀 업로드처럼 신규 기관을 수백~수천 건 한 번에 만들어야 할 때 쓴다 — addInstitution을
+// 건당 반복 호출하면 그만큼 개별 fetch가 나가 서버에 부담을 주므로(여러 사용자가 동시에 대량
+// 업로드하면 더욱), 한 번의 요청(app/api/institutions/bulk)으로 묶어 보낸다. 다른 add*와 달리
+// "낙관적으로 먼저 만들고 나중에 서버 응답으로 맞춘다"가 아니라 서버 응답을 기다렸다가 실제 id를
+// 돌려준다 — 호출 쪽(doRegister)이 바로 이어서 그 id로 참여기관을 등록해야 하기 때문이다.
+export async function addInstitutionsBulk(items: Omit<Institution, "id">[]): Promise<Institution[]> {
+  if (items.length === 0) return [];
+  const tempItems: Institution[] = items.map((data) => ({ ...data, id: genId("inst") }));
+  const tempIds = new Set(tempItems.map((t) => t.id));
+  _state = { ..._state, institutions: [..._state.institutions, ...tempItems] };
+  notify();
+
+  try {
+    const res = await throttledFetch("/api/institutions/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items }),
+    });
+    const data: { ok: boolean; institutions?: Institution[]; error?: string } = await res.json();
+    if (data.ok && data.institutions) {
+      _state = {
+        ..._state,
+        institutions: [..._state.institutions.filter((i) => !tempIds.has(i.id)), ...data.institutions],
+      };
+      notify();
+      return data.institutions;
+    }
+    _state = { ..._state, institutions: _state.institutions.filter((i) => !tempIds.has(i.id)) };
+    notify();
+    console.error("기관 일괄 생성 실패:", data.error);
+    reportSyncFailure(items.length);
+    return [];
+  } catch (err) {
+    _state = { ..._state, institutions: _state.institutions.filter((i) => !tempIds.has(i.id)) };
+    notify();
+    console.error("기관 일괄 생성 실패:", err);
+    reportSyncFailure(items.length);
+    return [];
+  }
 }
 
 export function updateInstitution(id: string, data: Partial<Institution>): void {
@@ -654,49 +776,53 @@ export function addProject(data: Omit<Project, "id">): Project {
   ensureLeadMember(item);
   notify();
 
-  const promise = fetch("/api/projects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(item) })
-    .then((res) => res.json())
-    .then((res: { ok: boolean; project?: Project; error?: string }) => {
-      if (res.ok && res.project) {
-        // id가 임시값에서 실제 DB GUID로 바뀌므로, 이미 로컬에 만들어둔 참여기관(ensureLeadMember)의
-        // projectId도 함께 옮겨줘야 이후 조회/수정이 새 id로 정상 매칭된다. 그 참여기관을 저장하려던
-        // persistProjectMember 시도는 이 시점 이전엔 project가 서버에 없어 실패했을 수 있으므로 재시도한다.
-        const realId = res.project.id;
-        _projectIdRemap.set(tempId, realId);
-        const remapped = _state.projectMembers.filter((m) => m.projectId === tempId);
-        _state = {
-          ..._state,
-          projects: _state.projects.map((p) => (p.id === tempId ? res.project! : p)),
-          projectMembers: _state.projectMembers.map((m) => (m.projectId === tempId ? { ...m, projectId: realId } : m)),
-        };
-        for (const m of remapped) persistProjectMember({ ...m, projectId: realId });
-        autoGenerateTermFees(realId);
-        notify();
-        return realId;
-      } else {
+  const promise = trackSync(
+    throttledFetch("/api/projects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(item) })
+      .then((res) => res.json())
+      .then((res: { ok: boolean; project?: Project; error?: string }) => {
+        if (res.ok && res.project) {
+          // id가 임시값에서 실제 DB GUID로 바뀌므로, 이미 로컬에 만들어둔 참여기관(ensureLeadMember)의
+          // projectId도 함께 옮겨줘야 이후 조회/수정이 새 id로 정상 매칭된다. 그 참여기관을 저장하려던
+          // persistProjectMember 시도는 이 시점 이전엔 project가 서버에 없어 실패했을 수 있으므로 재시도한다.
+          const realId = res.project.id;
+          _projectIdRemap.set(tempId, realId);
+          const remapped = _state.projectMembers.filter((m) => m.projectId === tempId);
+          _state = {
+            ..._state,
+            projects: _state.projects.map((p) => (p.id === tempId ? res.project! : p)),
+            projectMembers: _state.projectMembers.map((m) => (m.projectId === tempId ? { ...m, projectId: realId } : m)),
+          };
+          for (const m of remapped) persistProjectMember({ ...m, projectId: realId });
+          autoGenerateTermFees(realId);
+          notify();
+          return realId;
+        } else {
+          _state = {
+            ..._state,
+            projects: _state.projects.filter((p) => p.id !== tempId),
+            projectMembers: _state.projectMembers.filter((m) => m.projectId !== tempId),
+          };
+          console.error("과제 생성 실패:", res.error);
+          reportSyncFailure();
+          notify();
+          return tempId;
+        }
+      })
+      .catch((err) => {
         _state = {
           ..._state,
           projects: _state.projects.filter((p) => p.id !== tempId),
           projectMembers: _state.projectMembers.filter((m) => m.projectId !== tempId),
         };
-        console.error("과제 생성 실패:", res.error);
         notify();
+        console.error("과제 생성 실패:", err);
+        reportSyncFailure();
         return tempId;
-      }
-    })
-    .catch((err) => {
-      _state = {
-        ..._state,
-        projects: _state.projects.filter((p) => p.id !== tempId),
-        projectMembers: _state.projectMembers.filter((m) => m.projectId !== tempId),
-      };
-      notify();
-      console.error("과제 생성 실패:", err);
-      return tempId;
-    })
-    .finally(() => {
-      _pendingProjectCreates.delete(tempId);
-    });
+      })
+      .finally(() => {
+        _pendingProjectCreates.delete(tempId);
+      })
+  );
   _pendingProjectCreates.set(tempId, promise);
 
   return item;
@@ -758,17 +884,23 @@ export function updateProject(id: string, data: Partial<Project>): void {
   // id가 아직 서버가 모르는 임시 id(방금 addProject로 막 만든 직후)면, 그 생성 요청이 끝나 진짜 id를
   // 알기 전까지 이 수정 요청을 미뤄뒀다가 진짜 id로 다시 보낸다 — 위 _pendingProjectCreates 설명 참고.
   const sendPatch = (realId: string) => {
-    fetch(`/api/projects/${realId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
-      .then((res) => res.json())
-      .then((res: { ok: boolean; project?: Project; error?: string }) => {
-        if (res.ok && res.project) {
-          _state = { ..._state, projects: _state.projects.map((p) => (p.id === realId ? res.project! : p)) };
-          notify();
-        } else if (!res.ok) {
-          console.error("과제 수정 실패:", res.error);
-        }
-      })
-      .catch((err) => console.error("과제 수정 실패:", err));
+    trackSync(
+      throttledFetch(`/api/projects/${realId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+        .then((res) => res.json())
+        .then((res: { ok: boolean; project?: Project; error?: string }) => {
+          if (res.ok && res.project) {
+            _state = { ..._state, projects: _state.projects.map((p) => (p.id === realId ? res.project! : p)) };
+            notify();
+          } else if (!res.ok) {
+            console.error("과제 수정 실패:", res.error);
+            reportSyncFailure();
+          }
+        })
+        .catch((err) => {
+          console.error("과제 수정 실패:", err);
+          reportSyncFailure();
+        })
+    );
   };
 
   const pendingCreate = _pendingProjectCreates.get(id);
@@ -925,24 +1057,28 @@ if (typeof window !== "undefined") hydrateProjectMembers();
 const _pendingMemberCreates = new Map<string, Promise<string>>();
 
 function persistProjectMember(item: ProjectMember): void {
-  const promise = fetch("/api/project-members", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(item) })
-    .then((res) => res.json())
-    .then((res: { ok: boolean; member?: ProjectMember; error?: string }) => {
-      if (res.ok && res.member) {
-        _state = { ..._state, projectMembers: _state.projectMembers.map((m) => (m.id === item.id ? res.member! : m)) };
-        notify();
-        return res.member.id;
-      }
-      if (!res.ok) console.error("참여기관 저장 실패:", res.error);
-      return item.id;
-    })
-    .catch((err) => {
-      console.error("참여기관 저장 실패:", err);
-      return item.id;
-    })
-    .finally(() => {
-      _pendingMemberCreates.delete(item.id);
-    });
+  const promise = trackSync(
+    throttledFetch("/api/project-members", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(item) })
+      .then((res) => res.json())
+      .then((res: { ok: boolean; member?: ProjectMember; error?: string }) => {
+        if (res.ok && res.member) {
+          _state = { ..._state, projectMembers: _state.projectMembers.map((m) => (m.id === item.id ? res.member! : m)) };
+          notify();
+          return res.member.id;
+        }
+        console.error("참여기관 저장 실패:", res.error);
+        reportSyncFailure();
+        return item.id;
+      })
+      .catch((err) => {
+        console.error("참여기관 저장 실패:", err);
+        reportSyncFailure();
+        return item.id;
+      })
+      .finally(() => {
+        _pendingMemberCreates.delete(item.id);
+      })
+  );
   _pendingMemberCreates.set(item.id, promise);
 }
 
@@ -1102,17 +1238,23 @@ export function updateProjectMember(id: string, data: Partial<ProjectMember>): v
   // 임시 id로 보낸 PATCH가 404로 조용히 실패하고, 뒤이어 도착하는 생성 응답이 이 수정사항 없는
   // 상태로 덮어써 버린다).
   const sendPatch = (realId: string) => {
-    fetch(`/api/project-members/${realId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body })
-      .then((res) => res.json())
-      .then((res: { ok: boolean; member?: ProjectMember; error?: string }) => {
-        if (res.ok && res.member) {
-          _state = { ..._state, projectMembers: _state.projectMembers.map((m) => (m.id === realId ? res.member! : m)) };
-          notify();
-        } else if (!res.ok) {
-          console.error("참여기관 수정 실패:", res.error);
-        }
-      })
-      .catch((err) => console.error("참여기관 수정 실패:", err));
+    trackSync(
+      throttledFetch(`/api/project-members/${realId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body })
+        .then((res) => res.json())
+        .then((res: { ok: boolean; member?: ProjectMember; error?: string }) => {
+          if (res.ok && res.member) {
+            _state = { ..._state, projectMembers: _state.projectMembers.map((m) => (m.id === realId ? res.member! : m)) };
+            notify();
+          } else if (!res.ok) {
+            console.error("참여기관 수정 실패:", res.error);
+            reportSyncFailure();
+          }
+        })
+        .catch((err) => {
+          console.error("참여기관 수정 실패:", err);
+          reportSyncFailure();
+        })
+    );
   };
 
   const pendingCreate = _pendingMemberCreates.get(id);
@@ -1879,22 +2021,26 @@ export function addProjectIssue(data: Omit<ProjectIssue, "id">): ProjectIssue {
   record("projectIssue", tempId, `${item.projectNumber} 이슈: ${issueContentPreview(item.content)}`, "CREATE");
   notify();
 
-  fetch("/api/project-issues", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
-    .then((res) => res.json())
-    .then((res: { ok: boolean; projectIssue?: ProjectIssue; error?: string }) => {
-      if (res.ok && res.projectIssue) {
-        _state = { ..._state, projectIssues: _state.projectIssues.map((i) => (i.id === tempId ? res.projectIssue! : i)) };
-      } else {
+  trackSync(
+    throttledFetch("/api/project-issues", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+      .then((res) => res.json())
+      .then((res: { ok: boolean; projectIssue?: ProjectIssue; error?: string }) => {
+        if (res.ok && res.projectIssue) {
+          _state = { ..._state, projectIssues: _state.projectIssues.map((i) => (i.id === tempId ? res.projectIssue! : i)) };
+        } else {
+          _state = { ..._state, projectIssues: _state.projectIssues.filter((i) => i.id !== tempId) };
+          console.error("이슈 생성 실패:", res.error);
+          reportSyncFailure();
+        }
+        notify();
+      })
+      .catch((err) => {
         _state = { ..._state, projectIssues: _state.projectIssues.filter((i) => i.id !== tempId) };
-        console.error("이슈 생성 실패:", res.error);
-      }
-      notify();
-    })
-    .catch((err) => {
-      _state = { ..._state, projectIssues: _state.projectIssues.filter((i) => i.id !== tempId) };
-      notify();
-      console.error("이슈 생성 실패:", err);
-    });
+        notify();
+        console.error("이슈 생성 실패:", err);
+        reportSyncFailure();
+      })
+  );
 
   return item;
 }

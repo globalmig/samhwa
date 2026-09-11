@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/db";
+import { prisma, withDbWriteSlot } from "@/lib/db";
 import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
 import { toFundingAgency } from "@/lib/funding-agency-mapper";
 import { writeAuditLog } from "@/lib/audit";
@@ -51,7 +51,7 @@ export async function POST(request: Request) {
     return Response.json({ ok: false, error: "정식명칭, 약칭, 기관코드는 필수입니다." }, { status: 400 });
   }
 
-  const created = await prisma.$transaction(async (tx) => {
+  const created = await withDbWriteSlot(() => prisma.$transaction(async (tx) => {
     const row = await tx.fundingAgency.create({
       data: {
         name: body.name,
@@ -79,7 +79,7 @@ export async function POST(request: Request) {
       action: "CREATE",
     });
     return row;
-  });
+  }));
 
   return Response.json({ ok: true, agency: toFundingAgency(created) });
 }

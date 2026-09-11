@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/db";
+import { prisma, withDbWriteSlot } from "@/lib/db";
 import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
 import { toProject } from "@/lib/project-mapper";
 import { writeAuditLog } from "@/lib/audit";
@@ -39,7 +39,7 @@ export async function POST(request: Request) {
   const startYear = body.startDate ? new Date(body.startDate).getUTCFullYear() : new Date().getUTCFullYear();
   const endYear = body.endDate ? new Date(body.endDate).getUTCFullYear() : startYear;
 
-  const created = await prisma.$transaction(async (tx) => {
+  const created = await withDbWriteSlot(() => prisma.$transaction(async (tx) => {
     const row = await tx.project.create({
       data: {
         projectNumber: body.projectNumber,
@@ -82,7 +82,7 @@ export async function POST(request: Request) {
       action: "CREATE",
     });
     return row;
-  });
+  }));
 
   return Response.json({ ok: true, project: toProject(created) });
 }

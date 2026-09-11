@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/db";
+import { prisma, withDbWriteSlot } from "@/lib/db";
 import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
 import { groupPtisToMembers } from "@/lib/project-member-mapper";
 import { getOrCreatePti } from "@/lib/pti-helper";
@@ -50,7 +50,7 @@ export async function POST(request: Request) {
     exemptRefGrade: body.exemptRefGrade, role: body.role,
   };
 
-  const member = await prisma.$transaction(async (tx) => {
+  const member = await withDbWriteSlot(() => prisma.$transaction(async (tx) => {
     if (body.annualBudgets && body.annualBudgets.length > 0) {
       for (const ab of body.annualBudgets) {
         const budget = BigInt(Math.round(ab.cashBudget + ab.inKindBudget));
@@ -91,7 +91,7 @@ export async function POST(request: Request) {
     });
 
     return createdMember;
-  });
+  }));
 
   return Response.json({ ok: true, member });
 }

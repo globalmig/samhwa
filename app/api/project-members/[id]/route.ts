@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import { prisma } from "@/lib/db";
+import { prisma, withDbWriteSlot } from "@/lib/db";
 import { requireWriteAccess, SessionError } from "@/lib/session";
 import { groupPtisToMembers } from "@/lib/project-member-mapper";
 import { getOrCreatePti } from "@/lib/pti-helper";
@@ -51,7 +51,7 @@ export async function PATCH(request: Request, { params }: Params) {
   const hasSharedPatch = sharedKeys.some((k) => k in body);
   const newRole = body.role !== undefined ? (body.role === "LEAD" ? "MAIN" : "PARTICIPATING") : undefined;
 
-  const member = await prisma.$transaction(async (tx) => {
+  const member = await withDbWriteSlot(() => prisma.$transaction(async (tx) => {
     if (hasSharedPatch || newRole) {
       for (const row of siblings) {
         const rowExtra: SharedExtra = row.extraData ? JSON.parse(row.extraData) : {};
@@ -117,7 +117,7 @@ export async function PATCH(request: Request, { params }: Params) {
     });
 
     return afterMember;
-  });
+  }));
 
   return Response.json({ ok: true, member });
 }

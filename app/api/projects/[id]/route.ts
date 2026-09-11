@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/db";
+import { prisma, withDbWriteSlot } from "@/lib/db";
 import { requireWriteAccess, SessionError } from "@/lib/session";
 import { toProject } from "@/lib/project-mapper";
 import { writeAuditLog } from "@/lib/audit";
@@ -46,7 +46,7 @@ export async function PATCH(request: Request, { params }: Params) {
   const startYear = body.startDate ? new Date(body.startDate).getUTCFullYear() : undefined;
   const endYear = body.endDate ? new Date(body.endDate).getUTCFullYear() : undefined;
 
-  const updated = await prisma.$transaction(async (tx) => {
+  const updated = await withDbWriteSlot(() => prisma.$transaction(async (tx) => {
     const row = await tx.project.update({
       where: { id },
       data: {
@@ -74,7 +74,7 @@ export async function PATCH(request: Request, { params }: Params) {
       after: afterProject as unknown as Record<string, unknown>,
     });
     return row;
-  });
+  }));
 
   return Response.json({ ok: true, project: toProject(updated) });
 }
