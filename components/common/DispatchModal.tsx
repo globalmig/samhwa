@@ -291,27 +291,39 @@ ${companyInfo.name} 드림`;
 
   const otherMailTemplates = simpleNoticeTemplates.filter((t) => t.category === "OTHER_MAIL");
   const defaultOtherMailTemplate = otherMailTemplates.find((t) => t.isDefault) ?? otherMailTemplates[0];
+  // "기타 공문(청구서)" — ANNUAL/SETTLEMENT/REVERSE는 카테고리당 대표양식 하나만 자동 적용하면 되지만,
+  // "기타 공문"은 상황마다 다른 청구서 양식을 쓸 수 있어 여러 건을 등록해두고 그때그때 고를 수 있어야
+  // 한다(아래 "기타 공문 (청구서) 템플릿" 드롭다운). otherInvoiceTemplateId가 비어 있으면(아직 안 고름) 대표양식으로 대체한다.
+  const otherInvoiceTemplates = feeInvoiceTemplates.filter((t) => t.category === "OTHER");
+  const defaultOtherInvoiceTemplate = otherInvoiceTemplates.find((t) => t.isDefault) ?? otherInvoiceTemplates[0];
 
   // 청구서 문구/라벨은 하드코딩이 아니라 공문관리 > 수수료 청구서 양식(/notice-templates/invoices)에서
-  // 카테고리별로 등록해둔 대표양식을 그대로 쓴다 — 선택 UI 없이 항상 자동 적용. 역발행/기타는 연차상시/
-  // 위탁정산 어느 쪽이든 항상 REVERSE·OTHER 전용 대표양식을 쓴다(공문발송 드롭다운의 "역발행 수수료
-  // 공문"·"기타 공문"이 연차상시/위탁정산 구분 없이 하나뿐인 것과 대응).
+  // 카테고리별로 등록해둔 대표양식을 그대로 쓴다 — 선택 UI 없이 항상 자동 적용. 역발행은 연차상시/
+  // 위탁정산 어느 쪽이든 항상 REVERSE 전용 대표양식을 쓴다(공문발송 드롭다운의 "역발행 수수료 공문"이
+  // 연차상시/위탁정산 구분 없이 하나뿐인 것과 대응). 기타 공문만 예외로, 대표양식 대신 아래에서 고른
+  // otherInvoiceTemplateId(또는 override)를 우선한다.
   // 청구서 대표양식뿐 아니라 공통 첨부파일(사업자등록증 등)의 "이 유형엔 첨부할지" 설정도 같은 카테고리
   // 축(ANNUAL/SETTLEMENT/REVERSE/OTHER)을 기준으로 삼는다 — 역발행/기타는 항상 REVERSE·OTHER로 취급.
   function resolveTemplateCategory(cat: "ANNUAL" | "SETTLEMENT"): "ANNUAL" | "SETTLEMENT" | "REVERSE" | "OTHER" {
     return target.kind === "REVERSE" ? "REVERSE" : target.kind === "OTHER" ? "OTHER" : cat;
   }
 
-  function resolveInvoiceTemplateEntry(cat: "ANNUAL" | "SETTLEMENT") {
+  // overrideOtherId — 템플릿 선택 직후(state가 아직 갱신되기 전) 새로 고른 값으로 바로 첨부를 다시
+  // 만들어야 할 때 쓴다(applyOtherInvoiceTemplate 참고). 생략하면 현재 선택된 otherInvoiceTemplateId를 쓴다.
+  function resolveInvoiceTemplateEntry(cat: "ANNUAL" | "SETTLEMENT", overrideOtherId?: string) {
     const category = resolveTemplateCategory(cat);
+    if (category === "OTHER") {
+      const id = overrideOtherId ?? otherInvoiceTemplateId;
+      return feeInvoiceTemplates.find((t) => t.id === id) ?? defaultOtherInvoiceTemplate;
+    }
     return (
       feeInvoiceTemplates.find((t) => t.category === category && t.isDefault)
       ?? feeInvoiceTemplates.find((t) => t.category === category)
     );
   }
 
-  function resolveInvoiceTemplateContent(cat: "ANNUAL" | "SETTLEMENT") {
-    return resolveInvoiceTemplateEntry(cat)?.content ?? EMPTY_FEE_INVOICE_TEMPLATE;
+  function resolveInvoiceTemplateContent(cat: "ANNUAL" | "SETTLEMENT", overrideOtherId?: string) {
+    return resolveInvoiceTemplateEntry(cat, overrideOtherId)?.content ?? EMPTY_FEE_INVOICE_TEMPLATE;
   }
 
   function buildFeeInvoiceTargetData(cat: "ANNUAL" | "SETTLEMENT"): FeeInvoiceTarget {
@@ -337,13 +349,13 @@ ${companyInfo.name} 드림`;
     };
   }
 
-  function buildAttachments(cat: "ANNUAL" | "SETTLEMENT"): AttachmentRow[] {
+  function buildAttachments(cat: "ANNUAL" | "SETTLEMENT", overrideOtherId?: string): AttachmentRow[] {
     // previewHtml은 PDF 뷰어 유무와 상관없이 화면에서 바로 확인할 수 있도록, PDF와 같은 내용을
     // html2canvas 없이 즉시(동기) 렌더링해둔 것 — 모달을 열자마자 "생성 중" 대기 없이 보여준다.
     const invoiceAttachment = {
       name: `청구서_${target.projectNumber}_${termLabel}.pdf`,
       checked: true,
-      previewHtml: buildFeeInvoiceHtml(buildFeeInvoiceTargetData(cat), resolveInvoiceTemplateContent(cat), companyInfo),
+      previewHtml: buildFeeInvoiceHtml(buildFeeInvoiceTargetData(cat), resolveInvoiceTemplateContent(cat, overrideOtherId), companyInfo),
     };
     // 사업자등록증·통장사본 등 공통 첨부파일(/notice-templates/invoices에서 관리) — 이 유형(카테고리)
     // 기준으로 꺼져 있는 항목은(파일이 등록돼 있어도) 발송 목록에서 아예 빼서, 그 유형엔 필요 없는
@@ -352,9 +364,10 @@ ${companyInfo.name} 드림`;
     const standardAttachmentRows = standardAttachments
       .filter((a) => (a.enabledByCategory?.[templateCategory] ?? true))
       .map((a) => ({ name: a.name, checked: true, dataUrl: a.fileDataUrl }));
-    // 공문 양식 관리 > 수수료 청구서 양식(/notice-templates/invoices)에서 이 카테고리(대표양식)에
-    // 등록해둔 기본 첨부 파일 — 위탁정산내역서처럼 카테고리마다 다를 수 있는 서류를 거기서 관리한다.
-    const defaultAttachmentRows = (resolveInvoiceTemplateEntry(cat)?.defaultAttachments ?? []).map((a) => ({
+    // 공문 양식 관리 > 수수료 청구서 양식(/notice-templates/invoices)에서 이 카테고리(기타 공문은
+    // 아래에서 고른 양식)에 등록해둔 기본 첨부 파일 — 위탁정산내역서처럼 카테고리마다 다를 수 있는
+    // 서류를 거기서 관리한다.
+    const defaultAttachmentRows = (resolveInvoiceTemplateEntry(cat, overrideOtherId)?.defaultAttachments ?? []).map((a) => ({
       name: a.name,
       checked: true,
       dataUrl: a.fileDataUrl,
@@ -365,6 +378,7 @@ ${companyInfo.name} 드림`;
   const [feeCategory,  setFeeCategory]  = useState(target.feeCategory);
   const [toEmailRaw,   setToEmailRaw]   = useState(target.recipientEmail);
   const [otherTemplateId, setOtherTemplateId] = useState(() => isOther ? (defaultOtherMailTemplate?.id ?? "") : "");
+  const [otherInvoiceTemplateId, setOtherInvoiceTemplateId] = useState(() => isOther ? (defaultOtherInvoiceTemplate?.id ?? "") : "");
   const [subject,      setSubject]      = useState(() => isOther
     ? (defaultOtherMailTemplate ? fillTokens(defaultOtherMailTemplate.content.subject, buildOtherMailTarget()) : "")
     : buildSubject(target.feeCategory));
@@ -417,7 +431,7 @@ ${companyInfo.name} 드림`;
     setAttachments(buildAttachments(next));
   }
 
-  // 기타 공문 템플릿 선택 — 고르면 제목/본문을 그 템플릿으로 덮어쓰고, "직접 작성"을 고르면 비워서
+  // 기타 공문 "메일" 템플릿 선택 — 고르면 제목/본문을 그 템플릿으로 덮어쓰고, "직접 작성"을 고르면 비워서
   // 처음부터 자유롭게 쓸 수 있게 한다. 고른 뒤에도 제목/본문 입력창에서 바로 수정할 수 있다.
   function applyOtherTemplate(id: string) {
     setOtherTemplateId(id);
@@ -426,6 +440,15 @@ ${companyInfo.name} 드림`;
     const sample = buildOtherMailTarget();
     setSubject(fillTokens(entry.content.subject, sample));
     setBody(fillTokens(entry.content.body, sample));
+  }
+
+  // 기타 공문 "청구서" 양식 선택 — 첨부되는 청구서 PDF와, 그 양식에 등록해둔 기본 첨부파일을 새로
+  // 고른 양식 기준으로 다시 만든다. id를 state 갱신과 별개로 buildAttachments에 바로 넘기는 이유는,
+  // setOtherInvoiceTemplateId 직후 이어서 buildAttachments를 호출하면 state가 아직 리렌더 전이라
+  // 이전 값을 참조하게 되기 때문이다(React state 갱신은 비동기).
+  function applyOtherInvoiceTemplate(id: string) {
+    setOtherInvoiceTemplateId(id);
+    setAttachments(buildAttachments(feeCategory, id));
   }
 
   const emails = parseEmails(toEmailRaw);
@@ -572,10 +595,30 @@ ${companyInfo.name} 드림`;
         </div>
       )}
 
-      {/* 기타 공문 — 공문 양식 관리에 등록해둔 템플릿 중 하나를 골라 제목/본문을 채운다 */}
+      {/* 기타 공문 — 공문 양식 관리에 등록해둔 청구서 양식(첨부 PDF)과 메일 템플릿(제목/본문)을
+          각각 골라 채운다. 둘은 서로 다른 목록(FeeInvoiceTemplate OTHER / SimpleNoticeTemplate
+          OTHER_MAIL)이라 드롭다운도 따로 둔다. */}
       {isOther && (
         <div className="space-y-1.5">
-          <label className="text-xs font-medium text-slate-600">공문 템플릿</label>
+          <label className="text-xs font-medium text-slate-600">기타 공문 (청구서) 템플릿</label>
+          <select
+            value={otherInvoiceTemplateId}
+            onChange={(e) => applyOtherInvoiceTemplate(e.target.value)}
+            className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+          >
+            {otherInvoiceTemplates.map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
+          {otherInvoiceTemplates.length === 0 && (
+            <p className="text-[11px] text-slate-400">등록된 양식이 없습니다 — 공문 양식 관리 &gt; 기타 공문(청구서)에서 추가할 수 있습니다.</p>
+          )}
+        </div>
+      )}
+
+      {isOther && (
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium text-slate-600">기타 공문 (메일) 템플릿</label>
           <select
             value={otherTemplateId}
             onChange={(e) => applyOtherTemplate(e.target.value)}
