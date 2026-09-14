@@ -1469,13 +1469,24 @@ export function applyInstitutionGradeToProjects(
   }
   notify();
 
+  // 정산면제리스트 업로드는 기관 수만큼 이 함수가 반복 호출되고(ExemptionListUploadModal.apply),
+  // 기관 하나가 참여 중인 과제가 많으면 changedMembers도 그만큼 늘어난다 — throttledFetch 없이
+  // 그냥 fetch로 한꺼번에 쏘면 RCMS 엑셀 업로드 때와 같은 이유로 DB 커넥션 풀에 부담을 줄 수 있다.
   for (const m of changedMembers) {
-    fetch(`/api/project-members/${m.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ gradeOverrides: m.gradeOverrides }) })
-      .then((res) => res.json())
-      .then((res: { ok: boolean; error?: string }) => {
-        if (!res.ok) console.error("등급 변경 저장 실패:", res.error);
-      })
-      .catch((err) => console.error("등급 변경 저장 실패:", err));
+    trackSync(
+      throttledFetch(`/api/project-members/${m.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ gradeOverrides: m.gradeOverrides }) })
+        .then((res) => res.json())
+        .then((res: { ok: boolean; error?: string }) => {
+          if (!res.ok) {
+            console.error("등급 변경 저장 실패:", res.error);
+            reportSyncFailure();
+          }
+        })
+        .catch((err) => {
+          console.error("등급 변경 저장 실패:", err);
+          reportSyncFailure();
+        })
+    );
   }
   return {
     updatedProjectCount: affectedProjects.size,
