@@ -2720,6 +2720,7 @@ export function updateUserHiworksCredentials(
 export function deleteUser(id: string): void {
   const item = _state.users.find((u) => u.id === id);
   if (!item) return;
+  const prevProjectIssues = _state.projectIssues;
   _state = {
     ..._state,
     users: _state.users.filter((u) => u.id !== id),
@@ -2734,12 +2735,23 @@ export function deleteUser(id: string): void {
   record("user", id, item.name, "DELETE");
   notify();
 
+  // 실패 시(예: 이 사용자를 참조하는 감사기록의 FK 제약) 다른 삭제/생성 함수들과 동일하게 낙관적
+  // 삭제를 되돌린다 — 안 그러면 화면에선 사라졌는데 서버엔 그대로 남아, 재접속(재조회)했을 때만
+  // 다시 나타나는 것처럼 보여 사용자가 "거부했는데 왜 또 보이지"로 혼란스러워한다.
   fetch(`/api/users/${id}`, { method: "DELETE" })
     .then((res) => res.json())
     .then((res: { ok: boolean; error?: string }) => {
-      if (!res.ok) console.error("사용자 삭제 실패:", res.error);
+      if (!res.ok) {
+        _state = { ..._state, users: [..._state.users, item], projectIssues: prevProjectIssues };
+        notify();
+        console.error("사용자 삭제 실패:", res.error);
+      }
     })
-    .catch((err) => console.error("사용자 삭제 실패:", err));
+    .catch((err) => {
+      _state = { ..._state, users: [..._state.users, item], projectIssues: prevProjectIssues };
+      notify();
+      console.error("사용자 삭제 실패:", err);
+    });
 }
 
 // ============================================================

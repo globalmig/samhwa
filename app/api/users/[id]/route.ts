@@ -110,6 +110,12 @@ export async function DELETE(_request: Request, { params }: Params) {
   if (!target) return Response.json({ ok: false, error: "사용자를 찾을 수 없습니다." }, { status: 404 });
 
   await prisma.$transaction(async (tx) => {
+    // AuditLog.userId(FK, onDelete: NoAction)가 이 사용자를 actor로 가리키는 행이 있으면(예:
+    // 회원가입 자기등록 시 아직 세션이 없어 actorUserId를 본인 id로 남긴 CREATE 기록 —
+    // app/api/users/route.ts 참고) DB가 삭제를 거부한다. 그 감사기록 행 자체(무엇을 했는지)는
+    // 보존하고 "누가"만 떼어내(null) 참조를 끊는다 — 그래야 승인대기 거부가 실제로 DB에서
+    // 지워지고, 재접속해도 목록에 다시 나타나지 않는다.
+    await tx.auditLog.updateMany({ where: { userId: id }, data: { userId: null } });
     await tx.user.delete({ where: { id } });
     await writeAuditLog(tx, {
       actorUserId: actor.userId,
