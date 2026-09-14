@@ -25,8 +25,8 @@ import {
   updateProjectMember,
   recalcProjectTotalBudget,
   setTermOtherFirmHandled,
-  beginSyncBatch,
-  endSyncBatchAndWait,
+  runBulkSyncBatch,
+  endBulkRecalcSuspend,
 } from "@/lib/store";
 import type { Project, ProjectMember, AnnualBudget, AnnualFinancials, Institution, SystemUser, FundingAgency } from "@/lib/mock";
 import { getCurrentUser } from "@/lib/auth";
@@ -41,6 +41,7 @@ import {
 } from "@/lib/fee-calculator";
 import { resolveTermDateRange, nowKST, todayKST, formatBizNumber } from "@/lib/utils";
 import ManagerPickerModal from "@/components/common/ManagerPickerModal";
+import { useExcelUploadDiagnostics } from "@/lib/use-excel-upload-diagnostics";
 
 type InstitutionGrade = NonNullable<ProjectMember["institutionGrade"]>;
 
@@ -1988,7 +1989,7 @@ function PreviewStep({
         </p>
       )}
       <div className="shrink-0 flex items-center justify-between pt-4 mt-4 border-t border-slate-100">
-        <button onClick={onBack} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">이전</button>
+        <button onClick={onBack} disabled={loading} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed">이전</button>
         <div className="flex items-center gap-3">
           {totalToRegister > 0 && !loading && (
             <span className="text-[11px] text-slate-400 hidden sm:inline">
@@ -2512,6 +2513,12 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
   const [previewRows, setPreviewRows] = useState<PreviewRow[]>([]);
   const [doneResult, setDoneResult] = useState<DoneResult>({ agency: 0, project: 0, inst: 0, member: 0, memberUpdated: 0, projectAdvanced: 0, stageAlerts: 0, renamed: 0, syncFailures: 0 });
   const [loading, setLoading] = useState(false);
+  const busyRef = useRef(false);
+  const recordUpload = useExcelUploadDiagnostics(step, loading);
+  const handleClose = () => {
+    recordUpload("close_requested", { blocked: busyRef.current });
+    if (!busyRef.current) onClose();
+  };
   const [error, setError] = useState<string | null>(null);
   const [previewBackStep, setPreviewBackStep] = useState<Step>("mapping");
   const [projectUpdateChoices, setProjectUpdateChoices] = useState<Record<string, boolean>>({});
@@ -2674,10 +2681,28 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
   // ── 파일 파싱 ───────────────────────────────────────────────
 
   const handleFile = useCallback((file: File) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setLoading(true);
+    recordUpload("file_read_started", { bytes: file.size, busy: true });
     setError(null);
     const reader = new FileReader();
+    const finishReading = () => {
+      busyRef.current = false;
+      setLoading(false);
+    };
+    reader.onerror = () => {
+      recordUpload("file_read_failed");
+      setError("파일을 읽지 못했습니다. 파일을 다시 선택해주세요.");
+      finishReading();
+    };
+    reader.onabort = () => {
+      recordUpload("file_read_aborted");
+      finishReading();
+    };
     reader.onload = (e) => {
       try {
+        recordUpload("parse_started");
         const data = new Uint8Array(e.target!.result as ArrayBuffer);
         const wb = XLSX.read(data, { type: "array" });
         const names = wb.SheetNames;
@@ -2694,13 +2719,23 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
 
         setMatchedSheets(matched);
         setParsedSheets(matched.map(({ sheetName, def }) => parseSheetToParsedSheet(wb, sheetName, def)));
+        recordUpload("parse_completed", { sheets: matched.length });
         setStep("sheet");
-      } catch {
+      } catch (err) {
+        recordUpload("parse_failed", { message: err instanceof Error ? err.message.slice(0, 500) : "Unknown error" });
         setError("파일을 읽는 중 오류가 발생했습니다. xlsx/xls 파일인지 확인해주세요.");
+      } finally {
+        finishReading();
       }
     };
-    reader.readAsArrayBuffer(file);
-  }, []);
+    try {
+      reader.readAsArrayBuffer(file);
+    } catch {
+      recordUpload("file_read_failed");
+      setError("파일을 읽지 못했습니다. 파일을 다시 선택해주세요.");
+      finishReading();
+    }
+  }, [recordUpload]);
 
   // 시트명이 자동 인식되지 않은 파일(RCMS가 아닌 다른 시스템 파일 등)에서, 사람이 "이 시트를
   // 연차별기관별/단계기관별로 쓰겠다"고 직접 지정한다. 같은 역할이 이미 다른 시트로 지정돼 있으면
@@ -2886,12 +2921,29 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
     // 미리보기의 "등록" 버튼이 이미 막아주지만, 방어적으로 한 번 더 확인한다 — 동명이인이나
     // [권한관리]에 없는 담당자를 해소하지 않은 채로 등록하면 공문 발송 시 연락처가 엉뚱한 사람
     // 것으로 나가거나 아예 연동되지 않을 수 있다.
-    if (unresolvedManagerAmbiguities.length > 0 || unresolvedManagerNotFound.length > 0) return;
+    if (busyRef.current || unresolvedManagerAmbiguities.length > 0 || unresolvedManagerNotFound.length > 0) return;
+    busyRef.current = true;
+    setError(null);
     setLoading(true);
-    // 대량 업로드(행 수천 건)로 아래 loop가 add*/update*를 수백~수천 번 호출할 수 있어, 그 서버
-    // 동기화가 실제로 몇 건 실패했는지 이 구간에서 집계해 완료 화면에 안내한다(lib/store.ts의
-    // throttledFetch가 동시 요청 수도 함께 제한한다).
-    beginSyncBatch();
+    recordUpload("registration_started", { rows: previewRows.length, members: memberAggregates.length, busy: true });
+    try {
+      const { value, syncFailures } = await runBulkSyncBatch(registerRows);
+      setDoneResult({ ...value, syncFailures });
+      recordUpload("registration_completed", { syncFailures });
+      setStep("done");
+    } catch (err) {
+      recordUpload("registration_failed", { message: err instanceof Error ? err.message.slice(0, 500) : "Unknown error" });
+      console.error("엑셀 대량 등록 중 오류:", err);
+      setError(
+        "등록 중 오류가 발생해 처리를 중단했습니다. 오류 발생 전까지 처리된 내용은 이미 저장됐을 수 있으니, 새로고침 후 과제·참여기관 목록에서 실제 반영 여부를 확인해주세요."
+      );
+    } finally {
+      busyRef.current = false;
+      setLoading(false);
+    }
+  }
+
+  async function registerRows() {
     const today = todayKST();
 
     const registeredAgencies = new Map<string, string>(); // name → id
@@ -3574,6 +3626,14 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       leadResolvedProjectIds.add(projectId);
     }
 
+    // 여기까지(참여기관 등록/갱신, 승인된 과제 갱신, 주관기관 보정)가 TermFee 생성·과제 사업비에
+    // 영향을 주는 마지막 단계다 — 아래 "회계법인 자동 반영"이 TermFee를 조회해야 하므로, 지연시켜둔
+    // 재계산을 여기서 반드시 먼저 흘려보낸다(끝까지 미루면 안 됨: setTermOtherFirmHandled가 아직
+    // 생성되지 않은 TermFee를 찾지 못해 "타회계법인 진행" 표시가 조용히 빠지는 회귀가 있었다).
+    recordUpload("recalculation_started");
+    await endBulkRecalcSuspend();
+    recordUpload("fee_sync_completed");
+
     // 회계법인 자동 반영 — "연차별기관별" 시트의 "회계법인" 값이 삼화가 아니면, 그 연차를 타회계법인
     // 진행으로 자동 표시한다. 삼화가 정산연차만 새로 배정받고 이전 연차상시는 다른 회계법인이 진행한
     // 과제를 엑셀 한 번에 등록 + 표시까지 마칠 수 있게 하기 위함(수동으로 과제 상세에서 연차마다 체크할
@@ -3778,8 +3838,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       stageAlertCount++;
     }
 
-    const syncFailures = await endSyncBatchAndWait();
-    setDoneResult({
+    recordUpload("final_sync_started");
+    return {
       agency: agencyCount,
       project: projectCount,
       inst: instCount,
@@ -3788,10 +3848,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       projectAdvanced: advancedProjectCount,
       stageAlerts: stageAlertCount,
       renamed: renamedCount,
-      syncFailures,
-    });
-    setLoading(false);
-    setStep("done");
+    };
   }
 
   // ── 스텝 제목 ────────────────────────────────────────────────
@@ -3810,7 +3867,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
 
   return (
     <>
-    <Modal title={TITLES[step]} onClose={onClose} size="xl" fixedHeight>
+    <Modal title={TITLES[step]} onClose={handleClose} size="xl" fixedHeight preventClose={loading}>
       {/* 진행 표시 */}
       {step !== "done" && (
         <div className="px-6 pt-4 pb-0 shrink-0">
@@ -3840,6 +3897,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
         {step === "upload" && (
           <div className="p-6 h-full flex flex-col">
+            {loading && <p role="status" className="mb-3 text-sm text-slate-600">파일을 읽고 있습니다...</p>}
             <UploadZone onFile={handleFile} className="flex-1" />
           </div>
         )}
@@ -3886,7 +3944,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         )}
 
         {step === "done" && (
-          <DoneStep result={doneResult} onClose={onClose} />
+          <DoneStep result={doneResult} onClose={handleClose} />
         )}
       </div>
     </Modal>

@@ -308,19 +308,50 @@ let _pendingSyncCount = 0;
 let _pendingSyncResolvers: (() => void)[] = [];
 
 export function beginSyncBatch(): void {
+  if (_batchDepth === 0) _batchFailures = 0;
   _batchDepth++;
-  _batchFailures = 0;
 }
 
-export function endSyncBatchAndWait(): Promise<number> {
-  _batchDepth = Math.max(0, _batchDepth - 1);
+// 배치를 닫지 않고, 후속 요청까지 모두 끝날 때까지 기다린다.
+export function waitForSyncIdle(): Promise<number> {
   return new Promise((resolve) => {
     const check = () => {
-      if (_pendingSyncCount === 0) resolve(_batchFailures);
-      else _pendingSyncResolvers.push(check);
+      if (_pendingSyncCount === 0) {
+        // 생성 Promise의 후속 .then이 실제 ID로 PATCH를 추가할 수 있다. 그 마이크로태스크까지
+        // 끝난 뒤 다시 검사해야 잠깐 0이 된 순간을 전체 완료로 오인하지 않는다.
+        setTimeout(() => {
+          if (_pendingSyncCount === 0) resolve(_batchFailures);
+          else _pendingSyncResolvers.push(check);
+        }, 0);
+      } else _pendingSyncResolvers.push(check);
     };
     check();
   });
+}
+
+export async function endSyncBatchAndWait(): Promise<number> {
+  const failures = await waitForSyncIdle();
+  _batchDepth = Math.max(0, _batchDepth - 1);
+  return failures;
+}
+
+// 예외가 나도 재계산과 서버 저장을 정리한 뒤 배치를 닫는다. 호출자는 이 Promise가 끝난 뒤
+// 로딩을 해제해야 중단된 실행과 재시도가 겹치지 않는다.
+export async function runBulkSyncBatch<T>(work: () => Promise<T>): Promise<{ value: T; syncFailures: number }> {
+  beginSyncBatch();
+  beginBulkRecalcSuspend();
+  let syncFailures = 0;
+  let value: T;
+  try {
+    value = await work();
+  } finally {
+    try {
+      await endBulkRecalcSuspend();
+    } finally {
+      syncFailures = await endSyncBatchAndWait();
+    }
+  }
+  return { value, syncFailures };
 }
 
 // add*/update*의 fetch(...).then(...).catch(...) 체인 전체를 감싸 "이 동기화가 언제 끝나는지"를
@@ -555,19 +586,21 @@ export async function addInstitutionsBulk(items: Omit<Institution, "id">[]): Pro
       body: JSON.stringify({ items }),
     });
     const data: { ok: boolean; institutions?: Institution[]; error?: string } = await res.json();
-    if (data.ok && data.institutions) {
-      _state = {
-        ..._state,
-        institutions: [..._state.institutions.filter((i) => !tempIds.has(i.id)), ...data.institutions],
-      };
-      notify();
-      return data.institutions;
-    }
-    _state = { ..._state, institutions: _state.institutions.filter((i) => !tempIds.has(i.id)) };
+    // 부분 성공 응답도 반영한다. 재시도에서 기존 기관이 반환될 수 있으므로 서버 ID로 합쳐
+    // 같은 기관을 중복해서 넣지 않고, 이번 요청의 임시 항목은 모두 제거한다.
+    const createdList = data.institutions ?? [];
+    const institutionsById = new Map(_state.institutions.filter((i) => !tempIds.has(i.id)).map((i) => [i.id, i]));
+    for (const institution of createdList) institutionsById.set(institution.id, institution);
+    _state = {
+      ..._state,
+      institutions: [...institutionsById.values()],
+    };
     notify();
-    console.error("기관 일괄 생성 실패:", data.error);
-    reportSyncFailure(items.length);
-    return [];
+    if (!data.ok) {
+      console.error("기관 일괄 생성 실패:", data.error);
+      reportSyncFailure(items.length - createdList.length);
+    }
+    return createdList;
   } catch (err) {
     _state = { ..._state, institutions: _state.institutions.filter((i) => !tempIds.has(i.id)) };
     notify();
@@ -1006,9 +1039,72 @@ export function deleteProjectTerms(projectId: string, termNumbers: number[]): vo
     .catch((err) => console.error("연차 삭제 실패(서버):", err));
 }
 
+// ============================================================
+// 대량 작업 중 재계산 지연
+// ============================================================
+// 참여기관마다 전체 배열을 검색하며 같은 과제를 재계산하는 비용을 줄인다. 수수료를 읽거나
+// 수정하는 후속 처리는 endBulkRecalcSuspend()로 계산과 서버 저장을 마친 뒤 실행해야 한다.
+let _bulkRecalcSuspendDepth = 0;
+const _pendingFeeRecalcProjectIds = new Set<string>();
+const _pendingBudgetRecalcProjectIds = new Set<string>();
+
+export function beginBulkRecalcSuspend(): void {
+  _bulkRecalcSuspendDepth++;
+}
+
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+// 중첩 호출을 고려해 깊이가 0으로 돌아왔을 때만 밀린 재계산을 실제로 실행한다. 과제 하나당 계산은
+// 여전히(그 과제만이 아니라 시스템 전체 termFees를 훑으므로) 가벼운 편이 아니라서, 건드린 고유
+// 과제 수 자체가 많으면(예: 몇백 개) 이 플러시만으로도 다시 한동안 화면이 멈춘 것처럼 보일 수
+// 있다 — 총 소요 시간을 줄이진 못하지만, 일정 개수마다 이벤트 루프에 제어권을 돌려줘 그 사이
+// 화면이 계속 그려지고 브라우저가 탭을 "응답 없음"으로 오판하지 않게 한다.
+const RECALC_YIELD_CHUNK = 25;
+
+export async function endBulkRecalcSuspend(): Promise<void> {
+  if (_bulkRecalcSuspendDepth === 0) return;
+  // 과제/참여기관 생성 응답이 실제 ID와 최종 상태로 반영될 때까지 보류 상태를 유지한다.
+  await waitForSyncIdle();
+  _bulkRecalcSuspendDepth--;
+  if (_bulkRecalcSuspendDepth > 0) return;
+  const feeIds = [...new Set([..._pendingFeeRecalcProjectIds].map(resolveProjectId))];
+  const budgetIds = [...new Set([..._pendingBudgetRecalcProjectIds].map(resolveProjectId))];
+  _pendingFeeRecalcProjectIds.clear();
+  _pendingBudgetRecalcProjectIds.clear();
+  const errors: unknown[] = [];
+  for (let i = 0; i < feeIds.length; i++) {
+    try {
+      autoGenerateTermFees(feeIds[i]);
+    } catch (err) {
+      errors.push(err);
+      console.error("일괄 수수료 재계산 실패:", feeIds[i], err);
+    }
+    if ((i + 1) % RECALC_YIELD_CHUNK === 0) await yieldToMain();
+  }
+  for (let i = 0; i < budgetIds.length; i++) {
+    try {
+      recalcProjectTotalBudget(budgetIds[i]);
+    } catch (err) {
+      errors.push(err);
+      console.error("일괄 사업비 재계산 실패:", budgetIds[i], err);
+    }
+    if ((i + 1) % RECALC_YIELD_CHUNK === 0) await yieldToMain();
+  }
+  // 서버가 발급한 수수료 ID까지 반영돼야 후속 PATCH가 임시 ID로 나가지 않는다.
+  await waitForSyncIdle();
+  if (errors.length > 0) throw new AggregateError(errors, `${errors.length}건의 재계산에 실패했습니다.`);
+}
+
 // 참여기관 사업비 합계로 과제의 총사업비를 다시 맞춘다 (감사로그를 남기지 않는 파생값 재계산 —
 // 엑셀 일괄등록처럼 참여기관을 프로그램적으로 추가/갱신한 뒤 사후 정리 용도).
 export function recalcProjectTotalBudget(projectId: string): void {
+  projectId = resolveProjectId(projectId);
+  if (_bulkRecalcSuspendDepth > 0) {
+    _pendingBudgetRecalcProjectIds.add(projectId);
+    return;
+  }
   const project = _state.projects.find((p) => p.id === projectId);
   if (!project) return;
   const total = _state.projectMembers
@@ -1057,6 +1153,9 @@ if (typeof window !== "undefined") hydrateProjectMembers();
 const _pendingMemberCreates = new Map<string, Promise<string>>();
 
 function persistProjectMember(item: ProjectMember): void {
+  item = { ...item, projectId: resolveProjectId(item.projectId) };
+  // 신규 과제의 생성 응답에서 실제 ID로 다시 저장한다. 임시 ID 요청을 실패로 집계하지 않는다.
+  if (item.projectId.startsWith("p-")) return;
   const promise = trackSync(
     throttledFetch("/api/project-members", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(item) })
       .then((res) => res.json())
@@ -1632,15 +1731,26 @@ function hydrateTermFees(): void {
 if (typeof window !== "undefined") hydrateTermFees();
 
 function persistTermFee(id: string, data: Partial<TermFee>): void {
-  fetch(`/api/term-fees/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+  if (id.startsWith("tf-")) {
+    console.error("연차수수료 수정 실패: 생성 요청의 서버 저장을 먼저 완료해야 합니다.");
+    reportSyncFailure();
+    return;
+  }
+  trackSync(throttledFetch(`/api/term-fees/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
     .then((res) => res.json())
     .then((res: { ok: boolean; termFee?: TermFee; error?: string }) => {
       if (res.ok && res.termFee) {
         _state = { ..._state, termFees: _state.termFees.map((f) => (f.id === id ? res.termFee! : f)) };
         notify();
-      } else if (!res.ok) console.error("연차수수료 수정 실패:", res.error);
+      } else {
+        console.error("연차수수료 수정 실패:", res.error);
+        reportSyncFailure();
+      }
     })
-    .catch((err) => console.error("연차수수료 수정 실패:", err));
+    .catch((err) => {
+      console.error("연차수수료 수정 실패:", err);
+      reportSyncFailure();
+    }));
 }
 
 export function addTermFee(data: Omit<TermFee, "id">): TermFee {
@@ -1689,7 +1799,7 @@ export function setTermOtherFirmHandled(
   otherFirmHandled: boolean
 ): void {
   const targets = _state.termFees.filter(
-    (f) => f.projectNumber === projectNumber && f.termYear === termYear && f.termNumber === termNumber
+    (f) => f.projectNumber === projectNumber && f.termYear === termYear && f.termNumber === termNumber && f.otherFirmHandled !== otherFirmHandled
   );
   if (targets.length === 0) return;
   const targetIds = new Set(targets.map((f) => f.id));
@@ -2015,6 +2125,7 @@ function issueContentPreview(content: string): string {
 }
 
 export function addProjectIssue(data: Omit<ProjectIssue, "id">): ProjectIssue {
+  data = { ...data, projectId: resolveProjectId(data.projectId) };
   const tempId = genId("pi");
   const item: ProjectIssue = { ...data, id: tempId };
   _state = { ..._state, projectIssues: [..._state.projectIssues, item] };
@@ -3201,6 +3312,11 @@ export function setDefaultSimpleNoticeTemplate(id: string): void {
 // ============================================================
 
 export function autoGenerateTermFees(projectId: string): void {
+  projectId = resolveProjectId(projectId);
+  if (_bulkRecalcSuspendDepth > 0) {
+    _pendingFeeRecalcProjectIds.add(projectId);
+    return;
+  }
   const project = _state.projects.find((p) => p.id === projectId);
   if (!project) return;
   // 완료된 과제는 정책·기관정보가 바뀌어도 재산정 대상에서 제외 — 과거 확정 내역을 그대로 보존한다.
@@ -3675,32 +3791,45 @@ export function autoGenerateTermFees(projectId: string): void {
   // addProject 쪽에서 실제 id로 다시 이 함수를 호출해 정상 동기화된다.
   const projectTermFees = _state.termFees.filter((f) => f.projectNumber === project.projectNumber);
   const projectTermFeeCalcs = _state.termFeeCalcs.filter((c) => c.projectId === project.id);
-  fetch(`/api/projects/${project.id}/sync-fees`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ termFees: projectTermFees, termFeeCalcs: projectTermFeeCalcs }),
-  })
-    .then((res) => res.json())
-    .then((res: { ok: boolean; termFees?: TermFee[]; error?: string }) => {
-      if (!res.ok) { console.error("연차수수료 동기화 실패(서버):", res.error); return; }
-      if (!res.termFees) return;
-      // 여기서 만든 termFees는 매번 새 임시 id(genId("tf"))를 달고 있어, 서버가 upsert한 실제 DB id와
-      // 다르다 — sync-fees는 id가 아니라 (기관×연차) 기준으로 upsert하기 때문에 서버는 정상 저장되지만,
-      // 로컬 상태는 계속 이 임시 id를 들고 있게 된다. 그 상태로 이 행에 개별 PATCH를 보내는 다른 동작
-      // (updateTermFee, setTermOtherFirmHandled 등)을 하면 서버가 그 임시 id를 실제 DB에서 못 찾아
-      // 조용히 실패한다(타회계법인 진행 체크가 저장은 되는 것처럼 보이다 사라지던 버그의 원인). 서버가
-      // 돌려준 실제 id로 즉시 교체해 이 문제를 없앤다.
-      const realByKey = new Map(res.termFees.map((f) => [`${f.termYear}|${f.termNumber}|${f.institutionId}`, f]));
-      _state = {
-        ..._state,
-        termFees: _state.termFees.map((f) => {
-          if (f.projectNumber !== project.projectNumber) return f;
-          return realByKey.get(`${f.termYear}|${f.termNumber}|${f.institutionId}`) ?? f;
-        }),
-      };
-      notify();
+  if (project.id.startsWith("p-")) return; // 과제 생성 응답에서 실제 ID로 다시 동기화한다.
+  // throttledFetch/trackSync를 거치지 않고 일반 fetch로 나가면 엑셀 대량 업로드 구간(다른 add*/update*
+  // 호출들과 함께 동시 요청 6개 제한을 받아야 함)에서 이 요청만 무제한으로 동시에 쏟아져 나가고,
+  // beginSyncBatch()/endSyncBatchAndWait() 집계에도 안 잡혀 실패해도 사용자에게 보이지 않았다.
+  trackSync(
+    throttledFetch(`/api/projects/${project.id}/sync-fees`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ termFees: projectTermFees, termFeeCalcs: projectTermFeeCalcs }),
     })
-    .catch((err) => console.error("연차수수료 동기화 실패(서버):", err));
+      .then((res) => res.json())
+      .then((res: { ok: boolean; termFees?: TermFee[]; error?: string }) => {
+        if (!res.ok) {
+          console.error("연차수수료 동기화 실패(서버):", res.error);
+          reportSyncFailure();
+          return;
+        }
+        if (!res.termFees) return;
+        // 여기서 만든 termFees는 매번 새 임시 id(genId("tf"))를 달고 있어, 서버가 upsert한 실제 DB id와
+        // 다르다 — sync-fees는 id가 아니라 (기관×연차) 기준으로 upsert하기 때문에 서버는 정상 저장되지만,
+        // 로컬 상태는 계속 이 임시 id를 들고 있게 된다. 그 상태로 이 행에 개별 PATCH를 보내는 다른 동작
+        // (updateTermFee, setTermOtherFirmHandled 등)을 하면 서버가 그 임시 id를 실제 DB에서 못 찾아
+        // 조용히 실패한다(타회계법인 진행 체크가 저장은 되는 것처럼 보이다 사라지던 버그의 원인). 서버가
+        // 돌려준 실제 id로 즉시 교체해 이 문제를 없앤다.
+        const realByKey = new Map(res.termFees.map((f) => [`${f.termYear}|${f.termNumber}|${f.institutionId}`, f]));
+        _state = {
+          ..._state,
+          termFees: _state.termFees.map((f) => {
+            if (f.projectNumber !== project.projectNumber) return f;
+            return realByKey.get(`${f.termYear}|${f.termNumber}|${f.institutionId}`) ?? f;
+          }),
+        };
+        notify();
+      })
+      .catch((err) => {
+        console.error("연차수수료 동기화 실패(서버):", err);
+        reportSyncFailure();
+      })
+  );
 }
 
 // ============================================================

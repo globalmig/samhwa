@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/db";
+import { prisma, withDbWriteSlot } from "@/lib/db";
 import { requireWriteAccess, SessionError } from "@/lib/session";
 import { getOrCreatePti } from "@/lib/pti-helper";
 import { toTermFee, type TermFeeWithRelations } from "@/lib/term-fee-mapper";
@@ -47,7 +47,7 @@ export async function POST(request: Request, { params }: Params) {
   // 실패하는 문제가 있었다.
   const upsertedTermFees: TermFeeWithRelations[] = [];
 
-  await prisma.$transaction(async (tx) => {
+  await withDbWriteSlot(() => prisma.$transaction(async (tx) => {
     // term_fee_calcs: 이 과제분 전체를 교체
     await tx.termFeeCalc.deleteMany({ where: { projectId } });
     for (const tfc of body.termFeeCalcs) {
@@ -126,7 +126,7 @@ export async function POST(request: Request, { params }: Params) {
     if (orphanIds.length > 0) {
       await tx.termFee.deleteMany({ where: { projectTermInstitutionId: { in: orphanIds } } });
     }
-  });
+  }));
 
   // 이 동작(자동 재계산 반영)은 사용자가 직접 하는 조작이 아니라 내부 시스템 처리라 사람이 보는
   // 변경이력에는 남기지 않는다 — 예전엔 매번 "termFeeSync" 항목이 찍혀 진짜 사용자 조작(과제 수정

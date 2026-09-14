@@ -3,6 +3,7 @@ import { requireWriteAccess, SessionError } from "@/lib/session";
 import { toInstitution } from "@/lib/institution-mapper";
 import { writeAuditLog } from "@/lib/audit";
 import type { Institution } from "@/lib/mock";
+import { formatBizNumber } from "@/lib/utils";
 
 export const runtime = "nodejs";
 
@@ -37,39 +38,74 @@ export async function POST(request: Request) {
   const created: Institution[] = [];
   for (let i = 0; i < items.length; i += CHUNK_SIZE) {
     const chunk = items.slice(i, i + CHUNK_SIZE);
-    const rows = await withDbWriteSlot(() =>
-      prisma.$transaction(async (tx) => {
-        const chunkRows = [];
-        for (const item of chunk) {
-          const row = await tx.institution.create({
-            data: {
-              institutionName: item.name,
-              businessNumber: item.bizNumber || null,
-              institutionType: item.type,
-              representativeName: item.representativeName || null,
-              phone: item.contactPhone || null,
-              email: item.contactEmail || null,
-              isActive: item.status !== "INACTIVE",
-              notes: item.note ?? null,
-              contacts: item.contactName
-                ? { create: [{ name: item.contactName, phone: item.contactPhone || null, email: item.contactEmail || null, isPrimary: true }] }
-                : undefined,
-            },
-            include: { contacts: true },
-          });
-          await writeAuditLog(tx, {
-            actorUserId: actor.userId,
-            entityType: "institution",
-            entityId: row.id,
-            entityLabel: row.institutionName,
-            action: "CREATE",
-          });
-          chunkRows.push(row);
+    try {
+      // 동시에 같은 기관을 등록한 요청과 경합하면 실패한 트랜잭션 전체를 다시 시작해
+      // 먼저 커밋된 기관을 재사용한다. 다른 오류는 재시도하지 않는다.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const rows = await withDbWriteSlot(() =>
+            prisma.$transaction(async (tx) => {
+              const chunkRows = [];
+              for (const item of chunk) {
+                const businessNumber = formatBizNumber(item.bizNumber ?? "").trim();
+                if (businessNumber) {
+                  const existing = await tx.institution.findFirst({
+                    where: { businessNumber: { in: [businessNumber, businessNumber.replace(/\D/g, ""), (item.bizNumber ?? "").trim()] } },
+                    include: { contacts: true },
+                  });
+                  if (existing) {
+                    // 응답 유실 후 재시도해도 기존 정보와 감사로그를 중복 생성하지 않는다.
+                    chunkRows.push(existing);
+                    continue;
+                  }
+                }
+                const row = await tx.institution.create({
+                  data: {
+                    institutionName: item.name,
+                    businessNumber: businessNumber || null,
+                    institutionType: item.type,
+                    representativeName: item.representativeName || null,
+                    phone: item.contactPhone || null,
+                    email: item.contactEmail || null,
+                    isActive: item.status !== "INACTIVE",
+                    notes: item.note ?? null,
+                    contacts: item.contactName
+                      ? { create: [{ name: item.contactName, phone: item.contactPhone || null, email: item.contactEmail || null, isPrimary: true }] }
+                      : undefined,
+                  },
+                  include: { contacts: true },
+                });
+                await writeAuditLog(tx, {
+                  actorUserId: actor.userId,
+                  entityType: "institution",
+                  entityId: row.id,
+                  entityLabel: row.institutionName,
+                  action: "CREATE",
+                });
+                chunkRows.push(row);
+              }
+              return chunkRows;
+            })
+          );
+          created.push(...rows.map(toInstitution));
+          break;
+        } catch (err) {
+          if (attempt < 2 && typeof err === "object" && err !== null && "code" in err && err.code === "P2002") continue;
+          throw err;
         }
-        return chunkRows;
-      })
-    );
-    created.push(...rows.map(toInstitution));
+      }
+    } catch (err) {
+      // 이 청크(최대 CHUNK_SIZE건)는 트랜잭션이라 통째로 롤백됐지만, 그 앞의 청크들은 이미 커밋돼
+      // DB에 남아있다. 여기서 그냥 던지면 클라이언트는 전체를 실패로 보고 이미 만든 것까지 로컬에서
+      // 롤백해버리는데, 그 상태로 재시도하면 이미 DB에 있는 기관을 businessNumber unique 제약 때문에
+      // 다시 못 만들어 계속 실패한다. 지금까지 성공한 것만이라도 institutions에 담아 돌려줘서,
+      // 클라이언트가 그만큼은 로컬 상태에 반영하고 실패분만 다시 시도할 수 있게 한다.
+      console.error("기관 일괄 생성 중 청크 실패:", err);
+      return Response.json(
+        { ok: false, error: "일부 기관 생성에 실패했습니다.", institutions: created },
+        { status: 500 }
+      );
+    }
   }
 
   return Response.json({ ok: true, institutions: created });

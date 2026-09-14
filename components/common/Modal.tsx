@@ -9,19 +9,22 @@ interface Props {
   // true면 내용 길이와 무관하게 높이를 고정한다(85vh) — 여러 단계/탭을 오가며 내용 길이가
   // 들쭉날쭉한 마법사형 모달에서, 단계를 넘길 때마다 모달 크기가 늘었다 줄었다 하지 않게 한다.
   fixedHeight?: boolean;
+  // true면 X 버튼·Esc로 닫을 수 없다 — 엑셀 대량 업로드처럼 닫으면 진행 중이던 등록을 사용자가
+  // 지켜볼 방법이 없어지는(모달만 사라지고 서버 반영은 백그라운드에서 계속되는) 동작 중에 쓴다.
+  preventClose?: boolean;
   children: React.ReactNode;
 }
 
 const sizeClass = { sm: "max-w-md", md: "max-w-xl", lg: "max-w-2xl", xl: "max-w-4xl" };
 
-export default function Modal({ title, onClose, size = "md", fixedHeight = false, children }: Props) {
+export default function Modal({ title, onClose, size = "md", fixedHeight = false, preventClose = false, children }: Props) {
   useEffect(() => {
     function handler(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape" && !preventClose) onClose();
     }
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  }, [onClose, preventClose]);
 
   return (
     // 바깥(회색) 영역은 클릭해도 닫히지 않는다 — 안에서 텍스트를 드래그로 선택하다 마우스를 바깥에서
@@ -33,7 +36,8 @@ export default function Modal({ title, onClose, size = "md", fixedHeight = false
           <h2 className="text-base font-semibold text-slate-800">{title}</h2>
           <button
             onClick={onClose}
-            className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+            disabled={preventClose}
+            className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
           >
             <svg viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5">
               <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22z" />
