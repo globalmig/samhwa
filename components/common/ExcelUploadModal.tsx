@@ -2624,6 +2624,31 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
     const memberByProjectAndInst = new Map<string, ProjectMember>();
     for (const pm of projectMembers) memberByProjectAndInst.set(`${pm.projectId}|${pm.institutionId}`, pm);
 
+    // 전담기관 "공문·세금계산서 발송 대상"이 주관기관만(LEAD_ONLY)이면 참여(공동)기관은 애초에
+    // 공문을 받지 않으므로, 그 기관은 연락처가 없어도 문제되지 않는다 — 주관+참여기관 모두
+    // (LEAD_AND_PARTICIPANTS)일 때만 참여기관 연락처 누락도 경고한다. 주관기관은 발송 대상 설정과
+    // 무관하게 항상 연락처가 있어야 한다. 아직 등록되지 않은 신규 과제는 파일에 적힌 전담기관명으로
+    // 판별하고(등록 로직과 동일하게 정식명·약칭·코드 순으로 매칭), 못 찾으면(신규 전담기관) 생성 시
+    // 기본값인 LEAD_ONLY로 취급한다.
+    const agencyExactMap = new Map<string, FundingAgency>();
+    for (const a of fundingAgencies) {
+      agencyExactMap.set(a.name, a);
+      if (a.shortName) agencyExactMap.set(a.shortName, a);
+      if (a.code) agencyExactMap.set(a.code, a);
+    }
+    const agencyNameByNormNum = new Map<string, string>();
+    for (const row of previewRows) {
+      const normNum = normProjectNum(row.projectNumber);
+      if (row.agencyName && !agencyNameByNormNum.has(normNum)) agencyNameByNormNum.set(normNum, row.agencyName);
+    }
+    function contactRequiredForNonLead(normNum: string): boolean {
+      const existingProject = projectByNormNum.get(normNum);
+      const agency = existingProject
+        ? fundingAgencies.find((a) => a.id === existingProject.agencyId)
+        : agencyExactMap.get(agencyNameByNormNum.get(normNum) ?? "");
+      return (agency?.noticeRecipientScope ?? "LEAD_ONLY") === "LEAD_AND_PARTICIPANTS";
+    }
+
     const warnings: { key: string; projectNumber: string; projectName: string; institutionName: string; missing: string[] }[] = [];
     for (const agg of memberAggregates) {
       const normNum = normProjectNum(agg.projectNumber);
@@ -2636,10 +2661,11 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       const hasContact = !!agg.contactEmail || !!existingMember?.contactEmail;
       const hasBudget = memberAggregateHasAnyBudget(agg)
         || (existingMember?.annualBudgets ?? []).some((b) => b.cashBudget > 0 || b.inKindBudget > 0);
+      const contactRequired = agg.role === "LEAD" || contactRequiredForNonLead(normNum);
 
       const missing: string[] = [];
       if (!hasBudget) missing.push("사업비");
-      if (!hasContact) missing.push("연락처(실무자 메일)");
+      if (contactRequired && !hasContact) missing.push("연락처(실무자 메일)");
       if (missing.length === 0) continue;
 
       const scalarInfo = scalarAggregates.get(normNum);
@@ -2652,7 +2678,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       });
     }
     return warnings;
-  }, [memberAggregates, projects, institutions, projectMembers, scalarAggregates]);
+  }, [memberAggregates, projects, institutions, projectMembers, scalarAggregates, fundingAgencies, previewRows]);
 
   function toggleProjectUpdate(normNum: string, next: boolean) {
     setProjectUpdateChoices((prev) => ({ ...prev, [normNum]: next }));
