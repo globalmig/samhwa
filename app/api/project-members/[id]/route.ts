@@ -51,73 +51,83 @@ export async function PATCH(request: Request, { params }: Params) {
   const hasSharedPatch = sharedKeys.some((k) => k in body);
   const newRole = body.role !== undefined ? (body.role === "LEAD" ? "MAIN" : "PARTICIPATING") : undefined;
 
-  const member = await withDbWriteSlot(() => prisma.$transaction(async (tx) => {
-    if (hasSharedPatch || newRole) {
-      for (const row of siblings) {
-        const rowExtra: SharedExtra = row.extraData ? JSON.parse(row.extraData) : {};
-        const nextExtra = { ...rowExtra };
-        for (const key of sharedKeys) {
-          if (key in body) nextExtra[key] = (body as Record<string, unknown>)[key];
+  let member;
+  try {
+    member = await withDbWriteSlot(() => prisma.$transaction(async (tx) => {
+      if (hasSharedPatch || newRole) {
+        for (const row of siblings) {
+          const rowExtra: SharedExtra = row.extraData ? JSON.parse(row.extraData) : {};
+          const nextExtra = { ...rowExtra };
+          for (const key of sharedKeys) {
+            if (key in body) nextExtra[key] = (body as Record<string, unknown>)[key];
+          }
+          await tx.projectTermInstitution.update({
+            where: { id: row.id },
+            data: { extraData: JSON.stringify(nextExtra), role: newRole ?? undefined },
+          });
         }
-        await tx.projectTermInstitution.update({
-          where: { id: row.id },
-          data: { extraData: JSON.stringify(nextExtra), role: newRole ?? undefined },
-        });
       }
-    }
 
-    if (body.annualBudgets && body.annualBudgets.length > 0) {
-      const role = newRole ?? anchor.role;
-      for (const ab of body.annualBudgets) {
-        const budget = BigInt(Math.round(ab.cashBudget + ab.inKindBudget));
-        const ptiId = await getOrCreatePti(tx, projectId, ab.termNumber, institutionId, role, budget, ab.termYear);
-        const row = await tx.projectTermInstitution.findUniqueOrThrow({ where: { id: ptiId } });
-        const rowExtra: SharedExtra = row.extraData ? JSON.parse(row.extraData) : {};
+      if (body.annualBudgets && body.annualBudgets.length > 0) {
+        const role = newRole ?? anchor.role;
+        for (const ab of body.annualBudgets) {
+          const budget = BigInt(Math.round(ab.cashBudget + ab.inKindBudget));
+          const ptiId = await getOrCreatePti(tx, projectId, ab.termNumber, institutionId, role, budget, ab.termYear);
+          const row = await tx.projectTermInstitution.findUniqueOrThrow({ where: { id: ptiId } });
+          const rowExtra: SharedExtra = row.extraData ? JSON.parse(row.extraData) : {};
+          await tx.projectTermInstitution.update({
+            where: { id: ptiId },
+            data: {
+              projectBudget: budget,
+              extraData: JSON.stringify({
+                ...rowExtra, cashBudget: ab.cashBudget, inKindBudget: ab.inKindBudget,
+                termStartDate: ab.termStartDate, termEndDate: ab.termEndDate, auditFirm: ab.auditFirm,
+              }),
+            },
+          });
+        }
+      } else if (body.budget !== undefined || body.cashBudget !== undefined || body.inKindBudget !== undefined) {
+        // annualBudgets 없이 단일 예산만 바뀐 경우 — 기존 대표 행(anchor)의 예산만 갱신
+        const rowExtra: SharedExtra = anchor.extraData ? JSON.parse(anchor.extraData) : {};
         await tx.projectTermInstitution.update({
-          where: { id: ptiId },
+          where: { id: anchor.id },
           data: {
-            projectBudget: budget,
+            projectBudget: body.budget !== undefined ? BigInt(Math.round(body.budget)) : undefined,
             extraData: JSON.stringify({
-              ...rowExtra, cashBudget: ab.cashBudget, inKindBudget: ab.inKindBudget,
-              termStartDate: ab.termStartDate, termEndDate: ab.termEndDate, auditFirm: ab.auditFirm,
+              ...rowExtra,
+              cashBudget: body.cashBudget !== undefined ? body.cashBudget : rowExtra.cashBudget,
+              inKindBudget: body.inKindBudget !== undefined ? body.inKindBudget : rowExtra.inKindBudget,
             }),
           },
         });
       }
-    } else if (body.budget !== undefined || body.cashBudget !== undefined || body.inKindBudget !== undefined) {
-      // annualBudgets 없이 단일 예산만 바뀐 경우 — 기존 대표 행(anchor)의 예산만 갱신
-      const rowExtra: SharedExtra = anchor.extraData ? JSON.parse(anchor.extraData) : {};
-      await tx.projectTermInstitution.update({
-        where: { id: anchor.id },
-        data: {
-          projectBudget: body.budget !== undefined ? BigInt(Math.round(body.budget)) : undefined,
-          extraData: JSON.stringify({
-            ...rowExtra,
-            cashBudget: body.cashBudget !== undefined ? body.cashBudget : rowExtra.cashBudget,
-            inKindBudget: body.inKindBudget !== undefined ? body.inKindBudget : rowExtra.inKindBudget,
-          }),
-        },
+
+      const updatedRows = await tx.projectTermInstitution.findMany({
+        where: { institutionId, projectTerm: { projectId } },
+        include: PTI_INCLUDE,
       });
-    }
+      const [afterMember] = groupPtisToMembers(updatedRows);
 
-    const updatedRows = await tx.projectTermInstitution.findMany({
-      where: { institutionId, projectTerm: { projectId } },
-      include: PTI_INCLUDE,
-    });
-    const [afterMember] = groupPtisToMembers(updatedRows);
+      await writeAuditLog(tx, {
+        actorUserId: actor.userId,
+        entityType: "projectMember",
+        entityId: id,
+        entityLabel: `${afterMember.projectNumber} · ${afterMember.institutionName}`,
+        action: "UPDATE",
+        before: beforeMember as unknown as Record<string, unknown>,
+        after: afterMember as unknown as Record<string, unknown>,
+      });
 
-    await writeAuditLog(tx, {
-      actorUserId: actor.userId,
-      entityType: "projectMember",
-      entityId: id,
-      entityLabel: `${afterMember.projectNumber} · ${afterMember.institutionName}`,
-      action: "UPDATE",
-      before: beforeMember as unknown as Record<string, unknown>,
-      after: afterMember as unknown as Record<string, unknown>,
-    });
-
-    return afterMember;
-  }));
+      return afterMember;
+    }));
+  } catch (err) {
+    // 트랜잭션 안에서 터지는 에러(BigInt 변환 실패, 제약조건 위반 등)를 그대로 흘려보내면
+    // Next.js가 빈 본문의 500을 응답하고, 클라이언트는 res.json()에서 "Unexpected end of
+    // JSON input"이라는 진짜 원인과 무관한 에러만 보게 된다 — 여기서 잡아 서버 로그에 실제
+    // 원인을 남기고, 클라이언트에도 파싱 가능한 에러 응답을 준다.
+    console.error(`[project-members PATCH] id=${id} body=${JSON.stringify(body)} 처리 중 오류:`, err);
+    return Response.json({ ok: false, error: "참여기관 정보를 수정하지 못했습니다. 잠시 후 다시 시도해주세요." }, { status: 500 });
+  }
 
   return Response.json({ ok: true, member });
 }
