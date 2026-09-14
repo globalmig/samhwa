@@ -1552,6 +1552,7 @@ function PreviewStep({
   projectUpdates,
   updateChoices,
   onToggleUpdate,
+  onToggleAllUpdates,
   calendarMismatches,
   stageSkipWarnings,
   memberDataWarnings,
@@ -1569,6 +1570,7 @@ function PreviewStep({
   projectUpdates: ProjectUpdateInfo[];
   updateChoices: Record<string, boolean>;
   onToggleUpdate: (normNum: string, next: boolean) => void;
+  onToggleAllUpdates: (normNums: string[], next: boolean) => void;
   calendarMismatches: TermCalendarMismatch[];
   stageSkipWarnings: { normNum: string; projectNumber: string; projectName: string; reasons: string[] }[];
   memberDataWarnings: { key: string; projectNumber: string; projectName: string; institutionName: string; missing: string[] }[];
@@ -1868,6 +1870,16 @@ function PreviewStep({
                       <div className="px-4 py-2 bg-slate-50 flex items-center gap-1.5">
                         <FiRefreshCw size={13} className="text-slate-400 shrink-0" />
                         <p className="text-xs font-semibold text-slate-700">기존 과제 갱신 ({projectUpdates.length}건)</p>
+                        <button
+                          type="button"
+                          onClick={() => onToggleAllUpdates(
+                            projectUpdates.map((u) => u.normNum),
+                            !projectUpdates.every((u) => updateChoices[u.normNum] ?? defaultChoiceForStatus(u.status))
+                          )}
+                          className="ml-auto text-[11px] font-medium text-blue-600 hover:text-blue-700"
+                        >
+                          {projectUpdates.every((u) => updateChoices[u.normNum] ?? defaultChoiceForStatus(u.status)) ? "전체 해제" : "전체 선택"}
+                        </button>
                       </div>
                       <div className="divide-y divide-slate-100">
                         {projectUpdates.map((u) => {
@@ -2682,6 +2694,17 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
 
   function toggleProjectUpdate(normNum: string, next: boolean) {
     setProjectUpdateChoices((prev) => ({ ...prev, [normNum]: next }));
+  }
+
+  // "기존 과제 갱신" 목록 상단의 전체 선택/해제 — 재제출(same)·과거 연차(behind)처럼 기본 비체크인
+  // 상태가 한 파일에 수십~수백 건 섞여 있으면 한 건씩 누르기 번거로워서, 목록을 훑어본 뒤 한 번에
+  // 승인/해제할 수 있게 한다. 개별 체크박스는 그대로 남겨둬 특정 건만 예외 처리할 수 있다.
+  function toggleAllProjectUpdates(normNums: string[], next: boolean) {
+    setProjectUpdateChoices((prev) => {
+      const updated = { ...prev };
+      for (const normNum of normNums) updated[normNum] = next;
+      return updated;
+    });
   }
 
   // 이미 참여기관으로 연결된 (과제, 기관) 쌍은 제외하고 새로 등록될 참여기관 목록을 계산.
@@ -3955,6 +3978,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             projectUpdates={projectUpdates}
             updateChoices={projectUpdateChoices}
             onToggleUpdate={toggleProjectUpdate}
+            onToggleAllUpdates={toggleAllProjectUpdates}
             calendarMismatches={calendarMismatches}
             stageSkipWarnings={stageSkipWarnings}
             memberDataWarnings={memberDataWarnings}
