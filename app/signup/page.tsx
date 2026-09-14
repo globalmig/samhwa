@@ -3,12 +3,10 @@
 import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import Script from "next/script";
 import { useStore, addUser } from "@/lib/store";
 import { todayKST } from "@/lib/utils";
 import { verifyTurnstileToken } from "@/lib/turnstile";
-
-const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
+import TurnstileWidget from "@/components/common/TurnstileWidget";
 
 const inputCls = "w-full text-sm border border-slate-200 rounded-lg px-3 py-2.5 text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-colors";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -132,7 +130,7 @@ export default function SignupPage() {
                   <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="비밀번호를 다시 입력하세요" autoComplete="new-password" className={inputCls} />
                 </div>
 
-                <div className="cf-turnstile" data-sitekey={TURNSTILE_SITE_KEY} data-action="turnstile-spin-v1" />
+                <TurnstileWidget />
 
                 {error && (
                   <div className="flex items-center gap-2 text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2.5">
@@ -147,8 +145,6 @@ export default function SignupPage() {
                   {submitting ? "처리 중..." : "가입 신청"}
                 </button>
               </form>
-
-              <Script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer strategy="afterInteractive" />
 
               <p className="text-center text-xs text-slate-500 mt-5">
                 이미 계정이 있으신가요?{" "}

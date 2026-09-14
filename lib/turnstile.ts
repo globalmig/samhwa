@@ -1,6 +1,10 @@
 declare global {
   interface Window {
-    turnstile?: { reset: (widgetId?: string) => void };
+    turnstile?: {
+      render: (container: HTMLElement, options: { sitekey?: string; action?: string }) => string;
+      remove: (widgetId: string) => void;
+      reset: (widgetId?: string) => void;
+    };
   }
 }
 

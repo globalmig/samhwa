@@ -4,11 +4,9 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
-import Script from "next/script";
 import { login, useAuth, initAuth, getCurrentUser } from "@/lib/auth";
 import { defaultLandingPath } from "@/lib/permissions";
-
-const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
+import TurnstileWidget from "@/components/common/TurnstileWidget";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -103,7 +101,7 @@ export default function LoginPage() {
               />
             </div>
 
-            <div className="cf-turnstile" data-sitekey={TURNSTILE_SITE_KEY} data-action="turnstile-spin-v1" />
+            <TurnstileWidget />
 
             {error && (
               <div className="flex items-center gap-2 text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2.5">
@@ -122,8 +120,6 @@ export default function LoginPage() {
               {submitting ? "로그인 중..." : "로그인"}
             </button>
           </form>
-
-          <Script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer strategy="afterInteractive" />
 
           <div className="flex items-center justify-center gap-3 mt-5 text-xs text-slate-500">
             <Link href="/find-id" className="hover:text-blue-600 hover:underline transition-colors">아이디 찾기</Link>
