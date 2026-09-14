@@ -14,7 +14,11 @@ function turnstileWorkerOrigin(): string | null {
   }
 }
 
-const connectSrc = ["'self'", turnstileWorkerOrigin()].filter(Boolean).join(" ");
+// Turnstile 위젯 스크립트 자체가 challenges.cloudflare.com으로 내부 요청(fetch/XHR)을 보낸다 —
+// script-src/frame-src에만 이 출처를 허용하고 connect-src에서 빠뜨리면, 그 요청이 CSP에 막혀
+// 위젯(체크박스)이 아예 렌더링되지 않는다(Cloudflare Turnstile 공식 CSP 가이드가 요구하는 세 곳
+// 중 하나였는데 여기만 빠져 있었음).
+const connectSrc = ["'self'", TURNSTILE_ORIGIN, turnstileWorkerOrigin()].filter(Boolean).join(" ");
 
 // App Router가 하이드레이션/스트리밍에 쓰는 인라인 <script>(self.__next_f.push(...))는
 // 정적으로 미리 렌더링되는 페이지(예: /login)에도 들어가는데, 이런 페이지는 요청마다
