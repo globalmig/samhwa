@@ -1,4 +1,4 @@
-import { prisma, withDbWriteSlot } from "@/lib/db";
+import { prisma, withDbWriteSlot, describeDbWriteError } from "@/lib/db";
 import { requireWriteAccess, SessionError } from "@/lib/session";
 import { toProject } from "@/lib/project-mapper";
 import { writeAuditLog } from "@/lib/audit";
@@ -92,41 +92,53 @@ export async function DELETE(_request: Request, { params }: Params) {
   const target = await prisma.project.findUnique({ where: { id } });
   if (!target) return Response.json({ ok: false, error: "과제를 찾을 수 없습니다." }, { status: 404 });
 
-  const terms = await prisma.projectTerm.findMany({ where: { projectId: id }, select: { id: true } });
-  const termIds = terms.map((t) => t.id);
-  const ptis = await prisma.projectTermInstitution.findMany({ where: { projectTermId: { in: termIds } }, select: { id: true } });
-  const ptiIds = ptis.map((p) => p.id);
-  const receivables = await prisma.receivable.findMany({ where: { projectTermInstitutionId: { in: ptiIds } }, select: { id: true } });
-  const receivableIds = receivables.map((r) => r.id);
-  const taxInvoices = await prisma.taxInvoice.findMany({ where: { projectTermInstitutionId: { in: ptiIds } }, select: { id: true } });
-  const taxInvoiceIds = taxInvoices.map((t) => t.id);
-  const settlements = await prisma.settlement.findMany({ where: { projectTermInstitutionId: { in: ptiIds } }, select: { id: true } });
-  const settlementIds = settlements.map((s) => s.id);
+  // PATCH(withDbWriteSlot)와 달리 이 삭제는 연결 테이블을 10곳 넘게 순차 조회·삭제하는 무거운
+  // 작업이라, 동시성 제한과 에러 처리 없이는 일괄삭제 시 원격 DB 커넥션 풀이 고갈돼 일부 요청이
+  // 원인 불명의 빈 500으로 실패한다(엑셀 대량 업로드에서 겪은 것과 같은 문제 — describeDbWriteError
+  // 참고). 프론트(deleteProject)는 실패 응답을 받으면 로컬 상태를 되돌리므로, 이 안에서 던지는
+  // 예외가 빈 500이 아니라 파싱 가능한 에러 응답으로 나가야 그 되돌림이 실제로 일어난다.
+  try {
+    await withDbWriteSlot(async () => {
+      const terms = await prisma.projectTerm.findMany({ where: { projectId: id }, select: { id: true } });
+      const termIds = terms.map((t) => t.id);
+      const ptis = await prisma.projectTermInstitution.findMany({ where: { projectTermId: { in: termIds } }, select: { id: true } });
+      const ptiIds = ptis.map((p) => p.id);
+      const receivables = await prisma.receivable.findMany({ where: { projectTermInstitutionId: { in: ptiIds } }, select: { id: true } });
+      const receivableIds = receivables.map((r) => r.id);
+      const taxInvoices = await prisma.taxInvoice.findMany({ where: { projectTermInstitutionId: { in: ptiIds } }, select: { id: true } });
+      const taxInvoiceIds = taxInvoices.map((t) => t.id);
+      const settlements = await prisma.settlement.findMany({ where: { projectTermInstitutionId: { in: ptiIds } }, select: { id: true } });
+      const settlementIds = settlements.map((s) => s.id);
 
-  await prisma.$transaction(async (tx) => {
-    await tx.paymentHistory.deleteMany({ where: { receivableId: { in: receivableIds } } });
-    await tx.taxInvoiceHistory.deleteMany({ where: { taxInvoiceId: { in: taxInvoiceIds } } });
-    await tx.settlementHistory.deleteMany({ where: { settlementId: { in: settlementIds } } });
-    await tx.receivable.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } });
-    await tx.taxInvoice.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } });
-    await tx.claim.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } });
-    await tx.termFee.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } });
-    await tx.unclaimedFee.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } });
-    await tx.settlement.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } });
-    await tx.projectTermInstitution.deleteMany({ where: { id: { in: ptiIds } } });
-    await tx.projectTerm.deleteMany({ where: { projectId: id } });
-    await tx.termFeeCalc.deleteMany({ where: { projectId: id } });
-    await tx.projectIssue.deleteMany({ where: { projectId: id } });
-    await tx.project.delete({ where: { id } });
+      await prisma.$transaction(async (tx) => {
+        await tx.paymentHistory.deleteMany({ where: { receivableId: { in: receivableIds } } });
+        await tx.taxInvoiceHistory.deleteMany({ where: { taxInvoiceId: { in: taxInvoiceIds } } });
+        await tx.settlementHistory.deleteMany({ where: { settlementId: { in: settlementIds } } });
+        await tx.receivable.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } });
+        await tx.taxInvoice.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } });
+        await tx.claim.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } });
+        await tx.termFee.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } });
+        await tx.unclaimedFee.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } });
+        await tx.settlement.deleteMany({ where: { projectTermInstitutionId: { in: ptiIds } } });
+        await tx.projectTermInstitution.deleteMany({ where: { id: { in: ptiIds } } });
+        await tx.projectTerm.deleteMany({ where: { projectId: id } });
+        await tx.termFeeCalc.deleteMany({ where: { projectId: id } });
+        await tx.projectIssue.deleteMany({ where: { projectId: id } });
+        await tx.project.delete({ where: { id } });
 
-    await writeAuditLog(tx, {
-      actorUserId: actor.userId,
-      entityType: "project",
-      entityId: target.id,
-      entityLabel: target.projectName,
-      action: "DELETE",
+        await writeAuditLog(tx, {
+          actorUserId: actor.userId,
+          entityType: "project",
+          entityId: target.id,
+          entityLabel: target.projectName,
+          action: "DELETE",
+        });
+      });
     });
-  });
+  } catch (err) {
+    console.error("과제 삭제 실패:", err);
+    return Response.json({ ok: false, error: describeDbWriteError(err, "과제를 삭제하지 못했습니다.") }, { status: 500 });
+  }
 
   return Response.json({ ok: true });
 }

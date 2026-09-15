@@ -1102,9 +1102,19 @@ export function updateProject(id: string, data: Partial<Project>): void {
 // 과제 삭제 시 연결된 참여기관·수수료·이슈·미청구액·미수금·세금계산서까지 함께 정리해
 // 존재하지 않는 과제를 참조하는 레코드가 남지 않도록 한다 (발송 이력은 과거 발송 사실 자체를 보존하기 위해 남겨둔다).
 export function deleteProject(id: string): void {
-  const item = _state.projects.find((p) => p.id === id);
-  if (!item) return;
+  const found = _state.projects.find((p) => p.id === id);
+  if (!found) return;
+  const item: Project = found;
   const num = item.projectNumber;
+  const removedMembers = _state.projectMembers.filter((m) => m.projectId === id);
+  const removedTermFees = _state.termFees.filter((f) => f.projectNumber === num);
+  const removedTermFeeCalcs = _state.termFeeCalcs.filter((c) => c.projectNumber === num);
+  const removedIssues = _state.projectIssues.filter((i) => i.projectId === id);
+  const removedUnclaimedFees = _state.unclaimedFees.filter((u) => u.projectNumber === num);
+  const removedReceivables = _state.receivables.filter((r) => r.projectNumber === num);
+  const removedTaxInvoices = _state.taxInvoices.filter((t) => t.projectNumber === num);
+  const removedSettlements = _state.settlements.filter((s) => s.projectNumber === num);
+
   _state = {
     ..._state,
     projects: _state.projects.filter((p) => p.id !== id),
@@ -1120,12 +1130,38 @@ export function deleteProject(id: string): void {
   record("project", id, item.projectName, "DELETE");
   notify();
 
+  // 서버 삭제가 실패해도 로컬에서는 이미 지워진 상태라 새로고침 전까지 "삭제 성공"으로 착각하게
+  // 된다 — addProject처럼 실패 시 되돌려, 새로고침 없이도 화면이 실제 서버 상태와 다시 일치하게 한다.
+  function restore() {
+    _state = {
+      ..._state,
+      projects: _state.projects.some((p) => p.id === id) ? _state.projects : [..._state.projects, item],
+      projectMembers: [..._state.projectMembers, ...removedMembers.filter((m) => !_state.projectMembers.some((x) => x.id === m.id))],
+      termFees: [..._state.termFees, ...removedTermFees.filter((f) => !_state.termFees.some((x) => x.id === f.id))],
+      termFeeCalcs: [..._state.termFeeCalcs, ...removedTermFeeCalcs.filter((c) => !_state.termFeeCalcs.some((x) => x.id === c.id))],
+      projectIssues: [..._state.projectIssues, ...removedIssues.filter((i) => !_state.projectIssues.some((x) => x.id === i.id))],
+      unclaimedFees: [..._state.unclaimedFees, ...removedUnclaimedFees.filter((u) => !_state.unclaimedFees.some((x) => x.id === u.id))],
+      receivables: [..._state.receivables, ...removedReceivables.filter((r) => !_state.receivables.some((x) => x.id === r.id))],
+      taxInvoices: [..._state.taxInvoices, ...removedTaxInvoices.filter((t) => !_state.taxInvoices.some((x) => x.id === t.id))],
+      settlements: [..._state.settlements, ...removedSettlements.filter((s) => !_state.settlements.some((x) => x.id === s.id))],
+    };
+    notify();
+  }
+
   fetch(`/api/projects/${id}`, { method: "DELETE" })
     .then((res) => res.json())
     .then((res: { ok: boolean; error?: string }) => {
-      if (!res.ok) console.error("과제 삭제 실패(서버):", res.error);
+      if (!res.ok) {
+        console.error("과제 삭제 실패(서버):", res.error);
+        reportSyncFailure(1, `과제: ${item.projectNumber} ${item.projectName}`);
+        restore();
+      }
     })
-    .catch((err) => console.error("과제 삭제 실패(서버):", err));
+    .catch((err) => {
+      console.error("과제 삭제 실패(서버):", err);
+      reportSyncFailure(1, `과제: ${item.projectNumber} ${item.projectName}`);
+      restore();
+    });
 }
 
 // 과제 하나를 통째로 지우지 않고, 특정 연차(들)의 수수료·세금계산서·미청구·미수금 데이터만 지운다 —
