@@ -2,6 +2,7 @@ import { prisma, withDbWriteSlot } from "@/lib/db";
 import { requireWriteAccess, SessionError } from "@/lib/session";
 import { toInstitution } from "@/lib/institution-mapper";
 import { writeAuditLog } from "@/lib/audit";
+import { invalidateCache, INSTITUTIONS_CACHE_KEY } from "@/lib/server-cache";
 import type { Institution } from "@/lib/mock";
 import { formatBizNumber } from "@/lib/utils";
 
@@ -101,6 +102,7 @@ export async function POST(request: Request) {
       // 다시 못 만들어 계속 실패한다. 지금까지 성공한 것만이라도 institutions에 담아 돌려줘서,
       // 클라이언트가 그만큼은 로컬 상태에 반영하고 실패분만 다시 시도할 수 있게 한다.
       console.error("기관 일괄 생성 중 청크 실패:", err);
+      if (created.length > 0) invalidateCache(INSTITUTIONS_CACHE_KEY);
       return Response.json(
         { ok: false, error: "일부 기관 생성에 실패했습니다.", institutions: created },
         { status: 500 }
@@ -108,5 +110,6 @@ export async function POST(request: Request) {
     }
   }
 
+  if (created.length > 0) invalidateCache(INSTITUTIONS_CACHE_KEY);
   return Response.json({ ok: true, institutions: created });
 }

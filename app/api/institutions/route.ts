@@ -2,9 +2,12 @@ import { prisma, withDbWriteSlot } from "@/lib/db";
 import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
 import { toInstitution } from "@/lib/institution-mapper";
 import { writeAuditLog } from "@/lib/audit";
+import { cached, invalidateCache, INSTITUTIONS_CACHE_KEY } from "@/lib/server-cache";
 import type { Institution } from "@/lib/mock";
 
 export const runtime = "nodejs";
+
+const INSTITUTIONS_CACHE_TTL_MS = 60_000;
 
 export async function GET() {
   try {
@@ -13,8 +16,13 @@ export async function GET() {
     if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
     throw err;
   }
-  const rows = await prisma.institution.findMany({ include: { contacts: true }, orderBy: { createdAt: "asc" } });
-  return Response.json({ ok: true, institutions: rows.map(toInstitution) });
+  // 기관 목록도 전담기관과 마찬가지로 등록·수정이 드문 조회성 데이터라 TTL 캐시로 DB 왕복을
+  // 줄인다 — 아래 write 라우트들(단건/일괄 생성, 수정, 삭제)이 변경 시 즉시 무효화한다.
+  const institutions = await cached(INSTITUTIONS_CACHE_KEY, INSTITUTIONS_CACHE_TTL_MS, async () => {
+    const rows = await prisma.institution.findMany({ include: { contacts: true }, orderBy: { createdAt: "asc" } });
+    return rows.map(toInstitution);
+  });
+  return Response.json({ ok: true, institutions });
 }
 
 export async function POST(request: Request) {
@@ -64,5 +72,6 @@ export async function POST(request: Request) {
     return row;
   }));
 
+  invalidateCache(INSTITUTIONS_CACHE_KEY);
   return Response.json({ ok: true, institution: toInstitution(created) });
 }

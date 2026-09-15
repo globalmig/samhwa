@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { requireWriteAccess, SessionError } from "@/lib/session";
 import { toInstitution } from "@/lib/institution-mapper";
 import { writeAuditLog } from "@/lib/audit";
+import { invalidateCache, INSTITUTIONS_CACHE_KEY } from "@/lib/server-cache";
 import type { Institution } from "@/lib/mock";
 
 export const runtime = "nodejs";
@@ -72,6 +73,7 @@ export async function PATCH(request: Request, { params }: Params) {
     return full;
   });
 
+  invalidateCache(INSTITUTIONS_CACHE_KEY);
   return Response.json({ ok: true, institution: toInstitution(updated) });
 }
 
@@ -109,5 +111,6 @@ export async function DELETE(_request: Request, { params }: Params) {
     throw err;
   }
 
+  invalidateCache(INSTITUTIONS_CACHE_KEY);
   return Response.json({ ok: true });
 }

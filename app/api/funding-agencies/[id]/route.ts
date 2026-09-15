@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { requireWriteAccess, SessionError } from "@/lib/session";
 import { toFundingAgency } from "@/lib/funding-agency-mapper";
 import { writeAuditLog } from "@/lib/audit";
+import { invalidateCache, FUNDING_AGENCIES_CACHE_KEY } from "@/lib/server-cache";
 import type { FundingAgency } from "@/lib/mock";
 
 export const runtime = "nodejs";
@@ -62,6 +63,7 @@ export async function PATCH(request: Request, { params }: Params) {
     return row;
   });
 
+  invalidateCache(FUNDING_AGENCIES_CACHE_KEY);
   return Response.json({ ok: true, agency: toFundingAgency(updated) });
 }
 
@@ -100,5 +102,6 @@ export async function DELETE(_request: Request, { params }: Params) {
     throw err;
   }
 
+  invalidateCache(FUNDING_AGENCIES_CACHE_KEY);
   return Response.json({ ok: true });
 }
