@@ -40,8 +40,11 @@ export async function POST(request: Request) {
   for (let i = 0; i < items.length; i += CHUNK_SIZE) {
     const chunk = items.slice(i, i + CHUNK_SIZE);
     try {
-      // 동시에 같은 기관을 등록한 요청과 경합하면 실패한 트랜잭션 전체를 다시 시작해
-      // 먼저 커밋된 기관을 재사용한다. 다른 오류는 재시도하지 않는다.
+      // 동시에 같은 기관을 등록한 요청과 경합하면(P2002) 실패한 트랜잭션 전체를 다시 시작해
+      // 먼저 커밋된 기관을 재사용한다. 청크당 최대 200건을 한 트랜잭션에 담다 보니, 여러 청크가
+      // 동시에 돌 때 건드리는 행 자체는 안 겹쳐도 SQL Server가 같은 테이블의 잠금 경합을 데드락으로
+      // 판단해 트랜잭션을 강제 종료시킬 수도 있다(P2034, 과제 삭제에서 겪은 것과 같은 패턴) — 이것도
+      // 같은 방식(트랜잭션을 처음부터 재시도)으로 복구된다. 그 외 오류는 재시도하지 않는다.
       for (let attempt = 0; ; attempt++) {
         try {
           const rows = await withDbWriteSlot(() =>
@@ -91,7 +94,7 @@ export async function POST(request: Request) {
           created.push(...rows.map(toInstitution));
           break;
         } catch (err) {
-          if (attempt < 2 && typeof err === "object" && err !== null && "code" in err && err.code === "P2002") continue;
+          if (attempt < 2 && typeof err === "object" && err !== null && "code" in err && (err.code === "P2002" || err.code === "P2034")) continue;
           throw err;
         }
       }

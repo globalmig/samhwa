@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import { prisma, withDbWriteSlot, describeDbWriteError } from "@/lib/db";
+import { prisma, withDbWriteSlot, withDeadlockRetry, describeDbWriteError } from "@/lib/db";
 import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
 import { toInstitution } from "@/lib/institution-mapper";
 import { writeAuditLog } from "@/lib/audit";
@@ -49,7 +49,9 @@ export async function POST(request: Request) {
   const businessNumber = body.bizNumber || null;
   let created;
   try {
-    created = await withDbWriteSlot(() => prisma.$transaction(async (tx) => {
+    // 감사로그 등 공유 테이블에 대한 잠금 경합으로 인한 데드락(P2034)을 재시도한다 — 과제 삭제에서
+    // 겪은 것과 같은 패턴(lib/db.ts의 withDeadlockRetry 주석 참고).
+    created = await withDbWriteSlot(() => withDeadlockRetry(() => prisma.$transaction(async (tx) => {
       const row = await tx.institution.create({
         data: {
           institutionName: body.name,
@@ -74,7 +76,7 @@ export async function POST(request: Request) {
         action: "CREATE",
       });
       return row;
-    }));
+    })));
   } catch (err) {
     // 사업자번호 유니크 제약 위반 — 이 브라우저가 들고 있던 기관 목록이 오래돼(재조회 없이 세션
     // 내내 유지) 이미 서버에 있는 기관을 "신규"로 오인한 경우다(엑셀 대량 업로드에서 흔함).

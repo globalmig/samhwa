@@ -1,4 +1,4 @@
-import { prisma, withDbWriteSlot, describeDbWriteError } from "@/lib/db";
+import { prisma, withDbWriteSlot, withDeadlockRetry, describeDbWriteError } from "@/lib/db";
 import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
 import { groupPtisToMembers } from "@/lib/project-member-mapper";
 import { getOrCreatePti } from "@/lib/pti-helper";
@@ -55,10 +55,12 @@ export async function POST(request: Request) {
   // applyProjectMemberPatch(PATCH·bulk-patch)·DELETE와 같은 락을 써야 한다 — 안 그러면 같은 기관을
   // 방금 생성하면서(이 요청) 동시에 다른 요청이 patch/delete하면 서로 다른 순서로 행을 잠가
   // 데드락(P2034)·트랜잭션 타임아웃(P2028)을 일으킬 수 있다. lib/project-member-patch.ts
-  // withMemberLock 주석 참고.
+  // withMemberLock 주석 참고. 이건 같은 (institutionId, projectId)끼리의 경합만 막아주므로,
+  // 서로 다른 참여기관을 동시에 여러 건 만들 때(엑셀 대량 업로드) 감사로그 등 공유 테이블에서
+  // 생기는 데드락은 withDeadlockRetry로 재시도한다.
   let member;
   try {
-    member = await withDbWriteSlot(() => withMemberLock(`${body.institutionId}:${body.projectId}`, () => prisma.$transaction(async (tx) => {
+    member = await withDbWriteSlot(() => withMemberLock(`${body.institutionId}:${body.projectId}`, () => withDeadlockRetry(() => prisma.$transaction(async (tx) => {
       if (body.annualBudgets && body.annualBudgets.length > 0) {
         for (const ab of body.annualBudgets) {
           const budget = BigInt(Math.round(ab.cashBudget + ab.inKindBudget));
@@ -99,7 +101,7 @@ export async function POST(request: Request) {
       });
 
       return createdMember;
-    })));
+    }))));
   } catch (err) {
     console.error("참여기관 생성 실패:", err);
     return Response.json({ ok: false, error: describeDbWriteError(err, "참여기관을 생성하지 못했습니다.") }, { status: 500 });

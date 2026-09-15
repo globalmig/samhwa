@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import { prisma } from "@/lib/db";
+import { prisma, withDeadlockRetry } from "@/lib/db";
 import { groupPtisToMembers } from "@/lib/project-member-mapper";
 import { getOrCreatePti } from "@/lib/pti-helper";
 import { writeAuditLog } from "@/lib/audit";
@@ -85,7 +85,10 @@ export async function applyProjectMemberPatch(
     const hasSharedPatch = SHARED_KEYS.some((k) => k in body);
     const newRole = body.role !== undefined ? (body.role === "LEAD" ? "MAIN" : "PARTICIPATING") : undefined;
 
-    return prisma.$transaction(async (innerTx) => {
+    // withMemberLock은 같은 (institutionId, projectId)끼리의 경합만 막는다 — 서로 다른 참여기관을
+    // 동시에 patch할 때(엑셀 대량 업로드의 bulk-patch 등) 감사로그 등 공유 테이블에서 생기는 데드락
+    // (P2034)은 여기서 재시도한다.
+    return withDeadlockRetry(() => prisma.$transaction(async (innerTx) => {
       if (hasSharedPatch || newRole) {
         for (const row of siblings) {
           const rowExtra: SharedExtra = row.extraData ? JSON.parse(row.extraData) : {};
@@ -151,7 +154,7 @@ export async function applyProjectMemberPatch(
       });
 
       return after;
-    });
+    }));
   });
 
   return { ok: true, member: afterMember };

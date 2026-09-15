@@ -1,4 +1,4 @@
-import { prisma, withDbWriteSlot } from "@/lib/db";
+import { prisma, withDbWriteSlot, withDeadlockRetry } from "@/lib/db";
 import { requireWriteAccess, SessionError } from "@/lib/session";
 import { getOrCreatePti } from "@/lib/pti-helper";
 import { toTermFee, type TermFeeWithRelations } from "@/lib/term-fee-mapper";
@@ -45,9 +45,13 @@ export async function POST(request: Request, { params }: Params) {
   // updateTermFee/setTermOtherFirmHandled 등으로 PATCH(persistTermFee)를 보낼 때마다 uniqueidentifier
   // 컬럼에 "tf_xxx" 같은 문자열을 못 넣어 서버가 500으로 죽어(운영 로그에서 반복 확인됨) 조용히 저장
   // 실패하는 문제가 있었다.
-  const upsertedTermFees: TermFeeWithRelations[] = [];
-
-  await withDbWriteSlot(() => prisma.$transaction(async (tx) => {
+  // 엑셀 대량 업로드 중 여러 과제의 이 동기화가 동시에 돌면, 건드리는 행 자체는 과제별로 안 겹쳐도
+  // SQL Server가 term_fees/project_term_institutions 등 같은 테이블의 잠금 경합을 데드락으로 판단해
+  // 트랜잭션을 강제 종료시킬 수 있다(P2034, 과제 삭제에서 겪은 것과 같은 패턴) — withDeadlockRetry로
+  // 재시도한다. upsertedTermFees는 재시도마다 새로 채워야 하므로(안 그러면 이전 시도의 결과가 남아
+  // 중복된다) 트랜잭션 콜백 안에서 선언해 그 결과를 그대로 반환받는다.
+  const upsertedTermFees = await withDbWriteSlot(() => withDeadlockRetry(() => prisma.$transaction(async (tx) => {
+    const upsertedTermFees: TermFeeWithRelations[] = [];
     // term_fee_calcs: 이 과제분 전체를 교체
     await tx.termFeeCalc.deleteMany({ where: { projectId } });
     for (const tfc of body.termFeeCalcs) {
@@ -126,7 +130,9 @@ export async function POST(request: Request, { params }: Params) {
     if (orphanIds.length > 0) {
       await tx.termFee.deleteMany({ where: { projectTermInstitutionId: { in: orphanIds } } });
     }
-  }));
+
+    return upsertedTermFees;
+  })));
 
   // 이 동작(자동 재계산 반영)은 사용자가 직접 하는 조작이 아니라 내부 시스템 처리라 사람이 보는
   // 변경이력에는 남기지 않는다 — 예전엔 매번 "termFeeSync" 항목이 찍혀 진짜 사용자 조작(과제 수정

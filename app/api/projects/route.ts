@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import { prisma, withDbWriteSlot, describeDbWriteError } from "@/lib/db";
+import { prisma, withDbWriteSlot, withDeadlockRetry, describeDbWriteError } from "@/lib/db";
 import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
 import { toProject } from "@/lib/project-mapper";
 import { writeAuditLog } from "@/lib/audit";
@@ -42,7 +42,10 @@ export async function POST(request: Request) {
 
   let created;
   try {
-    created = await withDbWriteSlot(() => prisma.$transaction(async (tx) => {
+    // 엑셀 대량 업로드로 여러 신규 과제가 동시에 생성될 때, 감사로그(audit_log) 같은 공유 테이블에
+    // 대한 잠금 경합을 SQL Server가 데드락으로 판단해 트랜잭션을 강제 종료시킬 수 있다(P2034,
+    // 과제 삭제에서 겪은 것과 같은 패턴) — withDeadlockRetry로 재시도한다.
+    created = await withDbWriteSlot(() => withDeadlockRetry(() => prisma.$transaction(async (tx) => {
       const row = await tx.project.create({
         data: {
           projectNumber: body.projectNumber,
@@ -85,7 +88,7 @@ export async function POST(request: Request) {
         action: "CREATE",
       });
       return row;
-    }));
+    })));
   } catch (err) {
     // 과제번호 유니크 제약 위반 — 두 사용자가 겹치는 엑셀을 동시에 업로드했거나, 이 브라우저가
     // 들고 있던 과제 목록이 오래돼(재조회 없이 세션 내내 유지) 이미 서버에 있는 과제를 "신규"로
