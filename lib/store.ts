@@ -287,25 +287,34 @@ if (typeof window !== "undefined") hydrateAuditLog();
 // 전부 동시에 서버로 몰려 DB 커넥션 풀에 부담을 줄 수 있다. 동시 in-flight 요청 수를 제한해
 // 나머지는 앞선 요청이 끝나는 대로 순서대로 나가게 한다 — 평소 단건 조작(폼 저장 등)은 동시에
 // 몇 건 안 되니 이 제한에 사실상 걸리지 않는다.
-const MAX_CONCURRENT_SYNC = 6;
-let _activeSyncCount = 0;
-const _syncQueue: (() => void)[] = [];
-
-function throttledFetch(input: string, init?: RequestInit): Promise<Response> {
-  return new Promise((resolve, reject) => {
-    const run = () => {
-      _activeSyncCount++;
-      fetch(input, init)
-        .then(resolve, reject)
-        .finally(() => {
-          _activeSyncCount--;
-          _syncQueue.shift()?.();
-        });
-    };
-    if (_activeSyncCount < MAX_CONCURRENT_SYNC) run();
-    else _syncQueue.push(run);
-  });
+function createThrottledFetch(maxConcurrent: number): (input: string, init?: RequestInit) => Promise<Response> {
+  let active = 0;
+  const queue: (() => void)[] = [];
+  return function throttled(input: string, init?: RequestInit): Promise<Response> {
+    return new Promise((resolve, reject) => {
+      const run = () => {
+        active++;
+        fetch(input, init)
+          .then(resolve, reject)
+          .finally(() => {
+            active--;
+            queue.shift()?.();
+          });
+      };
+      if (active < maxConcurrent) run();
+      else queue.push(run);
+    });
+  };
 }
+
+const throttledFetch = createThrottledFetch(6);
+// 삭제는 add*/update*보다 서버 쪽 부하가 가볍고(과제 삭제만 예외 — 아래 참고) 사용자가 한 번에
+// 수십 건을 골라 지우는 경우가 흔해서(RCMS 잘못 업로드한 과제 일괄 정리 등), 같은 6건 제한을
+// 쓰면 필요 이상으로 느려진다. 별도 큐로 분리해 add*/update* 트래픽과 서로 경합하지 않게 하고,
+// 상한을 20건으로 넉넉히 잡는다 — 서버는 어차피 withDbWriteSlot(MAX_CONCURRENT_WRITES=7)이
+// 실제 DB 작업 동시성을 그보다 낮게 다시 제한하므로, 여기서 더 늘려도 DB 커넥션 풀엔 부담이
+// 없고 요청이 서버 큐에서 대기하는 시간만 줄어든다.
+const throttledDeleteFetch = createThrottledFetch(20);
 
 // 엑셀 업로드 같은 일괄 등록 구간에서 서버 동기화가 실제로 몇 건 실패했는지 세어 결과 화면에
 // 안내하는 데 쓴다. beginSyncBatch()로 집계를 시작하고, endSyncBatchAndWait()으로 그 구간에서
@@ -1148,20 +1157,26 @@ export function deleteProject(id: string): void {
     notify();
   }
 
-  fetch(`/api/projects/${id}`, { method: "DELETE" })
-    .then((res) => res.json())
-    .then((res: { ok: boolean; error?: string }) => {
-      if (!res.ok) {
-        console.error("과제 삭제 실패(서버):", res.error);
+  // bare fetch로 나가면 /fees의 "선택 과제 삭제"처럼 여러 건을 한꺼번에 지울 때 다른 대량 작업
+  // (엑셀 업로드 등)과 달리 동시 요청 수 제한을 안 받고, runBulkSyncBatch로 감싸도 이 요청이
+  // 끝나는 시점을 추적하지 못한다 — throttledDeleteFetch(동시 20건 제한)+trackSync(배치 완료
+  // 추적)로 맞춘다. add*/update*가 쓰는 throttledFetch(6건)와는 별도 큐라 서로 경합하지 않는다.
+  trackSync(
+    throttledDeleteFetch(`/api/projects/${id}`, { method: "DELETE" })
+      .then((res) => res.json())
+      .then((res: { ok: boolean; error?: string }) => {
+        if (!res.ok) {
+          console.error("과제 삭제 실패(서버):", res.error);
+          reportSyncFailure(1, `과제: ${item.projectNumber} ${item.projectName}`);
+          restore();
+        }
+      })
+      .catch((err) => {
+        console.error("과제 삭제 실패(서버):", err);
         reportSyncFailure(1, `과제: ${item.projectNumber} ${item.projectName}`);
         restore();
-      }
-    })
-    .catch((err) => {
-      console.error("과제 삭제 실패(서버):", err);
-      reportSyncFailure(1, `과제: ${item.projectNumber} ${item.projectName}`);
-      restore();
-    });
+      })
+  );
 }
 
 // 과제 하나를 통째로 지우지 않고, 특정 연차(들)의 수수료·세금계산서·미청구·미수금 데이터만 지운다 —
