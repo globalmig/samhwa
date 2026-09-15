@@ -307,20 +307,42 @@ let _batchFailures = 0;
 let _pendingSyncCount = 0;
 let _pendingSyncResolvers: (() => void)[] = [];
 
+// 배치 구간에서 발사된 동기화 요청의 완료 진행률 — ExcelUploadModal이 "등록 중..." 동안 퍼센트로
+// 보여주는 데 쓴다(getSyncBatchProgress). 요청 하나가 여러 건(예: 참여기관 50건 묶음)을 담고
+// 있어도 여기서는 "요청 1건"으로만 세므로, 실제 처리 건수가 아니라 대략적인 진행률이다 — registerRows가
+// 행을 훑으며 계속 새 요청을 큐에 쌓는 동안은 total도 같이 늘어나 초반엔 퍼센트가 들쭉날쭉할 수 있다.
+let _batchTotalOps = 0;
+let _batchCompletedOps = 0;
+
 export function beginSyncBatch(): void {
-  if (_batchDepth === 0) _batchFailures = 0;
+  if (_batchDepth === 0) {
+    _batchFailures = 0;
+    _batchTotalOps = 0;
+    _batchCompletedOps = 0;
+  }
   _batchDepth++;
+}
+
+export function getSyncBatchProgress(): { completed: number; total: number } {
+  return { completed: _batchCompletedOps, total: _batchTotalOps };
 }
 
 // 배치를 닫지 않고, 후속 요청까지 모두 끝날 때까지 기다린다.
 export function waitForSyncIdle(): Promise<number> {
   return new Promise((resolve) => {
     const check = () => {
+      // 참여기관 patch는 청크 크기(50)를 못 채우면 큐(_memberPatchQueue)에 남아있을 뿐 아직
+      // trackSync되지 않은 상태다 — 그래서 _pendingSyncCount만 보면 "요청 없음=완료"로 착각해
+      // 이 남은 항목을 영영 안 보내고 끝내버릴 수 있다(특히 pendingCreate 완료 후 뒤늦게 큐에
+      // 쌓이는 항목은 registerRows가 이미 끝난 뒤라 다른 flush 시점이 없다). pendingSyncCount가
+      // 0으로 떨어질 때마다 큐에 남은 게 있는지 확인해 흘려보내고, 그 요청이 끝날 때까지 다시
+      // 기다린다 — 둘 다 진짜로 비어야 완료로 본다.
+      if (_pendingSyncCount === 0 && _memberPatchQueue.size > 0) flushMemberPatchQueue();
       if (_pendingSyncCount === 0) {
         // 생성 Promise의 후속 .then이 실제 ID로 PATCH를 추가할 수 있다. 그 마이크로태스크까지
         // 끝난 뒤 다시 검사해야 잠깐 0이 된 순간을 전체 완료로 오인하지 않는다.
         setTimeout(() => {
-          if (_pendingSyncCount === 0) resolve(_batchFailures);
+          if (_pendingSyncCount === 0 && _memberPatchQueue.size === 0) resolve(_batchFailures);
           else _pendingSyncResolvers.push(check);
         }, 0);
       } else _pendingSyncResolvers.push(check);
@@ -345,6 +367,10 @@ export async function runBulkSyncBatch<T>(work: () => Promise<T>): Promise<{ val
   try {
     value = await work();
   } finally {
+    // registerRows 같은 work()가 참여기관 patch를 큐에만 쌓아두고(queueMemberPatch) 끝났을 수
+    // 있다 — 청크 크기(MEMBER_PATCH_CHUNK_SIZE)에 못 미쳐 자동 flush가 안 된 나머지를 여기서
+    // 반드시 흘려보내야, 아래 endSyncBatchAndWait()이 그 요청들을 "대기 중"으로 잡아 기다린다.
+    flushMemberPatchQueue();
     try {
       await endBulkRecalcSuspend();
     } finally {
@@ -359,8 +385,10 @@ export async function runBulkSyncBatch<T>(work: () => Promise<T>): Promise<{ val
 // 절대 reject하지 않으므로 그대로 통과시킨다.
 function trackSync<T>(promise: Promise<T>): Promise<T> {
   _pendingSyncCount++;
+  if (_batchDepth > 0) _batchTotalOps++;
   return promise.finally(() => {
     _pendingSyncCount--;
+    if (_batchDepth > 0) _batchCompletedOps++;
     if (_pendingSyncCount === 0) {
       const resolvers = _pendingSyncResolvers;
       _pendingSyncResolvers = [];
@@ -374,6 +402,61 @@ function trackSync<T>(promise: Promise<T>): Promise<T> {
 // 실패 시 그만큼을 한꺼번에 실패로 셀 때 쓴다(addInstitutionsBulk 등).
 function reportSyncFailure(count = 1): void {
   if (_batchDepth > 0) _batchFailures += count;
+}
+
+// ============================================================
+// 참여기관 patch 배치 전송 (RCMS 엑셀 대량 업로드 등)
+// ============================================================
+// updateProjectMember가 beginSyncBatch() 구간 안에서 불리면(엑셀 대량 업로드), 건마다 개별
+// PATCH를 쏘는 대신 여기 모아뒀다가 MEMBER_PATCH_CHUNK_SIZE건씩 묶어 /api/project-members/bulk-patch로
+// 보낸다 — 요청 수가 줄어야 건마다 반복되는 세션 검증 등 고정 비용이 요청 수만큼만 든다(자세한
+// 이유는 그 라우트 주석 참고). 배치 밖(평소 단건 수정)에서는 이 큐를 쓰지 않고 기존처럼 즉시 보낸다.
+const MEMBER_PATCH_CHUNK_SIZE = 50;
+let _memberPatchQueue = new Map<string, Record<string, unknown>>();
+
+// 같은 배치 안에서 한 id가 여러 번 큐에 들어오면(드물지만) 필드 단위로 덮어써 병합한다 — 순서대로
+// PATCH를 여러 번 보내는 것과 최종 결과가 같다(마지막에 지정한 값이 남는다).
+function queueMemberPatch(id: string, data: Record<string, unknown>): void {
+  const existing = _memberPatchQueue.get(id);
+  _memberPatchQueue.set(id, existing ? { ...existing, ...data } : { ...data });
+  if (_memberPatchQueue.size >= MEMBER_PATCH_CHUNK_SIZE) flushMemberPatchQueue();
+}
+
+function flushMemberPatchQueue(): void {
+  if (_memberPatchQueue.size === 0) return;
+  const updates = [...(_memberPatchQueue as Map<string, Record<string, unknown>>).entries()].map(([id, data]) => ({ id, data }));
+  _memberPatchQueue = new Map();
+  const body = JSON.stringify({ updates }, (_k, v) => (v === undefined ? null : v));
+
+  trackSync(
+    throttledFetch("/api/project-members/bulk-patch", { method: "POST", headers: { "Content-Type": "application/json" }, body })
+      .then((res) => res.json())
+      .then((res: { ok: boolean; results?: { id: string; ok: boolean; member?: ProjectMember; error?: string }[]; error?: string }) => {
+        if (!res.ok || !res.results) {
+          console.error("참여기관 일괄 수정 실패:", res.error);
+          reportSyncFailure(updates.length);
+          return;
+        }
+        const byId = new Map(res.results.map((r) => [r.id, r]));
+        _state = {
+          ..._state,
+          projectMembers: _state.projectMembers.map((m) => {
+            const r = byId.get(m.id);
+            return r?.ok && r.member ? r.member : m;
+          }),
+        };
+        const failed = res.results.filter((r) => !r.ok);
+        if (failed.length > 0) {
+          console.error("참여기관 일괄 수정 일부 실패:", failed);
+          reportSyncFailure(failed.length);
+        }
+        notify();
+      })
+      .catch((err) => {
+        console.error("참여기관 일괄 수정 실패:", err);
+        reportSyncFailure(updates.length);
+      })
+  );
 }
 
 // ============================================================
@@ -1337,6 +1420,14 @@ export function updateProjectMember(id: string, data: Partial<ProjectMember>): v
   // 임시 id로 보낸 PATCH가 404로 조용히 실패하고, 뒤이어 도착하는 생성 응답이 이 수정사항 없는
   // 상태로 덮어써 버린다).
   const sendPatch = (realId: string) => {
+    // 엑셀 대량 업로드 같은 배치 구간(beginSyncBatch~endSyncBatchAndWait) 안에서는 건마다 개별
+    // PATCH를 바로 쏘지 않고 큐에 모아 /api/project-members/bulk-patch로 묶어 보낸다 — 수천 건이
+    // 수천 개의 개별 요청이 되는 걸 막아 속도를 크게 높인다(자세한 이유는 그 라우트 주석 참고).
+    // 배치 밖(평소 단건 수정)에서는 지금까지처럼 즉시 개별 요청을 보낸다.
+    if (_batchDepth > 0) {
+      queueMemberPatch(realId, trackedData as Record<string, unknown>);
+      return;
+    }
     trackSync(
       throttledFetch(`/api/project-members/${realId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body })
         .then((res) => res.json())
