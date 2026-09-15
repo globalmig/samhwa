@@ -312,6 +312,9 @@ function throttledFetch(input: string, init?: RequestInit): Promise<Response> {
 // 발사된(아직 응답이 안 끝난 것 포함) 모든 동기화가 끝날 때까지 기다린 뒤 실패 건수를 돌려받는다.
 let _batchDepth = 0;
 let _batchFailures = 0;
+// 실패 건수만으로는 "등록 완료" 화면에서 뭐가 실패했는지 알 수 없어, 어떤 과제/기관/참여기관인지
+// 알아볼 수 있는 짧은 문구를 함께 모아둔다 — reportSyncFailure(count, label) 참고.
+let _batchFailureDetails: string[] = [];
 let _pendingSyncCount = 0;
 let _pendingSyncResolvers: (() => void)[] = [];
 
@@ -325,10 +328,18 @@ let _batchCompletedOps = 0;
 export function beginSyncBatch(): void {
   if (_batchDepth === 0) {
     _batchFailures = 0;
+    _batchFailureDetails = [];
     _batchTotalOps = 0;
     _batchCompletedOps = 0;
   }
   _batchDepth++;
+}
+
+// runBulkSyncBatch가 끝난 직후(다음 beginSyncBatch가 초기화하기 전) 호출해, 이번 배치에서 실패한
+// 항목들을 사람이 알아볼 수 있는 문구로 받는다 — "등록 완료" 화면의 "서버 저장 실패 — N건" 아래
+// 구체적으로 뭐가 실패했는지 보여주는 데 쓴다.
+export function getSyncBatchFailureDetails(): string[] {
+  return [..._batchFailureDetails];
 }
 
 export function getSyncBatchProgress(): { completed: number; total: number } {
@@ -367,7 +378,7 @@ export async function endSyncBatchAndWait(): Promise<number> {
 
 // 예외가 나도 재계산과 서버 저장을 정리한 뒤 배치를 닫는다. 호출자는 이 Promise가 끝난 뒤
 // 로딩을 해제해야 중단된 실행과 재시도가 겹치지 않는다.
-export async function runBulkSyncBatch<T>(work: () => Promise<T>): Promise<{ value: T; syncFailures: number }> {
+export async function runBulkSyncBatch<T>(work: () => Promise<T>): Promise<{ value: T; syncFailures: number; syncFailureDetails: string[] }> {
   beginSyncBatch();
   beginBulkRecalcSuspend();
   let syncFailures = 0;
@@ -385,7 +396,7 @@ export async function runBulkSyncBatch<T>(work: () => Promise<T>): Promise<{ val
       syncFailures = await endSyncBatchAndWait();
     }
   }
-  return { value, syncFailures };
+  return { value, syncFailures, syncFailureDetails: getSyncBatchFailureDetails() };
 }
 
 // add*/update*의 fetch(...).then(...).catch(...) 체인 전체를 감싸 "이 동기화가 언제 끝나는지"를
@@ -407,9 +418,13 @@ function trackSync<T>(promise: Promise<T>): Promise<T> {
 
 // 위 체인의 실패 분기(res.ok===false 또는 catch)에서 호출 — beginSyncBatch() 구간 밖(평소 단건
 // 조작)에서는 집계하지 않는다. count는 벌크 생성처럼 요청 하나가 여러 건을 한 번에 담고 있어
-// 실패 시 그만큼을 한꺼번에 실패로 셀 때 쓴다(addInstitutionsBulk 등).
-function reportSyncFailure(count = 1): void {
-  if (_batchDepth > 0) _batchFailures += count;
+// 실패 시 그만큼을 한꺼번에 실패로 셀 때 쓴다(addInstitutionsBulk 등). label을 넘기면 "무엇이"
+// 실패했는지 getSyncBatchFailureDetails()로 다시 꺼내볼 수 있다 — count가 1보다 크면 건수를 함께
+// 적어 "같은 문구가 N번 반복"되는 대신 한 줄로 요약한다.
+function reportSyncFailure(count = 1, label?: string): void {
+  if (_batchDepth <= 0) return;
+  _batchFailures += count;
+  if (label) _batchFailureDetails.push(count > 1 ? `${label} (${count}건)` : label);
 }
 
 // ============================================================
@@ -430,6 +445,13 @@ function queueMemberPatch(id: string, data: Record<string, unknown>): void {
   if (_memberPatchQueue.size >= MEMBER_PATCH_CHUNK_SIZE) flushMemberPatchQueue();
 }
 
+// 실패 목록에 "무엇이" 실패했는지 사람이 알아볼 수 있는 라벨을 붙이는 데 쓴다 — id만으로는
+// 사용자가 등록완료 화면에서 어떤 참여기관인지 알 수 없다.
+function describeProjectMember(id: string): string {
+  const m = _state.projectMembers.find((pm) => pm.id === id);
+  return m ? `참여기관: ${m.projectNumber} · ${m.institutionName}` : `참여기관(${id})`;
+}
+
 function flushMemberPatchQueue(): void {
   if (_memberPatchQueue.size === 0) return;
   const updates = [...(_memberPatchQueue as Map<string, Record<string, unknown>>).entries()].map(([id, data]) => ({ id, data }));
@@ -442,7 +464,7 @@ function flushMemberPatchQueue(): void {
       .then((res: { ok: boolean; results?: { id: string; ok: boolean; member?: ProjectMember; error?: string }[]; error?: string }) => {
         if (!res.ok || !res.results) {
           console.error("참여기관 일괄 수정 실패:", res.error);
-          reportSyncFailure(updates.length);
+          reportSyncFailure(updates.length, "참여기관 일괄 수정");
           return;
         }
         const byId = new Map(res.results.map((r) => [r.id, r]));
@@ -456,13 +478,13 @@ function flushMemberPatchQueue(): void {
         const failed = res.results.filter((r) => !r.ok);
         if (failed.length > 0) {
           console.error("참여기관 일괄 수정 일부 실패:", failed);
-          reportSyncFailure(failed.length);
+          for (const r of failed) reportSyncFailure(1, describeProjectMember(r.id));
         }
         notify();
       })
       .catch((err) => {
         console.error("참여기관 일괄 수정 실패:", err);
-        reportSyncFailure(updates.length);
+        reportSyncFailure(updates.length, "참여기관 일괄 수정");
       })
   );
 }
@@ -526,7 +548,7 @@ export function addFundingAgency(data: Omit<FundingAgency, "id">): FundingAgency
         } else {
           _state = { ..._state, fundingAgencies: _state.fundingAgencies.filter((a) => a.id !== tempId) };
           console.error("전담기관 생성 실패:", res.error);
-          reportSyncFailure();
+          reportSyncFailure(1, `전담기관: ${item.name}`);
         }
         notify();
       })
@@ -534,7 +556,7 @@ export function addFundingAgency(data: Omit<FundingAgency, "id">): FundingAgency
         _state = { ..._state, fundingAgencies: _state.fundingAgencies.filter((a) => a.id !== tempId) };
         notify();
         console.error("전담기관 생성 실패:", err);
-        reportSyncFailure();
+        reportSyncFailure(1, `전담기관: ${item.name}`);
       })
   );
 
@@ -664,7 +686,7 @@ export function addInstitution(data: Omit<Institution, "id">): Institution {
         } else {
           _state = { ..._state, institutions: _state.institutions.filter((i) => i.id !== tempId) };
           console.error("기관 생성 실패:", res.error);
-          reportSyncFailure();
+          reportSyncFailure(1, `기관: ${item.name}`);
         }
         notify();
       })
@@ -672,7 +694,7 @@ export function addInstitution(data: Omit<Institution, "id">): Institution {
         _state = { ..._state, institutions: _state.institutions.filter((i) => i.id !== tempId) };
         notify();
         console.error("기관 생성 실패:", err);
-        reportSyncFailure();
+        reportSyncFailure(1, `기관: ${item.name}`);
       })
   );
 
@@ -710,14 +732,14 @@ export async function addInstitutionsBulk(items: Omit<Institution, "id">[]): Pro
     notify();
     if (!data.ok) {
       console.error("기관 일괄 생성 실패:", data.error);
-      reportSyncFailure(items.length - createdList.length);
+      reportSyncFailure(items.length - createdList.length, "기관 일괄 생성");
     }
     return createdList;
   } catch (err) {
     _state = { ..._state, institutions: _state.institutions.filter((i) => !tempIds.has(i.id)) };
     notify();
     console.error("기관 일괄 생성 실패:", err);
-    reportSyncFailure(items.length);
+    reportSyncFailure(items.length, "기관 일괄 생성");
     return [];
   }
 }
@@ -969,7 +991,7 @@ export function addProject(data: Omit<Project, "id">): Project {
             projectMembers: _state.projectMembers.filter((m) => m.projectId !== tempId),
           };
           console.error("과제 생성 실패:", res.error);
-          reportSyncFailure();
+          reportSyncFailure(1, `과제: ${item.projectNumber} ${item.projectName}`);
           notify();
           return tempId;
         }
@@ -982,7 +1004,7 @@ export function addProject(data: Omit<Project, "id">): Project {
         };
         notify();
         console.error("과제 생성 실패:", err);
-        reportSyncFailure();
+        reportSyncFailure(1, `과제: ${item.projectNumber} ${item.projectName}`);
         return tempId;
       })
       .finally(() => {
@@ -1059,12 +1081,12 @@ export function updateProject(id: string, data: Partial<Project>): void {
             notify();
           } else if (!res.ok) {
             console.error("과제 수정 실패:", res.error);
-            reportSyncFailure();
+            reportSyncFailure(1, `과제 수정: ${after.projectNumber} ${after.projectName}`);
           }
         })
         .catch((err) => {
           console.error("과제 수정 실패:", err);
-          reportSyncFailure();
+          reportSyncFailure(1, `과제 수정: ${after.projectNumber} ${after.projectName}`);
         })
     );
   };
@@ -1299,12 +1321,12 @@ function persistProjectMember(item: ProjectMember): void {
           return res.member.id;
         }
         console.error("참여기관 저장 실패:", res.error);
-        reportSyncFailure();
+        reportSyncFailure(1, `참여기관: ${item.projectNumber} · ${item.institutionName}`);
         return item.id;
       })
       .catch((err) => {
         console.error("참여기관 저장 실패:", err);
-        reportSyncFailure();
+        reportSyncFailure(1, `참여기관: ${item.projectNumber} · ${item.institutionName}`);
         return item.id;
       })
       .finally(() => {
@@ -1487,12 +1509,12 @@ export function updateProjectMember(id: string, data: Partial<ProjectMember>): v
             notify();
           } else if (!res.ok) {
             console.error("참여기관 수정 실패:", res.error);
-            reportSyncFailure();
+            reportSyncFailure(1, `참여기관 수정: ${after.projectNumber} · ${after.institutionName}`);
           }
         })
         .catch((err) => {
           console.error("참여기관 수정 실패:", err);
-          reportSyncFailure();
+          reportSyncFailure(1, `참여기관 수정: ${after.projectNumber} · ${after.institutionName}`);
         })
     );
   };
@@ -1620,12 +1642,12 @@ export function applyInstitutionGradeToProjects(
         .then((res: { ok: boolean; error?: string }) => {
           if (!res.ok) {
             console.error("등급 변경 저장 실패:", res.error);
-            reportSyncFailure();
+            reportSyncFailure(1, `등급 변경: ${m.projectNumber} · ${m.institutionName}`);
           }
         })
         .catch((err) => {
           console.error("등급 변경 저장 실패:", err);
-          reportSyncFailure();
+          reportSyncFailure(1, `등급 변경: ${m.projectNumber} · ${m.institutionName}`);
         })
     );
   }
@@ -1882,10 +1904,15 @@ function hydrateTermFees(): void {
 }
 if (typeof window !== "undefined") hydrateTermFees();
 
+function describeTermFee(id: string): string {
+  const f = _state.termFees.find((tf) => tf.id === id);
+  return f ? `연차수수료: ${f.projectNumber} ${f.termYear}년 ${f.termNumber}차` : `연차수수료(${id})`;
+}
+
 function persistTermFee(id: string, data: Partial<TermFee>): void {
   if (id.startsWith("tf-")) {
     console.error("연차수수료 수정 실패: 생성 요청의 서버 저장을 먼저 완료해야 합니다.");
-    reportSyncFailure();
+    reportSyncFailure(1, describeTermFee(id));
     return;
   }
   trackSync(throttledFetch(`/api/term-fees/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
@@ -1896,12 +1923,12 @@ function persistTermFee(id: string, data: Partial<TermFee>): void {
         notify();
       } else {
         console.error("연차수수료 수정 실패:", res.error);
-        reportSyncFailure();
+        reportSyncFailure(1, describeTermFee(id));
       }
     })
     .catch((err) => {
       console.error("연차수수료 수정 실패:", err);
-      reportSyncFailure();
+      reportSyncFailure(1, describeTermFee(id));
     }));
 }
 
@@ -2293,7 +2320,7 @@ export function addProjectIssue(data: Omit<ProjectIssue, "id">): ProjectIssue {
         } else {
           _state = { ..._state, projectIssues: _state.projectIssues.filter((i) => i.id !== tempId) };
           console.error("이슈 생성 실패:", res.error);
-          reportSyncFailure();
+          reportSyncFailure(1, `이슈: ${item.projectNumber} ${issueContentPreview(item.content)}`);
         }
         notify();
       })
@@ -2301,7 +2328,7 @@ export function addProjectIssue(data: Omit<ProjectIssue, "id">): ProjectIssue {
         _state = { ..._state, projectIssues: _state.projectIssues.filter((i) => i.id !== tempId) };
         notify();
         console.error("이슈 생성 실패:", err);
-        reportSyncFailure();
+        reportSyncFailure(1, `이슈: ${item.projectNumber} ${issueContentPreview(item.content)}`);
       })
   );
 
@@ -3957,7 +3984,7 @@ export function autoGenerateTermFees(projectId: string): void {
       .then((res: { ok: boolean; termFees?: TermFee[]; error?: string }) => {
         if (!res.ok) {
           console.error("연차수수료 동기화 실패(서버):", res.error);
-          reportSyncFailure();
+          reportSyncFailure(1, `연차수수료 동기화: ${project.projectNumber} ${project.projectName}`);
           return;
         }
         if (!res.termFees) return;
@@ -3979,7 +4006,7 @@ export function autoGenerateTermFees(projectId: string): void {
       })
       .catch((err) => {
         console.error("연차수수료 동기화 실패(서버):", err);
-        reportSyncFailure();
+        reportSyncFailure(1, `연차수수료 동기화: ${project.projectNumber} ${project.projectName}`);
       })
   );
 }

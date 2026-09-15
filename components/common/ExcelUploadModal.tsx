@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useRef } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { FiAlertTriangle, FiAlertOctagon, FiRefreshCw, FiCalendar, FiCheckCircle, FiFlag, FiFolderPlus, FiHome, FiUsers } from "react-icons/fi";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
@@ -29,6 +29,7 @@ import {
   endBulkRecalcSuspend,
   refreshListsBeforeBulkUpload,
   getStoreState,
+  getSyncBatchProgress,
 } from "@/lib/store";
 import type { Project, ProjectMember, AnnualBudget, AnnualFinancials, Institution, SystemUser, FundingAgency } from "@/lib/mock";
 import { getCurrentUser } from "@/lib/auth";
@@ -1585,6 +1586,19 @@ function PreviewStep({
   onBack: () => void;
   loading: boolean;
 }) {
+  // getSyncBatchProgress()는 store 모듈 변수를 직접 읽는 함수라 store의 notify() 구독으로는 갱신을
+  // 감지할 수 없다 — loading인 동안 일정 주기로 강제 리렌더만 걸어주고, 값 자체는 매 렌더마다 그
+  // 시점 기준으로 새로 읽는다(state에 캐싱하지 않아 stale 값이 남지 않는다). 요청 단위 진행률이라
+  // (참여기관 50건 묶음도 "1건"으로 집계) 실제 처리 행 수가 아니라 대략적인 퍼센트다 — lib/store.ts의
+  // getSyncBatchProgress 주석 참고.
+  const [, forceProgressTick] = useState(0);
+  useEffect(() => {
+    if (!loading) return;
+    const interval = setInterval(() => forceProgressTick((n) => n + 1), 300);
+    return () => clearInterval(interval);
+  }, [loading]);
+  const progress = loading ? getSyncBatchProgress() : { completed: 0, total: 0 };
+
   // 각 "신규 ○○" 탭에 실제로 무엇이 새로 등록되는지 보여주기 위해, 개수만 세던 걸 목록으로도 모은다.
   const newAgencyNames: string[] = [];
   const newProjectList: { projectNumber: string; projectName: string; agencyName: string }[] = [];
@@ -2016,7 +2030,9 @@ function PreviewStep({
             disabled={loading || (totalNew === 0 && approvedUpdateCount === 0) || unresolvedManagerAmbiguities.length > 0 || unresolvedManagerNotFound.length > 0}
             className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40 transition-colors"
           >
-            {loading ? "등록 중..." : <><FiCheckCircle size={14} /> {totalToRegister}건 등록</>}
+            {loading
+              ? (progress.total > 0 ? `등록 중... ${Math.min(100, Math.round((progress.completed / progress.total) * 100))}%` : "등록 중...")
+              : <><FiCheckCircle size={14} /> {totalToRegister}건 등록</>}
           </button>
         </div>
       </div>
@@ -2038,6 +2054,9 @@ interface DoneResult {
   // 낙관적으로는 등록됐지만(위 카운트에 포함됨) 실제 서버 저장이 실패한 건수 — 대량 업로드 중
   // 일부 요청이 실패해도 화면상 카운트만으로는 알 수 없어 별도로 안내한다.
   syncFailures: number;
+  // syncFailures가 "몇 건"인지는 알려줘도 "무엇이" 실패했는지는 알 수 없어, 사용자가 재업로드할
+  // 대상을 스스로 찾아야 했다 — 과제/기관/참여기관 등을 알아볼 수 있는 문구 목록을 함께 보여준다.
+  syncFailureDetails: string[];
 }
 
 function DoneStep({ result, onClose }: { result: DoneResult; onClose: () => void }) {
@@ -2096,6 +2115,13 @@ function DoneStep({ result, onClose }: { result: DoneResult; onClose: () => void
             화면에는 반영됐지만 서버에는 저장되지 못한 항목이 있습니다(네트워크 오류 또는 서버 처리 실패).
             잠시 후 새로고침해 값이 그대로 남아있는지 확인하고, 사라진 항목이 있으면 해당 부분만 다시 업로드해주세요.
           </p>
+          {result.syncFailureDetails.length > 0 && (
+            <ul className="mt-2 max-h-32 overflow-y-auto rounded-lg border border-red-100 bg-white/60 px-3 py-2 space-y-0.5">
+              {result.syncFailureDetails.map((detail, i) => (
+                <li key={i} className="text-red-700">· {detail}</li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
       {result.stageAlerts > 0 && (
@@ -2525,7 +2551,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
   const [matchedSheets, setMatchedSheets] = useState<{ sheetName: string; def: SheetDef }[]>([]);
   const [parsedSheets, setParsedSheets] = useState<ParsedSheet[]>([]);
   const [previewRows, setPreviewRows] = useState<PreviewRow[]>([]);
-  const [doneResult, setDoneResult] = useState<DoneResult>({ agency: 0, project: 0, inst: 0, member: 0, memberUpdated: 0, projectAdvanced: 0, stageAlerts: 0, renamed: 0, syncFailures: 0 });
+  const [doneResult, setDoneResult] = useState<DoneResult>({ agency: 0, project: 0, inst: 0, member: 0, memberUpdated: 0, projectAdvanced: 0, stageAlerts: 0, renamed: 0, syncFailures: 0, syncFailureDetails: [] });
   const [loading, setLoading] = useState(false);
   const busyRef = useRef(false);
   const recordUpload = useExcelUploadDiagnostics(step, loading);
@@ -2983,8 +3009,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       // 사용자가 그 사이 같은 과제번호/사업자번호/약칭을 등록했으면 신규로 오인해 만들려다 DB 유니크
       // 제약에 걸려 실패할 수 있다. 등록 시작 직전에 한 번 더 받아와 그 창을 좁힌다.
       await refreshListsBeforeBulkUpload();
-      const { value, syncFailures } = await runBulkSyncBatch(registerRows);
-      setDoneResult({ ...value, syncFailures });
+      const { value, syncFailures, syncFailureDetails } = await runBulkSyncBatch(registerRows);
+      setDoneResult({ ...value, syncFailures, syncFailureDetails });
       recordUpload("registration_completed", { syncFailures });
       setStep("done");
     } catch (err) {
