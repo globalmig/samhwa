@@ -25,6 +25,7 @@ import {
   deleteProject,
   updateFeesFilters,
   resetFeesFilters,
+  runBulkSyncBatch,
 } from "@/lib/store";
 import {
   type TermFee,
@@ -2587,6 +2588,12 @@ export default function FeesPage() {
   const [showBulkNotice, setShowBulkNotice] = useState(false);
   const [showBulkSimpleNotice, setShowBulkSimpleNotice] = useState<SimpleNoticeKind | null>(null);
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  // null이면 아직 결과 없음(확인 단계), 빈 배열이면 전부 성공(모달을 바로 닫음), 값이 있으면
+  // 그만큼 실패해 모달을 결과 화면으로 바꿔 보여준다 — 서버 실패는 로컬에서 조용히 되돌려지므로
+  // (deleteProject의 restore()) 이 목록 없이는 사용자가 "지워진 줄 알았는데 왜 다시 보이지" 상태를
+  // 설명할 방법이 없었다.
+  const [bulkDeleteFailures, setBulkDeleteFailures] = useState<string[] | null>(null);
   const [showRcmsUpload, setShowRcmsUpload] = useState(false);
   // 고정열(약칭~연구책임자, 5개)이 차지하는 폭이 좁은 화면에서는 오른쪽 스크롤 영역을 거의 다 잡아먹으므로,
   // 필요할 때 꺼서 일반 표처럼 전체를 스크롤해 볼 수 있게 한다. 체크박스·펼치기 열은 폭이 작아(64px) 계속 고정해둔다.
@@ -2787,10 +2794,23 @@ export default function FeesPage() {
     return ids.map((id) => projects.find((p) => p.id === id)).filter((p): p is Project => !!p);
   }, [filtered, selectedKeys, projects]);
 
-  function deleteSelectedProjects() {
-    selectedProjectsForDelete.forEach((p) => deleteProject(p.id));
+  async function deleteSelectedProjects() {
+    setBulkDeleting(true);
+    // deleteProject 자체는(동시 20건 제한 + 배치 완료 추적을 위해) trackSync로 감싼 요청을 쏘고
+    // 바로 반환하므로, runBulkSyncBatch로 감싸야 이 안의 모든 삭제 요청이 실제로 끝날 때까지
+    // 기다렸다가 몇 건이 실패했는지(그리고 어떤 과제인지) 받아올 수 있다 — 엑셀 업로드와 동일한 패턴.
+    const { syncFailureDetails } = await runBulkSyncBatch(async () => {
+      selectedProjectsForDelete.forEach((p) => deleteProject(p.id));
+    });
+    setBulkDeleting(false);
     setSelectedKeys(new Set());
-    setShowBulkDeleteConfirm(false);
+    if (syncFailureDetails.length > 0) {
+      // 실패한 과제는 deleteProject의 restore()가 이미 목록에 되돌려놨다 — 모달을 닫는 대신
+      // 결과 화면으로 바꿔 무엇이 실패했는지 보여준다.
+      setBulkDeleteFailures(syncFailureDetails);
+    } else {
+      setShowBulkDeleteConfirm(false);
+    }
   }
 
   // 선택된 행 → 과제 단위로 묶어 "정산절차 안내 공문 일괄발송" 모달에 넘길 대상 목록을 만든다.
@@ -3435,7 +3455,7 @@ export default function FeesPage() {
           )}
           {canDeleteProjects && (
             <button
-              onClick={() => setShowBulkDeleteConfirm(true)}
+              onClick={() => { setBulkDeleteFailures(null); setShowBulkDeleteConfirm(true); }}
               className="flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-lg text-red-600 bg-white border border-red-300 hover:bg-red-50 transition-colors"
             >
               <FiTrash2 size={12} /> 선택 과제 삭제
@@ -3927,39 +3947,68 @@ export default function FeesPage() {
         </Modal>
       )}
       {showBulkDeleteConfirm && (
-        <Modal title="선택 과제 삭제" onClose={() => setShowBulkDeleteConfirm(false)}>
-          <div className="p-5 space-y-4">
-            <p className="text-sm text-slate-700">
-              선택한 과제 <strong className="font-semibold">{selectedProjectsForDelete.length}건</strong>을 삭제하시겠습니까?
-            </p>
-            <div className="max-h-48 overflow-y-auto border border-slate-100 rounded-lg divide-y divide-slate-50">
-              {selectedProjectsForDelete.map((p) => (
-                <div key={p.id} className="px-3 py-2 text-xs text-slate-600 flex items-center gap-2">
-                  <span className="font-mono text-slate-400 shrink-0">{p.projectNumber}</span>
-                  <span className="truncate">{p.projectName}</span>
-                </div>
-              ))}
-            </div>
-            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-700 space-y-1">
-              <p className="font-medium">함께 삭제되는 데이터 (되돌릴 수 없습니다)</p>
-              <ul className="list-disc list-inside space-y-0.5">
-                <li>참여기관 정보</li>
-                <li>연차별 수수료 산정·청구 내역</li>
-                <li>이슈/메모</li>
-                <li>미청구액·미수금 내역</li>
-                <li>세금계산서 내역</li>
+        <Modal
+          title="선택 과제 삭제"
+          onClose={() => setShowBulkDeleteConfirm(false)}
+          preventClose={bulkDeleting}
+        >
+          {bulkDeleteFailures ? (
+            <div className="p-5 space-y-4">
+              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-700 space-y-1">
+                <p className="font-medium">서버 삭제 실패 — {bulkDeleteFailures.length}건</p>
+                <p>
+                  아래 과제는 화면에서 잠깐 사라졌다가 삭제가 안 된 상태로 목록에 그대로 남아있습니다.
+                  잠시 후 다시 시도해주세요.
+                </p>
+              </div>
+              <ul className="max-h-48 overflow-y-auto rounded-lg border border-slate-100 divide-y divide-slate-50">
+                {bulkDeleteFailures.map((detail, i) => (
+                  <li key={i} className="px-3 py-2 text-xs text-slate-600">{detail}</li>
+                ))}
               </ul>
+              <div className="flex justify-end pt-1">
+                <button
+                  onClick={() => { setBulkDeleteFailures(null); setShowBulkDeleteConfirm(false); }}
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">
+                  닫기
+                </button>
+              </div>
             </div>
-            <div className="flex justify-end gap-2 pt-1">
-              <button onClick={() => setShowBulkDeleteConfirm(false)}
-                className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
-              <button
-                onClick={deleteSelectedProjects}
-                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors">
-                삭제
-              </button>
+          ) : (
+            <div className="p-5 space-y-4">
+              <p className="text-sm text-slate-700">
+                선택한 과제 <strong className="font-semibold">{selectedProjectsForDelete.length}건</strong>을 삭제하시겠습니까?
+              </p>
+              <div className="max-h-48 overflow-y-auto border border-slate-100 rounded-lg divide-y divide-slate-50">
+                {selectedProjectsForDelete.map((p) => (
+                  <div key={p.id} className="px-3 py-2 text-xs text-slate-600 flex items-center gap-2">
+                    <span className="font-mono text-slate-400 shrink-0">{p.projectNumber}</span>
+                    <span className="truncate">{p.projectName}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-700 space-y-1">
+                <p className="font-medium">함께 삭제되는 데이터 (되돌릴 수 없습니다)</p>
+                <ul className="list-disc list-inside space-y-0.5">
+                  <li>참여기관 정보</li>
+                  <li>연차별 수수료 산정·청구 내역</li>
+                  <li>이슈/메모</li>
+                  <li>미청구액·미수금 내역</li>
+                  <li>세금계산서 내역</li>
+                </ul>
+              </div>
+              <div className="flex justify-end gap-2 pt-1">
+                <button onClick={() => setShowBulkDeleteConfirm(false)} disabled={bulkDeleting}
+                  className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors disabled:opacity-40">취소</button>
+                <button
+                  onClick={deleteSelectedProjects}
+                  disabled={bulkDeleting}
+                  className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-40 transition-colors">
+                  {bulkDeleting ? "삭제 중..." : "삭제"}
+                </button>
+              </div>
             </div>
-          </div>
+          )}
         </Modal>
       )}
       {modal?.mode === "collection" && (

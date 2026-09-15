@@ -308,13 +308,13 @@ function createThrottledFetch(maxConcurrent: number): (input: string, init?: Req
 }
 
 const throttledFetch = createThrottledFetch(6);
-// 삭제는 add*/update*보다 서버 쪽 부하가 가볍고(과제 삭제만 예외 — 아래 참고) 사용자가 한 번에
-// 수십 건을 골라 지우는 경우가 흔해서(RCMS 잘못 업로드한 과제 일괄 정리 등), 같은 6건 제한을
-// 쓰면 필요 이상으로 느려진다. 별도 큐로 분리해 add*/update* 트래픽과 서로 경합하지 않게 하고,
-// 상한을 20건으로 넉넉히 잡는다 — 서버는 어차피 withDbWriteSlot(MAX_CONCURRENT_WRITES=7)이
-// 실제 DB 작업 동시성을 그보다 낮게 다시 제한하므로, 여기서 더 늘려도 DB 커넥션 풀엔 부담이
-// 없고 요청이 서버 큐에서 대기하는 시간만 줄어든다.
-const throttledDeleteFetch = createThrottledFetch(20);
+// 과제 삭제는 한 트랜잭션이 여러 테이블을 순차로 deleteMany하는 무거운 작업이라, 동시에 여러
+// 건이 돌면(과제별로 지우는 행 자체는 안 겹쳐도) SQL Server가 같은 테이블의 잠금 경합을 데드락으로
+// 판단해 트랜잭션 하나를 강제 종료시킬 수 있다(P2034) — withDeadlockRetry(서버 쪽)로 재시도는
+// 하지만, 애초에 동시에 여러 건을 쏘지 않으면 이 경합 자체가 거의 안 생긴다. 그래서 삭제만은
+// add*/update*(throttledFetch, 동시 6건)와 별도 큐로 분리하고 완전히 순차 처리(동시 1건)한다 —
+// 여러 건을 지워도 항상 한 번에 하나씩만 서버에 도달해 이전 것이 끝나야 다음 것이 나간다.
+const throttledDeleteFetch = createThrottledFetch(1);
 
 // 엑셀 업로드 같은 일괄 등록 구간에서 서버 동기화가 실제로 몇 건 실패했는지 세어 결과 화면에
 // 안내하는 데 쓴다. beginSyncBatch()로 집계를 시작하고, endSyncBatchAndWait()으로 그 구간에서

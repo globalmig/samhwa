@@ -55,6 +55,30 @@ export function withDbWriteSlot<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 // ============================================================
+// 데드락(P2034) 재시도
+// ============================================================
+// withDbWriteSlot(동시 실행 개수 제한)은 커넥션 풀 고갈(P2024)은 막아주지만, 과제 일괄삭제처럼
+// 한 트랜잭션이 여러 테이블을 순차로 deleteMany하는 무거운 작업이 여러 건 동시에 돌면 각 트랜잭션이
+// 건드리는 행 자체는 겹치지 않아도(과제별로 ID가 분리됨) SQL Server가 같은 테이블의 페이지/인덱스
+// 잠금 경합을 데드락으로 판단해 트랜잭션 하나를 강제 종료시킬 수 있다(P2034). 이건 동시성을 아무리
+// 낮춰도 근본적으로 없앨 수 없는 정상적인 경합이라, Prisma/SQL Server 모두 "그대로 재시도"를
+// 권장한다 — 희생된 트랜잭션은 커밋된 게 없으므로 재시도해도 안전하다.
+const DEADLOCK_RETRY_CODES = new Set(["P2034"]);
+
+export async function withDeadlockRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const retryable = err instanceof Prisma.PrismaClientKnownRequestError && DEADLOCK_RETRY_CODES.has(err.code);
+      if (!retryable || attempt >= maxAttempts) throw err;
+      // 데드락 희생자 둘이 곧바로 서로 재시도하면 다시 충돌할 수 있어 약간의 지터를 둔다.
+      await new Promise((resolve) => setTimeout(resolve, 150 * attempt + Math.random() * 100));
+    }
+  }
+}
+
+// ============================================================
 // 쓰기 API 공통 에러 메시지
 // ============================================================
 // lib/project-member-patch.ts의 describeDbError와 같은 이유(커넥션 풀 고갈 등 흔한 일시적 오류를

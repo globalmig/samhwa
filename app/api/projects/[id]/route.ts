@@ -1,4 +1,4 @@
-import { prisma, withDbWriteSlot, describeDbWriteError } from "@/lib/db";
+import { prisma, withDbWriteSlot, withDeadlockRetry, describeDbWriteError } from "@/lib/db";
 import { requireWriteAccess, SessionError } from "@/lib/session";
 import { toProject } from "@/lib/project-mapper";
 import { writeAuditLog } from "@/lib/audit";
@@ -97,6 +97,10 @@ export async function DELETE(_request: Request, { params }: Params) {
   // 원인 불명의 빈 500으로 실패한다(엑셀 대량 업로드에서 겪은 것과 같은 문제 — describeDbWriteError
   // 참고). 프론트(deleteProject)는 실패 응답을 받으면 로컬 상태를 되돌리므로, 이 안에서 던지는
   // 예외가 빈 500이 아니라 파싱 가능한 에러 응답으로 나가야 그 되돌림이 실제로 일어난다.
+  //
+  // withDbWriteSlot으로 동시 실행 개수를 제한해도(P2024 대응) 과제별 삭제 대상 행 자체는 서로
+  // 겹치지 않기 때문에, 여러 과제를 동시에 지울 때 SQL Server가 같은 테이블의 잠금 경합을 데드락으로
+  // 판단해 트랜잭션을 강제 종료시키는 경우(P2034)가 남는다 — withDeadlockRetry로 감싸 자동 재시도한다.
   try {
     await withDbWriteSlot(async () => {
       const terms = await prisma.projectTerm.findMany({ where: { projectId: id }, select: { id: true } });
@@ -110,7 +114,7 @@ export async function DELETE(_request: Request, { params }: Params) {
       const settlements = await prisma.settlement.findMany({ where: { projectTermInstitutionId: { in: ptiIds } }, select: { id: true } });
       const settlementIds = settlements.map((s) => s.id);
 
-      await prisma.$transaction(async (tx) => {
+      await withDeadlockRetry(() => prisma.$transaction(async (tx) => {
         await tx.paymentHistory.deleteMany({ where: { receivableId: { in: receivableIds } } });
         await tx.taxInvoiceHistory.deleteMany({ where: { taxInvoiceId: { in: taxInvoiceIds } } });
         await tx.settlementHistory.deleteMany({ where: { settlementId: { in: settlementIds } } });
@@ -133,7 +137,7 @@ export async function DELETE(_request: Request, { params }: Params) {
           entityLabel: target.projectName,
           action: "DELETE",
         });
-      });
+      }));
     });
   } catch (err) {
     console.error("과제 삭제 실패:", err);
