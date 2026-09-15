@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma, withDbWriteSlot } from "@/lib/db";
 import { requireWriteAccess, SessionError } from "@/lib/session";
 import { writeAuditLog } from "@/lib/audit";
-import { PTI_INCLUDE, applyProjectMemberPatch, describeDbError } from "@/lib/project-member-patch";
+import { PTI_INCLUDE, applyProjectMemberPatch, describeDbError, withMemberLock } from "@/lib/project-member-patch";
 import type { ProjectMember } from "@/lib/mock";
 
 export const runtime = "nodejs";
@@ -72,20 +72,26 @@ export async function DELETE(_request: Request, { params }: Params) {
         return;
       }
 
-      const siblings = await prisma.projectTermInstitution.findMany({
-        where: { institutionId: anchor.institutionId, projectTerm: { projectId: anchor.projectTerm.projectId } },
-        select: { id: true },
-      });
-      const ptiIds = siblings.map((s) => s.id);
+      // applyProjectMemberPatch와 같은 (institutionId, projectId) siblings 집합을 건드리므로 같은
+      // 락을 써야 한다 — 안 그러면 이 삭제와 동시에 들어온 PATCH가 같은 행을 서로 다른 순서로 잠가
+      // 데드락(P2034)이나 트랜잭션 타임아웃(P2028)을 일으킬 수 있다. lib/project-member-patch.ts
+      // withMemberLock 주석 참고.
+      await withMemberLock(`${anchor.institutionId}:${anchor.projectTerm.projectId}`, async () => {
+        const siblings = await prisma.projectTermInstitution.findMany({
+          where: { institutionId: anchor.institutionId, projectTerm: { projectId: anchor.projectTerm.projectId } },
+          select: { id: true },
+        });
+        const ptiIds = siblings.map((s) => s.id);
 
-      await prisma.$transaction(async (tx) => {
-        await tx.projectTermInstitution.deleteMany({ where: { id: { in: ptiIds } } });
-        await writeAuditLog(tx, {
-          actorUserId: actor.userId,
-          entityType: "projectMember",
-          entityId: anchor.id,
-          entityLabel: `${anchor.projectTerm.project.projectNumber} · ${anchor.institution.institutionName}`,
-          action: "DELETE",
+        await prisma.$transaction(async (tx) => {
+          await tx.projectTermInstitution.deleteMany({ where: { id: { in: ptiIds } } });
+          await writeAuditLog(tx, {
+            actorUserId: actor.userId,
+            entityType: "projectMember",
+            entityId: anchor.id,
+            entityLabel: `${anchor.projectTerm.project.projectNumber} · ${anchor.institution.institutionName}`,
+            action: "DELETE",
+          });
         });
       });
     });
