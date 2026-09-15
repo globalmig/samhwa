@@ -1,4 +1,4 @@
-import { prisma, withDbWriteSlot } from "@/lib/db";
+import { prisma, withDbWriteSlot, withDeadlockRetry, describeDbWriteError } from "@/lib/db";
 import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
 import { toProjectIssue } from "@/lib/project-issue-mapper";
 import { writeAuditLog } from "@/lib/audit";
@@ -45,31 +45,40 @@ export async function POST(request: Request) {
     return Response.json({ ok: false, error: "과제, 내용은 필수입니다." }, { status: 400 });
   }
 
-  const created = await withDbWriteSlot(() => prisma.$transaction(async (tx) => {
-    const row = await tx.projectIssue.create({
-      data: {
-        projectId: body.projectId,
-        content: body.content,
-        author: body.author,
-        priority: body.priority,
-        status: body.status,
-        recipientGroups: body.recipientGroups ? JSON.stringify(body.recipientGroups) : null,
-        recipientUserIds: body.recipientUserIds ? JSON.stringify(body.recipientUserIds) : null,
-        institutionName: body.institutionName ?? null,
-        noInstitution: !!body.noInstitution,
-        term: body.term ?? null,
-      },
-      include: { project: true },
-    });
-    await writeAuditLog(tx, {
-      actorUserId: actor.userId,
-      entityType: "projectIssue",
-      entityId: row.id,
-      entityLabel: issueLabel(row.project.projectNumber, row.content),
-      action: "CREATE",
-    });
-    return row;
-  }));
+  let created;
+  try {
+    // 엑셀 대량 업로드가 "확인 필요" 이슈를 여러 과제에 동시에 남길 때, 감사로그 등 공유 테이블에
+    // 대한 잠금 경합으로 데드락(P2034)이 생길 수 있어(과제 삭제·생성과 같은 패턴) withDeadlockRetry로
+    // 재시도하고, try/catch 없이 그대로 던져 원인 없는 빈 500이 나가던 문제도 함께 막는다.
+    created = await withDbWriteSlot(() => withDeadlockRetry(() => prisma.$transaction(async (tx) => {
+      const row = await tx.projectIssue.create({
+        data: {
+          projectId: body.projectId,
+          content: body.content,
+          author: body.author,
+          priority: body.priority,
+          status: body.status,
+          recipientGroups: body.recipientGroups ? JSON.stringify(body.recipientGroups) : null,
+          recipientUserIds: body.recipientUserIds ? JSON.stringify(body.recipientUserIds) : null,
+          institutionName: body.institutionName ?? null,
+          noInstitution: !!body.noInstitution,
+          term: body.term ?? null,
+        },
+        include: { project: true },
+      });
+      await writeAuditLog(tx, {
+        actorUserId: actor.userId,
+        entityType: "projectIssue",
+        entityId: row.id,
+        entityLabel: issueLabel(row.project.projectNumber, row.content),
+        action: "CREATE",
+      });
+      return row;
+    })));
+  } catch (err) {
+    console.error("이슈 생성 실패:", err);
+    return Response.json({ ok: false, error: describeDbWriteError(err, "이슈를 생성하지 못했습니다.") }, { status: 500 });
+  }
 
   return Response.json({ ok: true, projectIssue: toProjectIssue(created) });
 }

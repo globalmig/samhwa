@@ -46,35 +46,45 @@ export async function PATCH(request: Request, { params }: Params) {
   const startYear = body.startDate ? new Date(body.startDate).getUTCFullYear() : undefined;
   const endYear = body.endDate ? new Date(body.endDate).getUTCFullYear() : undefined;
 
-  const updated = await withDbWriteSlot(() => prisma.$transaction(async (tx) => {
-    const row = await tx.project.update({
-      where: { id },
-      data: {
-        projectNumber: body.projectNumber ?? undefined,
-        projectName: body.projectName ?? undefined,
-        projectType: body.projectType ?? undefined,
-        agency: body.agency !== undefined ? body.agency : undefined,
-        fundingAgencyId: body.agencyId !== undefined ? body.agencyId || null : undefined,
-        settlementType: body.autonomySettlementType ?? undefined,
-        startYear: startYear ?? undefined,
-        endYear: endYear ?? undefined,
-        totalTerms: body.totalTerms ?? undefined,
-        status: body.status ?? undefined,
-        extraData: JSON.stringify(nextExtra),
-      },
-    });
-    const afterProject = toProject(row);
-    await writeAuditLog(tx, {
-      actorUserId: actor.userId,
-      entityType: "project",
-      entityId: row.id,
-      entityLabel: afterProject.projectName,
-      action: "UPDATE",
-      before: toProject(before) as unknown as Record<string, unknown>,
-      after: afterProject as unknown as Record<string, unknown>,
-    });
-    return row;
-  }));
+  let updated;
+  try {
+    // 엑셀 대량 업로드로 기존 과제를 갱신할 때, 감사로그 등 공유 테이블에 대한 잠금 경합으로 인한
+    // 데드락(P2034)이 생길 수 있어(과제 삭제·생성과 같은 패턴) withDeadlockRetry로 재시도하고,
+    // 그래도 실패하면(혹은 다른 DB 예외면) try/catch 없이 그대로 던져 Next.js가 원인 없는 빈 500을
+    // 돌려주던 문제를 막는다 — 이 라우트엔 그 처리가 빠져 있었다.
+    updated = await withDbWriteSlot(() => withDeadlockRetry(() => prisma.$transaction(async (tx) => {
+      const row = await tx.project.update({
+        where: { id },
+        data: {
+          projectNumber: body.projectNumber ?? undefined,
+          projectName: body.projectName ?? undefined,
+          projectType: body.projectType ?? undefined,
+          agency: body.agency !== undefined ? body.agency : undefined,
+          fundingAgencyId: body.agencyId !== undefined ? body.agencyId || null : undefined,
+          settlementType: body.autonomySettlementType ?? undefined,
+          startYear: startYear ?? undefined,
+          endYear: endYear ?? undefined,
+          totalTerms: body.totalTerms ?? undefined,
+          status: body.status ?? undefined,
+          extraData: JSON.stringify(nextExtra),
+        },
+      });
+      const afterProject = toProject(row);
+      await writeAuditLog(tx, {
+        actorUserId: actor.userId,
+        entityType: "project",
+        entityId: row.id,
+        entityLabel: afterProject.projectName,
+        action: "UPDATE",
+        before: toProject(before) as unknown as Record<string, unknown>,
+        after: afterProject as unknown as Record<string, unknown>,
+      });
+      return row;
+    })));
+  } catch (err) {
+    console.error("과제 수정 실패:", err);
+    return Response.json({ ok: false, error: describeDbWriteError(err, "과제를 수정하지 못했습니다.") }, { status: 500 });
+  }
 
   return Response.json({ ok: true, project: toProject(updated) });
 }
