@@ -27,6 +27,8 @@ import {
   setTermOtherFirmHandled,
   runBulkSyncBatch,
   endBulkRecalcSuspend,
+  refreshListsBeforeBulkUpload,
+  getStoreState,
 } from "@/lib/store";
 import type { Project, ProjectMember, AnnualBudget, AnnualFinancials, Institution, SystemUser, FundingAgency } from "@/lib/mock";
 import { getCurrentUser } from "@/lib/auth";
@@ -2976,6 +2978,11 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
     setLoading(true);
     recordUpload("registration_started", { rows: previewRows.length, members: memberAggregates.length, busy: true });
     try {
+      // registerRows는 페이지 로드 시점에 한 번 받아둔 과제/기관/전담기관 목록으로 "이미 있는지"를
+      // 판단한다 — 그 목록은 세션 내내 재조회되지 않으므로, 브라우저를 오래 띄워두고 있었거나 다른
+      // 사용자가 그 사이 같은 과제번호/사업자번호/약칭을 등록했으면 신규로 오인해 만들려다 DB 유니크
+      // 제약에 걸려 실패할 수 있다. 등록 시작 직전에 한 번 더 받아와 그 창을 좁힌다.
+      await refreshListsBeforeBulkUpload();
       const { value, syncFailures } = await runBulkSyncBatch(registerRows);
       setDoneResult({ ...value, syncFailures });
       recordUpload("registration_completed", { syncFailures });
@@ -2994,6 +3001,17 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
 
   async function registerRows() {
     const today = todayKST();
+
+    // useStore()로 렌더 시점에 캡처해둔 projects/institutions/fundingAgencies는 doRegister가
+    // 직전에 호출한 refreshListsBeforeBulkUpload()가 store를 갱신해도 "다음 렌더"에서나 바뀐
+    // 값으로 보인다(리액트 상태 갱신은 이 함수 호출과 비동기적으로 일어난다) — 그래서 여기서
+    // store의 지금 시점 스냅샷으로 다시 잡아, "이미 있는지"를 판단하는 아래 로직들이 방금 받아온
+    // 최신 서버 데이터를 보게 한다. 이 함수 안에서 이 세 이름을 참조하는 모든 곳(과제/기관 매칭에
+    // 쓰이는 module-level 헬퍼에 인자로 넘기는 것 포함)이 이 지역 변수로 가려진다.
+    const liveState = getStoreState();
+    const projects = liveState.projects;
+    const institutions = liveState.institutions;
+    const fundingAgencies = liveState.fundingAgencies;
 
     const registeredAgencies = new Map<string, string>(); // name → id
     const registeredProjects = new Map<string, string>(); // normProjectNum → id

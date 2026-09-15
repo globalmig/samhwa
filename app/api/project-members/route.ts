@@ -1,4 +1,4 @@
-import { prisma, withDbWriteSlot } from "@/lib/db";
+import { prisma, withDbWriteSlot, describeDbWriteError } from "@/lib/db";
 import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
 import { groupPtisToMembers } from "@/lib/project-member-mapper";
 import { getOrCreatePti } from "@/lib/pti-helper";
@@ -50,48 +50,54 @@ export async function POST(request: Request) {
     exemptRefGrade: body.exemptRefGrade, role: body.role,
   };
 
-  const member = await withDbWriteSlot(() => prisma.$transaction(async (tx) => {
-    if (body.annualBudgets && body.annualBudgets.length > 0) {
-      for (const ab of body.annualBudgets) {
-        const budget = BigInt(Math.round(ab.cashBudget + ab.inKindBudget));
-        const ptiId = await getOrCreatePti(tx, body.projectId, ab.termNumber, body.institutionId, role, budget, ab.termYear);
+  let member;
+  try {
+    member = await withDbWriteSlot(() => prisma.$transaction(async (tx) => {
+      if (body.annualBudgets && body.annualBudgets.length > 0) {
+        for (const ab of body.annualBudgets) {
+          const budget = BigInt(Math.round(ab.cashBudget + ab.inKindBudget));
+          const ptiId = await getOrCreatePti(tx, body.projectId, ab.termNumber, body.institutionId, role, budget, ab.termYear);
+          await tx.projectTermInstitution.update({
+            where: { id: ptiId },
+            data: {
+              extraData: JSON.stringify({
+                ...sharedExtra, cashBudget: ab.cashBudget, inKindBudget: ab.inKindBudget,
+                termStartDate: ab.termStartDate, termEndDate: ab.termEndDate, auditFirm: ab.auditFirm,
+              }),
+            },
+          });
+        }
+      } else {
+        const project = await tx.project.findUnique({ where: { id: body.projectId } });
+        const extra = project?.extraData ? (JSON.parse(project.extraData) as { currentTerm?: number }) : {};
+        const budget = BigInt(Math.round(body.budget ?? 0));
+        const ptiId = await getOrCreatePti(tx, body.projectId, extra.currentTerm ?? 1, body.institutionId, role, budget);
         await tx.projectTermInstitution.update({
           where: { id: ptiId },
-          data: {
-            extraData: JSON.stringify({
-              ...sharedExtra, cashBudget: ab.cashBudget, inKindBudget: ab.inKindBudget,
-              termStartDate: ab.termStartDate, termEndDate: ab.termEndDate, auditFirm: ab.auditFirm,
-            }),
-          },
+          data: { extraData: JSON.stringify({ ...sharedExtra, cashBudget: body.cashBudget ?? body.budget, inKindBudget: body.inKindBudget ?? 0 }) },
         });
       }
-    } else {
-      const project = await tx.project.findUnique({ where: { id: body.projectId } });
-      const extra = project?.extraData ? (JSON.parse(project.extraData) as { currentTerm?: number }) : {};
-      const budget = BigInt(Math.round(body.budget ?? 0));
-      const ptiId = await getOrCreatePti(tx, body.projectId, extra.currentTerm ?? 1, body.institutionId, role, budget);
-      await tx.projectTermInstitution.update({
-        where: { id: ptiId },
-        data: { extraData: JSON.stringify({ ...sharedExtra, cashBudget: body.cashBudget ?? body.budget, inKindBudget: body.inKindBudget ?? 0 }) },
+
+      const rows = await tx.projectTermInstitution.findMany({
+        where: { institutionId: body.institutionId, projectTerm: { projectId: body.projectId } },
+        include: PTI_INCLUDE,
       });
-    }
+      const [createdMember] = groupPtisToMembers(rows);
 
-    const rows = await tx.projectTermInstitution.findMany({
-      where: { institutionId: body.institutionId, projectTerm: { projectId: body.projectId } },
-      include: PTI_INCLUDE,
-    });
-    const [createdMember] = groupPtisToMembers(rows);
+      await writeAuditLog(tx, {
+        actorUserId: actor.userId,
+        entityType: "projectMember",
+        entityId: createdMember.id,
+        entityLabel: `${createdMember.projectNumber} · ${createdMember.institutionName}`,
+        action: "CREATE",
+      });
 
-    await writeAuditLog(tx, {
-      actorUserId: actor.userId,
-      entityType: "projectMember",
-      entityId: createdMember.id,
-      entityLabel: `${createdMember.projectNumber} · ${createdMember.institutionName}`,
-      action: "CREATE",
-    });
-
-    return createdMember;
-  }));
+      return createdMember;
+    }));
+  } catch (err) {
+    console.error("참여기관 생성 실패:", err);
+    return Response.json({ ok: false, error: describeDbWriteError(err, "참여기관을 생성하지 못했습니다.") }, { status: 500 });
+  }
 
   return Response.json({ ok: true, member });
 }

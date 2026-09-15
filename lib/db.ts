@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient; dbWriteState?: DbWriteState };
 
@@ -52,4 +52,22 @@ export function withDbWriteSlot<T>(fn: () => Promise<T>): Promise<T> {
     if (_writeState.active < MAX_CONCURRENT_WRITES) run();
     else _writeState.queue.push(run);
   });
+}
+
+// ============================================================
+// 쓰기 API 공통 에러 메시지
+// ============================================================
+// lib/project-member-patch.ts의 describeDbError와 같은 이유(커넥션 풀 고갈 등 흔한 일시적 오류를
+// 클라이언트가 알아볼 수 있게 그대로 노출)로, 그 외 생성(POST) 라우트들도 DB 예외를 try/catch 없이
+// 그대로 던지면 Next.js가 원인 없는 빈 500을 돌려줘 클라이언트의 res.json()이 파싱조차 못 하고
+// 실패한다 — 엑셀 대량 업로드에서 "몇 건이 이유 없이 서버 오류로 실패"하던 원인 중 하나였다.
+export function describeDbWriteError(err: unknown, fallback: string): string {
+  if (err instanceof Prisma.PrismaClientKnownRequestError) {
+    if (err.code === "P2024") return "서버가 혼잡해 시간 내에 처리하지 못했습니다(P2024, DB 커넥션 풀 고갈). 잠시 후 다시 시도해주세요.";
+    if (["P1001", "P1002", "P1008", "P1017"].includes(err.code)) {
+      return `데이터베이스 연결 문제로 처리하지 못했습니다(${err.code}). 잠시 후 다시 시도해주세요.`;
+    }
+    return `데이터 처리 중 오류가 발생했습니다(${err.code}). 잠시 후 다시 시도해주세요.`;
+  }
+  return fallback;
 }

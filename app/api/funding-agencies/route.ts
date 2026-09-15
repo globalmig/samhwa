@@ -1,4 +1,5 @@
-import { prisma, withDbWriteSlot } from "@/lib/db";
+import { Prisma } from "@prisma/client";
+import { prisma, withDbWriteSlot, describeDbWriteError } from "@/lib/db";
 import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
 import { toFundingAgency } from "@/lib/funding-agency-mapper";
 import { writeAuditLog } from "@/lib/audit";
@@ -60,35 +61,48 @@ export async function POST(request: Request) {
     return Response.json({ ok: false, error: "정식명칭, 약칭, 기관코드는 필수입니다." }, { status: 400 });
   }
 
-  const created = await withDbWriteSlot(() => prisma.$transaction(async (tx) => {
-    const row = await tx.fundingAgency.create({
-      data: {
-        name: body.name,
-        shortName: body.shortName,
-        code: body.code,
-        contactName: body.contactName ?? "",
-        contactEmail: body.contactEmail ?? "",
-        contactPhone: body.contactPhone ?? "",
-        noticeSenderEmail: body.noticeSenderEmail ?? null,
-        noticeSenderMailPassword: body.noticeSenderMailPassword ?? null,
-        status: body.status ?? "ACTIVE",
-        registeredAt: body.registeredAt ? new Date(body.registeredAt) : new Date(),
-        website: body.website ?? null,
-        noticeRecipientScope: body.noticeRecipientScope ?? "LEAD_ONLY",
-        autoDetectByLeadInstitution: !!body.autoDetectByLeadInstitution,
-        affiliatedInstitutionNames: body.affiliatedInstitutionNames ? JSON.stringify(body.affiliatedInstitutionNames) : null,
-        specialNotes: body.specialNotes ? JSON.stringify(body.specialNotes) : null,
-      },
-    });
-    await writeAuditLog(tx, {
-      actorUserId: actor.userId,
-      entityType: "fundingAgency",
-      entityId: row.id,
-      entityLabel: row.name,
-      action: "CREATE",
-    });
-    return row;
-  }));
+  let created;
+  try {
+    created = await withDbWriteSlot(() => prisma.$transaction(async (tx) => {
+      const row = await tx.fundingAgency.create({
+        data: {
+          name: body.name,
+          shortName: body.shortName,
+          code: body.code,
+          contactName: body.contactName ?? "",
+          contactEmail: body.contactEmail ?? "",
+          contactPhone: body.contactPhone ?? "",
+          noticeSenderEmail: body.noticeSenderEmail ?? null,
+          noticeSenderMailPassword: body.noticeSenderMailPassword ?? null,
+          status: body.status ?? "ACTIVE",
+          registeredAt: body.registeredAt ? new Date(body.registeredAt) : new Date(),
+          website: body.website ?? null,
+          noticeRecipientScope: body.noticeRecipientScope ?? "LEAD_ONLY",
+          autoDetectByLeadInstitution: !!body.autoDetectByLeadInstitution,
+          affiliatedInstitutionNames: body.affiliatedInstitutionNames ? JSON.stringify(body.affiliatedInstitutionNames) : null,
+          specialNotes: body.specialNotes ? JSON.stringify(body.specialNotes) : null,
+        },
+      });
+      await writeAuditLog(tx, {
+        actorUserId: actor.userId,
+        entityType: "fundingAgency",
+        entityId: row.id,
+        entityLabel: row.name,
+        action: "CREATE",
+      });
+      return row;
+    }));
+  } catch (err) {
+    // 약칭(shortName) 유니크 제약 위반 — 이 브라우저가 들고 있던 전담기관 목록이 오래돼(재조회
+    // 없이 세션 내내 유지) 이미 서버에 있는 전담기관을 "신규"로 오인한 경우다(엑셀 대량 업로드의
+    // 신규 전담기관 자동 생성에서 흔함). 실패로 끝내는 대신 기존 전담기관을 그대로 돌려준다.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      const existing = await prisma.fundingAgency.findUnique({ where: { shortName: body.shortName } });
+      if (existing) return Response.json({ ok: true, agency: toFundingAgency(existing) });
+    }
+    console.error("전담기관 생성 실패:", err);
+    return Response.json({ ok: false, error: describeDbWriteError(err, "전담기관을 생성하지 못했습니다.") }, { status: 500 });
+  }
 
   invalidateCache(FUNDING_AGENCIES_CACHE_KEY);
   return Response.json({ ok: true, agency: toFundingAgency(created) });

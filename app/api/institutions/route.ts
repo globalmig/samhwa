@@ -1,4 +1,5 @@
-import { prisma, withDbWriteSlot } from "@/lib/db";
+import { Prisma } from "@prisma/client";
+import { prisma, withDbWriteSlot, describeDbWriteError } from "@/lib/db";
 import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
 import { toInstitution } from "@/lib/institution-mapper";
 import { writeAuditLog } from "@/lib/audit";
@@ -45,32 +46,46 @@ export async function POST(request: Request) {
   }
   if (!body.name) return Response.json({ ok: false, error: "기관명은 필수입니다." }, { status: 400 });
 
-  const created = await withDbWriteSlot(() => prisma.$transaction(async (tx) => {
-    const row = await tx.institution.create({
-      data: {
-        institutionName: body.name,
-        businessNumber: body.bizNumber || null,
-        institutionType: body.type,
-        representativeName: body.representativeName || null,
-        phone: body.contactPhone || null,
-        email: body.contactEmail || null,
-        isActive: body.status !== "INACTIVE",
-        notes: body.note ?? null,
-        contacts: body.contactName
-          ? { create: [{ name: body.contactName, phone: body.contactPhone || null, email: body.contactEmail || null, isPrimary: true }] }
-          : undefined,
-      },
-      include: { contacts: true },
-    });
-    await writeAuditLog(tx, {
-      actorUserId: actor.userId,
-      entityType: "institution",
-      entityId: row.id,
-      entityLabel: row.institutionName,
-      action: "CREATE",
-    });
-    return row;
-  }));
+  const businessNumber = body.bizNumber || null;
+  let created;
+  try {
+    created = await withDbWriteSlot(() => prisma.$transaction(async (tx) => {
+      const row = await tx.institution.create({
+        data: {
+          institutionName: body.name,
+          businessNumber,
+          institutionType: body.type,
+          representativeName: body.representativeName || null,
+          phone: body.contactPhone || null,
+          email: body.contactEmail || null,
+          isActive: body.status !== "INACTIVE",
+          notes: body.note ?? null,
+          contacts: body.contactName
+            ? { create: [{ name: body.contactName, phone: body.contactPhone || null, email: body.contactEmail || null, isPrimary: true }] }
+            : undefined,
+        },
+        include: { contacts: true },
+      });
+      await writeAuditLog(tx, {
+        actorUserId: actor.userId,
+        entityType: "institution",
+        entityId: row.id,
+        entityLabel: row.institutionName,
+        action: "CREATE",
+      });
+      return row;
+    }));
+  } catch (err) {
+    // 사업자번호 유니크 제약 위반 — 이 브라우저가 들고 있던 기관 목록이 오래돼(재조회 없이 세션
+    // 내내 유지) 이미 서버에 있는 기관을 "신규"로 오인한 경우다(엑셀 대량 업로드에서 흔함).
+    // 실패로 끝내는 대신 기존 기관을 그대로 돌려준다 — institutions/bulk의 재사용 로직과 동일한 이유.
+    if (businessNumber && err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      const existing = await prisma.institution.findUnique({ where: { businessNumber }, include: { contacts: true } });
+      if (existing) return Response.json({ ok: true, institution: toInstitution(existing) });
+    }
+    console.error("기관 생성 실패:", err);
+    return Response.json({ ok: false, error: describeDbWriteError(err, "기관을 생성하지 못했습니다.") }, { status: 500 });
+  }
 
   invalidateCache(INSTITUTIONS_CACHE_KEY);
   return Response.json({ ok: true, institution: toInstitution(created) });

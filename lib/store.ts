@@ -205,6 +205,14 @@ function getSnapshot(): StoreState {
   return _state;
 }
 
+// useStore()는 리액트 렌더 시점의 스냅샷을 클로저로 캡처하므로, 그 렌더 이후 store가 갱신돼도(예:
+// refreshListsBeforeBulkUpload) 이미 만들어진 클로저(예: ExcelUploadModal의 registerRows)는 새
+// 렌더가 실제로 일어나기 전까지 옛 값을 그대로 들고 있는다. 리액트 렌더를 기다릴 필요 없이 "지금
+// store가 들고 있는 값"이 바로 필요한 곳(등록 직전 재조회 직후 등)에서 쓴다.
+export function getStoreState(): StoreState {
+  return _state;
+}
+
 function notify(): void {
   _listeners.forEach((l) => l());
 }
@@ -463,12 +471,9 @@ function flushMemberPatchQueue(): void {
 // FUNDING AGENCIES (전담기관)
 // ============================================================
 
-let _fundingAgenciesHydrated = false;
-function hydrateFundingAgencies(): void {
-  if (_fundingAgenciesHydrated || typeof window === "undefined") return;
-  _fundingAgenciesHydrated = true;
+function fetchFundingAgencies(): Promise<void> {
   const snapshotAtStart = _state.fundingAgencies;
-  fetch("/api/funding-agencies")
+  return fetch("/api/funding-agencies")
     .then((res) => res.json())
     .then((data: { ok: boolean; agencies?: FundingAgency[]; agencyGuides?: Record<string, AgencyGuideTab[]> }) => {
       // 이 요청이 떠 있는 동안 이미 수정이 있었으면 그 전 시점의 이 응답으로 덮어쓰지 않는다(수정 8).
@@ -483,13 +488,27 @@ function hydrateFundingAgencies(): void {
         };
         notify();
       }
-    })
-    .catch((err) => {
-      console.error("전담기관 목록을 불러오지 못했습니다.", err);
-      _fundingAgenciesHydrated = false;
     });
 }
+
+let _fundingAgenciesHydrated = false;
+function hydrateFundingAgencies(): void {
+  if (_fundingAgenciesHydrated || typeof window === "undefined") return;
+  _fundingAgenciesHydrated = true;
+  fetchFundingAgencies().catch((err) => {
+    console.error("전담기관 목록을 불러오지 못했습니다.", err);
+    _fundingAgenciesHydrated = false;
+  });
+}
 if (typeof window !== "undefined") hydrateFundingAgencies();
+
+// 엑셀 대량 업로드 시작 직전처럼, 이미 최초 로드가 끝난 뒤에도 최신 상태로 한 번 더 맞추고 싶을
+// 때 쓴다 — hydrateFundingAgencies와 달리 "한 번만" 제약이 없어 몇 번이든 다시 호출할 수 있다.
+export function refreshFundingAgencies(): Promise<void> {
+  return fetchFundingAgencies().catch((err) => {
+    console.error("전담기관 목록을 새로고침하지 못했습니다.", err);
+  });
+}
 
 export function addFundingAgency(data: Omit<FundingAgency, "id">): FundingAgency {
   const tempId = genId("fa");
@@ -599,25 +618,35 @@ export function deleteFundingAgency(id: string): string | null {
 // INSTITUTIONS (통합 기관)
 // ============================================================
 
-let _institutionsHydrated = false;
-function hydrateInstitutions(): void {
-  if (_institutionsHydrated || typeof window === "undefined") return;
-  _institutionsHydrated = true;
+function fetchInstitutions(): Promise<void> {
   const snapshotAtStart = _state.institutions;
-  fetch("/api/institutions")
+  return fetch("/api/institutions")
     .then((res) => res.json())
     .then((data: { ok: boolean; institutions?: Institution[] }) => {
       if (data.ok && data.institutions && _state.institutions === snapshotAtStart) {
         _state = { ..._state, institutions: data.institutions };
         notify();
       }
-    })
-    .catch((err) => {
-      console.error("기관 목록을 불러오지 못했습니다.", err);
-      _institutionsHydrated = false;
     });
 }
+
+let _institutionsHydrated = false;
+function hydrateInstitutions(): void {
+  if (_institutionsHydrated || typeof window === "undefined") return;
+  _institutionsHydrated = true;
+  fetchInstitutions().catch((err) => {
+    console.error("기관 목록을 불러오지 못했습니다.", err);
+    _institutionsHydrated = false;
+  });
+}
 if (typeof window !== "undefined") hydrateInstitutions();
+
+// 용도는 refreshFundingAgencies와 동일 — 엑셀 대량 업로드 시작 직전에 다시 불러 최신 상태로 맞춘다.
+export function refreshInstitutions(): Promise<void> {
+  return fetchInstitutions().catch((err) => {
+    console.error("기관 목록을 새로고침하지 못했습니다.", err);
+  });
+}
 
 export function addInstitution(data: Omit<Institution, "id">): Institution {
   const tempId = genId("inst");
@@ -842,12 +871,9 @@ function nextTermCode(): string {
   return `SH${String(max + 1).padStart(6, "0")}`;
 }
 
-let _projectsHydrated = false;
-function hydrateProjects(): void {
-  if (_projectsHydrated || typeof window === "undefined") return;
-  _projectsHydrated = true;
+function fetchProjects(): Promise<void> {
   const snapshotAtStart = _state.projects;
-  fetch("/api/projects")
+  return fetch("/api/projects")
     .then((res) => res.json())
     .then((data: { ok: boolean; projects?: Project[] }) => {
       // 이 요청이 떠 있는 동안 사용자가 이미 뭔가 저장했으면(주관기관 지정 등) _state.projects는
@@ -858,13 +884,37 @@ function hydrateProjects(): void {
         _state = { ..._state, projects: data.projects };
         notify();
       }
-    })
-    .catch((err) => {
-      console.error("과제 목록을 불러오지 못했습니다.", err);
-      _projectsHydrated = false;
     });
 }
+
+let _projectsHydrated = false;
+function hydrateProjects(): void {
+  if (_projectsHydrated || typeof window === "undefined") return;
+  _projectsHydrated = true;
+  fetchProjects().catch((err) => {
+    console.error("과제 목록을 불러오지 못했습니다.", err);
+    _projectsHydrated = false;
+  });
+}
 if (typeof window !== "undefined") hydrateProjects();
+
+// 용도는 refreshFundingAgencies와 동일 — 엑셀 대량 업로드 시작 직전에 다시 불러 최신 상태로 맞춘다.
+export function refreshProjects(): Promise<void> {
+  return fetchProjects().catch((err) => {
+    console.error("과제 목록을 새로고침하지 못했습니다.", err);
+  });
+}
+
+// RCMS 엑셀 대량 업로드 시작 직전에 호출한다. 이 store는 최초 로드 이후 세션 내내 재조회 없이
+// 그대로 유지되므로(hydrate*는 한 번만 실행), 브라우저를 오래 띄워두고 있었거나 다른 사용자가
+// 그 사이 같은 과제번호/사업자번호/전담기관 약칭을 등록했다면 registerRows의 "이미 있는지" 판단이
+// 틀려 신규로 오인해 생성 요청을 보내고, DB 유니크 제약에 걸려 실패할 수 있었다(엑셀 업로드에서
+// "몇 건만 이유 없이 서버 오류로 실패"하던 원인 중 하나). 이 세 목록만 업로드 직전에 한 번 더
+// 받아와 그 창을 좁힌다 — 완전히 없애진 못한다(새로고침 이후에도 업로드 도중 다른 사용자가 만들
+// 수 있음)는 점은 서버 쪽의 유니크 충돌 시 기존 레코드 재사용 처리(각 POST 라우트)로 보완한다.
+export async function refreshListsBeforeBulkUpload(): Promise<void> {
+  await Promise.all([refreshProjects(), refreshInstitutions(), refreshFundingAgencies()]);
+}
 
 // 과제 생성 직후엔 임시 id로 상세화면에 진입하는데, 서버 응답이 도착하면 그 id가 실제 DB GUID로
 // 바뀐다(아래 addProject 참고) — 그 사이 이미 임시 id로 라우팅된 화면이 "찾을 수 없음"에 빠지지
