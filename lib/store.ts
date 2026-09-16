@@ -1573,9 +1573,29 @@ export function updateProjectMember(id: string, data: Partial<ProjectMember>): v
   const pendingCreate = _pendingMemberCreates.get(id);
   if (pendingCreate) {
     pendingCreate.then(sendPatch);
-  } else {
-    sendPatch(id);
+    return;
   }
+
+  // before.projectId가 아직 임시 id("p-...")면, 이 참여기관은 addProjectMember 시점에 소속 과제 자체가
+  // 서버에 없어 persistProjectMember가 생성 요청을 아예 보내지 않고 조용히 넘어간 상태다(위 persistProjectMember의
+  // "if (item.projectId.startsWith("p-")) return;" 참고) — 그래서 여기 오는 시점엔 _pendingMemberCreates에도
+  // 등록된 적이 없다. 과제 생성이 끝나야(addProject) 비로소 이 참여기관도 실제로 persistProjectMember가
+  // (재)호출되어 진짜 id를 받는다. 이 대기를 건너뛰고 곧바로 sendPatch(id)를 부르면 "pm-..." 같은 임시
+  // id를 그대로 서버로 보내게 되고, projectTermInstitution.id가 SQL Server uniqueidentifier 컬럼이라
+  // 변환 자체가 실패해 P2023으로 터진다 — 실제로 신규 과제 등록 직후 주관기관 담당자 정보를 바로
+  // 수정할 때 이 경합으로 관측됐다. 과제 생성이 끝날 때까지 기다렸다가, 그제서야 생긴 진짜
+  // _pendingMemberCreates 항목(또는 이미 세팅된 진짜 id)을 따라간다.
+  const pendingProjectCreate = _pendingProjectCreates.get(before.projectId);
+  if (pendingProjectCreate) {
+    pendingProjectCreate.then(() => {
+      const retriedCreate = _pendingMemberCreates.get(id);
+      if (retriedCreate) retriedCreate.then(sendPatch);
+      else sendPatch(id);
+    });
+    return;
+  }
+
+  sendPatch(id);
 }
 
 export interface InstitutionGradeApplyResult {
