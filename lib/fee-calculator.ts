@@ -122,6 +122,14 @@ export function resolveProjectDivision(project: Pick<Project, "projectDivision" 
   return project.projectDivision ?? (project.agencyId === "fa-006" ? "공동" : "주관");
 }
 
+// ─── 참여기관 역할(ProjectMember.role) 한글 라벨 ───────────────────────
+// 과제 상세의 참여기관 목록에서 쓰는 라벨과 동일한 기준을 다른 화면(수수료청구관리 등)에서도
+// 그대로 재사용하기 위한 공용 매핑. projectDivision(과제 단위 표시용 값, 위)과 이름이 겹치지만
+// 서로 다른 필드이니 혼동하지 말 것 — 이건 "이 기관이 이 과제에서 맡은 역할"을 가리킨다.
+export const MEMBER_ROLE_LABEL: Record<ProjectMember["role"], "주관" | "공동" | "위탁"> = {
+  LEAD: "주관", PARTICIPANT: "공동", ENTRUSTED: "위탁",
+};
+
 // ─── 연차별 과제코드 조회 ────────────────────────────────────────────
 // 연차마다 서로 다른 SH 코드를 쓴다(termCodes, autoGenerateTermFees가 연차가 새로 생길 때마다 발급).
 // termCodes 마이그레이션 이전에 등록된 과제는 1연차 코드가 projectCode에만 남아 있을 수 있어,

@@ -53,7 +53,7 @@ import { applyManagerContactRows } from "@/lib/notice-contacts";
 import { useCanWrite } from "@/lib/permissions";
 import { getCurrentUser } from "@/lib/auth";
 import { isOverdueByRule } from "@/lib/notifications";
-import { resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides } from "@/lib/fee-calculator";
+import { resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, MEMBER_ROLE_LABEL } from "@/lib/fee-calculator";
 
 // 여러 이메일 문자열(각각 콤마 구분일 수 있음)을 하나로 합치고 중복을 제거한다 — 정산절차 안내
 // 공문은 책임자(researchLeadEmail)+실무자(recipientEmail) 두 필드를 합쳐서 기본 수신자로 쓴다.
@@ -1619,6 +1619,14 @@ function useFeeRows(): FeeRow[] {
         const recipient = recipientMember
           ? resolveMemberRecipientForTerm(recipientMember, f0.termNumber)
           : { recipientName: "", recipientEmail: "", recipientPhone: "" };
+        // 구분 배지 — 분리행(참여기관별 행)이면 그 기관 자신의 실제 역할(ProjectMember.role, 과제상세
+        // 참여기관 목록과 동일 기준)을 보여준다. 분리행이 아니면 지금까지처럼 과제 단위 projectDivision을
+        // 쓴다 — 참여(공동)기관 행에도 과제 전체의 projectDivision(주로 "주관")이 그대로 붙어 있어서
+        // "공동기관인데 주관으로 나온다"는 혼동이 있었다.
+        const rowDivision = isSplit
+          ? (recipientMember ? MEMBER_ROLE_LABEL[recipientMember.role] : (project ? resolveProjectDivision(project) : ""))
+          : (project ? resolveProjectDivision(project) : "");
+
         // 연구책임자·책임자이메일도 연차별로 다를 수 있어(과제 상세 페이지에서 연차별로 수정) researchLeadOverrides를 먼저 본다.
         const lead = project
           ? resolveResearchLeadForTerm(project, f0.termNumber)
@@ -1685,7 +1693,7 @@ function useFeeRows(): FeeRow[] {
           docReplyDate:        docOwner?.docReplyDate ?? "",
           recipientName:       recipient.recipientName,
           recipientEmail:      recipient.recipientEmail,
-          projectDivision:     project ? resolveProjectDivision(project) : "",
+          projectDivision:     rowDivision,
           assignedManager:     project ? resolveAssignedManagerForTerm(project, f0.termNumber) : "",
           assignedManagerPrimary: project ? resolveAssignedManagerPrimaryForTerm(project, f0.termNumber) : "",
           registeredAt:        project?.registeredAt ?? "",

@@ -16,7 +16,7 @@ import {
   setTermOtherFirmHandled, setTermBillingType, setTermDates, resolveProjectId,
 } from "@/lib/store";
 import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type EmailDispatch, type FeePolicy, type AnnualFinancials, type FundingAgency, EMPTY_NOTICE_TEMPLATE } from "@/lib/mock";
-import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, type CalcMember } from "@/lib/fee-calculator";
+import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, MEMBER_ROLE_LABEL, type CalcMember } from "@/lib/fee-calculator";
 import { fmtWonFull, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange, nowKST, todayKST } from "@/lib/utils";
 import { fmtValue, fieldLabel, describeOverrideChange } from "@/lib/audit-log-format";
 import StatusBadge from "@/components/common/StatusBadge";
@@ -90,7 +90,7 @@ const GRADE_COLOR: Record<string, string> = {
   일반: "bg-slate-100 text-slate-500",
 };
 const GRADE_LABEL: Record<string, string> = { S: "최우수(S)", A: "우수(A)", B: "우수(B)", C: "우수(C)", 일반: "일반" };
-const ROLE_LABEL: Record<"LEAD" | "PARTICIPANT" | "ENTRUSTED", string> = { LEAD: "주관", PARTICIPANT: "공동", ENTRUSTED: "위탁" };
+const ROLE_LABEL = MEMBER_ROLE_LABEL;
 
 // ─── 참여기관 정렬: 주관기관을 맨 위로, 나머지는 기관명 가나다순 ─────────────
 // 참여기관 목록·수수료 관리 탭 모두 업로드된 순서 그대로 보여주던 걸 통일한다.
