@@ -632,8 +632,12 @@ export interface ProjectScalarInfo {
   agencyAssignedAts: Set<string>;    // 전문기관배정일
   internalAssignedAts: Set<string>;  // 내부배정일
   // 총개발시작일자 — 신규 과제(아직 Project로 등록되지 않아 startDate를 알 수 없는 상태)에서
-  // "엑셀 연차 vs 캘린더 계산 연차" 불일치를 미리보기 단계에서 미리 점검하는 데 쓴다.
+  // "엑셀 연차 vs 캘린더 계산 연차" 불일치를 미리보기 단계에서 미리 점검하는 데 쓴다. 최초시작일/
+  // 최종종료일(Project.firstStartDate/finalEndDate)도 이 총개발시작일자/총개발종료일자를 그대로
+  // 신뢰해서 채운다 — 단계기관별 시트가 아직 모든 단계를 담고 있지 않아도(예: 마지막 단계가 아직
+  // 협약 전이라 파일에 없음) RCMS가 명시한 과제 전체 기간과 어긋나지 않게 하기 위함.
   startDates: Set<string>;
+  endDates: Set<string>;
 }
 
 function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, ProjectScalarInfo> {
@@ -649,7 +653,7 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
         researchLeadsByTerm: new Map(), researchLeadEmailsByTerm: new Map(),
         researchLeadConflictTerms: new Set(), researchLeadEmailConflictTerms: new Set(),
         isAutonomyTrack: false, projectCategories: new Set(), agencyAssignedAts: new Set(), internalAssignedAts: new Set(),
-        startDates: new Set(),
+        startDates: new Set(), endDates: new Set(),
       };
       map.set(normNum, info);
     }
@@ -672,6 +676,8 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
 
       const startDate = toDateStr(get("startDate", row));
       if (startDate) info.startDates.add(startDate);
+      const endDate = toDateStr(get("endDate", row));
+      if (endDate) info.endDates.add(endDate);
 
       const manager = get("assignedManager", row);
       if (manager) {
@@ -3202,16 +3208,12 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         const currentStage = stages?.find((s) => currentTerm >= s.startTermNumber && currentTerm <= s.endTermNumber);
         const stageDateRange = currentStage ? stageInfo?.dateRanges.get(currentStage.stageNumber) : undefined;
 
-        // 최초시작일/최종종료일 — 관측된 모든 단계(일괄협약이면 0단계 하나)의 날짜 범위를 합쳐
-        // 가장 이른 시작일·가장 늦은 종료일을 과제 전체 기간으로 잡는다. 이 값은 excel 재업로드 때마다
-        // 갱신되므로, 개별 단계 날짜가 나중에 정정되면 여기도 같이 정정된다.
-        const allStageDateRanges = stageInfo ? [...stageInfo.dateRanges.values()] : [];
-        const overallStartDate = allStageDateRanges.length
-          ? allStageDateRanges.reduce((min, d) => (d.start < min ? d.start : min), allStageDateRanges[0].start)
-          : undefined;
-        const overallEndDate = allStageDateRanges.length
-          ? allStageDateRanges.reduce((max, d) => (d.end > max ? d.end : max), allStageDateRanges[0].end)
-          : undefined;
+        // 최초시작일/최종종료일 — "연차별기관별" 시트의 총개발시작일자/총개발종료일자를 그대로 신뢰한다.
+        // (예전엔 관측된 단계들의 날짜 범위를 합쳐 최소/최대로 잡았는데, 단계기관별 시트가 아직 마지막
+        // 단계를 담고 있지 않으면(협약 전 등) 실제보다 짧게 계산되는 문제가 있었다.) 한 과제의 여러 행에
+        // 서로 다른 값이 있으면(데이터 오류) 특정할 수 없으니 undefined로 두고 기존 값을 유지한다.
+        const overallStartDate = scalarInfo && scalarInfo.startDates.size === 1 ? [...scalarInfo.startDates][0] : undefined;
+        const overallEndDate = scalarInfo && scalarInfo.endDates.size === 1 ? [...scalarInfo.endDates][0] : undefined;
 
         // 연차상시/정산 — 엑셀에 명시적으로 있으면(과제구분 컬럼) 그 값을 쓰고, 없으면 방금 계산한
         // 단계 구조·총연차 기준으로 판정(다른 화면과 동일 기준)한다.
@@ -3344,11 +3346,12 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           newProjectIdsForLeadCheck.set(created.id, row.projectNumber);
           projectCount++;
 
-          // 과제명·총개발시작일자가 비어 있어 임시값("미입력"/오늘 날짜)으로 채워진 채 새로 등록됐다면,
-          // 아무 표시 없이 조용히 넘어가지 않도록 이슈로 남긴다(아래에서 addProjectIssue로 변환).
+          // 과제명·총개발시작일자·총개발종료일자가 비어 있어 임시값("미입력"/오늘 날짜)으로 채워진 채
+          // 새로 등록됐다면, 아무 표시 없이 조용히 넘어가지 않도록 이슈로 남긴다(아래에서 addProjectIssue로 변환).
           const missingFields: string[] = [];
           if (!row.projectName) missingFields.push("과제명");
           if (!row.startDate) missingFields.push("총개발시작일자");
+          if (!row.endDate) missingFields.push("총개발종료일자");
           if (missingFields.length > 0) {
             newProjectMissingInfo.push({ projectId: created.id, projectNumber: row.projectNumber, missingFields });
           }
@@ -3594,7 +3597,15 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         (researchLead !== undefined && researchLead !== existingProject.researchLead) ||
         (researchLeadEmail !== undefined && researchLeadEmail !== existingProject.researchLeadEmail);
 
+      // 최초시작일/최종종료일 — 신규/과제번호변경 분기와 동일하게 총개발시작일자/총개발종료일자를
+      // 그대로 신뢰한다. 예전엔 이 "기존 과제 연차 갱신" 분기에서 전혀 갱신하지 않아서, 최초 등록 이후
+      // RCMS에서 단계가 추가되거나 총개발종료일자가 정정돼도 재업로드로는 영영 반영되지 않았다.
+      const overallStartDate = scalarInfo && scalarInfo.startDates.size === 1 ? [...scalarInfo.startDates][0] : undefined;
+      const overallEndDate = scalarInfo && scalarInfo.endDates.size === 1 ? [...scalarInfo.endDates][0] : undefined;
+
       const safeUpdates: Partial<Project> = {
+        firstStartDate: overallStartDate ?? existingProject.firstStartDate,
+        finalEndDate: overallEndDate ?? existingProject.finalEndDate,
         assignedManager: resolvedAssignedManager ? applyManagerNameResolution(resolvedAssignedManager, managerNameResolutions, users) : existingProject.assignedManager,
         assignedManagerUserId: resolveManagerUserId(resolvedAssignedManager, existingProject.assignedManager, existingProject.assignedManagerUserId, managerNameResolutions),
         assignedManagerHistory: mergeTermHistory(existingProject.assignedManagerHistory, assignedManagerHistory),
@@ -3784,6 +3795,12 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         }
         if (scalarInfo.researchLeadEmails.size > 1) {
           reasons.push(`주관기관 책임자 메일주소가 서로 달라 등록하지 않았습니다: ${[...scalarInfo.researchLeadEmails].join(" / ")}`);
+        }
+        if (scalarInfo.startDates.size > 1) {
+          reasons.push(`총개발시작일자가 행마다 서로 달라 최초시작일을 갱신하지 않았습니다: ${[...scalarInfo.startDates].join(" / ")}`);
+        }
+        if (scalarInfo.endDates.size > 1) {
+          reasons.push(`총개발종료일자가 행마다 서로 달라 최종종료일을 갱신하지 않았습니다: ${[...scalarInfo.endDates].join(" / ")}`);
         }
       }
       if (reasons.length === 0) continue;

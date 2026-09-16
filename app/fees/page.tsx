@@ -1563,11 +1563,13 @@ function useFeeRows(): FeeRow[] {
         ? hasStageTermDateMismatch(project, termFees.filter((tf) => tf.projectNumber === project.projectNumber))
         : false;
 
-      // RDA2는 참여기관마다 계산서·공문발송·수금을 따로 관리하므로(과제 상세의 BillingBlock과 동일 기준),
-      // 실제로 수수료가 발생하는(appliedFee > 0) 기관마다 행을 따로 만든다. 그 외 전담기관은 지금까지와
-      // 동일하게 연차 전체를 기관 구분 없이 1행으로 합친다.
-      const isRda2 = project?.agencyId === "fa-006";
-      const splitUnits = isRda2 ? fees.filter((f) => f.appliedFee > 0) : [];
+      // 발송대상(noticeRecipientScope)이 "주관+참여기관 모두"인 전담기관(RDA1/RDA2 등)은 참여기관마다
+      // 계산서·공문발송·수금을 따로 관리하므로(과제 상세의 BillingBlock과 동일 기준), 이 연차에 실제로
+      // 사업비가 등록된(=TermFee가 생성된) 기관마다 행을 따로 만든다 — appliedFee가 0(면제등급 등)이어도
+      // 공문은 보내야 하므로 금액으로 거르지 않는다. 그 외 전담기관(LEAD_ONLY)은 지금까지와 동일하게
+      // 연차 전체를 기관 구분 없이 1행으로 합친다.
+      const splitByInstitution = agency?.noticeRecipientScope === "LEAD_AND_PARTICIPANTS";
+      const splitUnits = splitByInstitution ? fees : [];
       const unitGroups: TermFee[][] = splitUnits.length > 0 ? splitUnits.map((f) => [f]) : [fees];
 
       return unitGroups.map((unitFees) => {

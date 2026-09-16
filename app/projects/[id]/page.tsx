@@ -353,14 +353,10 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
     currentTerm,
     ...members.flatMap((m) => m.annualBudgets?.map((b) => b.termNumber) ?? [])
   );
-  // 단계협약(STAGED)이면 과제 전체 기간(최초시작일/최종종료일)은 더 이상 따로 입력받지 않고,
-  // 협약구조 표의 1단계 시작일 · 마지막 단계 종료일에서 그대로 파생시킨다 — 일괄협약(BATCH)은
-  // 단계 표 자체가 없으므로 이전처럼 직접 입력받는다.
-  const isStaged = draft.agreementType === "STAGED";
-  const draftFirstStage = isStaged ? draft.stages?.[0] : undefined;
-  const draftLastStage = isStaged ? draft.stages?.[draft.stages.length - 1] : undefined;
-  const resolvedFirstStartDate = isStaged ? (draftFirstStage?.stageStartDate ?? draft.firstStartDate) : draft.firstStartDate;
-  const resolvedFinalEndDate = isStaged ? (draftLastStage?.stageEndDate ?? draft.finalEndDate) : draft.finalEndDate;
+  // 과제 전체 기간(최초시작일/최종종료일)은 협약구조표의 1단계 시작일·마지막 단계 종료일에서
+  // 파생시키지 않는다 — 단계기관별 시트가 아직 마지막 단계를 담고 있지 않을 때(협약 전 등) 총개발
+  // 종료일자보다 짧게 나오는 문제가 있었다. 엑셀 업로드가 채우는 총개발시작일자/총개발종료일자
+  // (Project.firstStartDate/finalEndDate)를 단계협약 여부와 무관하게 그대로 쓴다.
 
   function getCurrentTermBudget(m: ProjectMember): { cashBudget: number; inKindBudget: number } {
     const ab = m.annualBudgets?.find((a) => a.termNumber === currentTerm);
@@ -563,8 +559,6 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       agency: resolvedAgency,
       leadInstitutionName,
       totalBudget: annualBudget > 0 ? annualBudget : draft.totalBudget,
-      firstStartDate: resolvedFirstStartDate,
-      finalEndDate: resolvedFinalEndDate,
       annualFinancials,
       assignedManagerPrimaryHistory,
       assignedManagerHistory,
@@ -1116,8 +1110,8 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             )}
           </div>
 
-          {/* 과제 전체 기간 — 단계협약은 협약구조 표의 1단계 시작일·마지막 단계 종료일에서 자동
-              계산되고(직접 입력 불가), 일괄협약은 단계 표가 없으므로 그대로 직접 입력받는다. */}
+          {/* 과제 전체 기간 — 엑셀 업로드 시 총개발시작일자/총개발종료일자로 채워지며, 단계협약 여부와
+              무관하게 직접 수정도 가능하다. */}
           <div className="rounded-lg border border-slate-100 bg-slate-50/50 px-4 py-4 space-y-3">
             <p className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
               <FiCalendar size={12} className="text-slate-400" /> 과제 전체 기간
@@ -1125,29 +1119,17 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">
-                  최초시작일 (과제 총 시작일){isStaged && " (1단계 시작일 자동계산)"}
+                  최초시작일 (과제 총 시작일)
                 </label>
-                {isStaged ? (
-                  <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-white font-bold text-slate-700">
-                    {resolvedFirstStartDate ? fmtDate(resolvedFirstStartDate) : "협약구조에서 1단계 시작일을 입력해주세요"}
-                  </div>
-                ) : (
-                  <DateInput className="w-full" value={draft.firstStartDate ?? ""}
-                    onChange={(v) => setDraft((p) => ({ ...p, firstStartDate: v }))} />
-                )}
+                <DateInput className="w-full" value={draft.firstStartDate ?? ""}
+                  onChange={(v) => setDraft((p) => ({ ...p, firstStartDate: v }))} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">
-                  최종종료일 (과제 총 종료일){isStaged && " (마지막 단계 종료일 자동계산)"}
+                  최종종료일 (과제 총 종료일)
                 </label>
-                {isStaged ? (
-                  <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-white font-bold text-slate-700">
-                    {resolvedFinalEndDate ? fmtDate(resolvedFinalEndDate) : "협약구조에서 마지막 단계 종료일을 입력해주세요"}
-                  </div>
-                ) : (
-                  <DateInput className="w-full" value={draft.finalEndDate ?? ""}
-                    onChange={(v) => setDraft((p) => ({ ...p, finalEndDate: v }))} />
-                )}
+                <DateInput className="w-full" value={draft.finalEndDate ?? ""}
+                  onChange={(v) => setDraft((p) => ({ ...p, finalEndDate: v }))} />
               </div>
             </div>
           </div>
@@ -3785,14 +3767,15 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
 
   const termLabel = `${group.termYear}년 ${group.termNumber}연차`;
 
-  // RDA2는 참여기관마다 세금계산서/공문발송/수금을 따로 관리해야 하므로, 연차 전체를 하나로
-  // 묶는 대신 실제 수수료가 발생하는(appliedFee > 0) 기관마다 별도의 BillingUnit을 만든다.
-  // 그 외 전담기관은 지금까지와 동일하게 연차 전체를 통합 1건으로 처리한다.
-  const isRda2 = project.agencyId === "fa-006";
+  // 발송대상이 "주관+참여기관 모두"인 전담기관(RDA1/RDA2 등)은 참여기관마다 세금계산서/공문발송/수금을
+  // 따로 관리해야 하므로, 연차 전체를 하나로 묶는 대신 이 연차에 실제로 사업비가 등록된(=TermFee가
+  // 생성된) 기관마다 별도의 BillingUnit을 만든다 — appliedFee가 0(면제등급 등)이어도 공문은 보내야
+  // 하므로 금액으로 거르지 않는다. 그 외 전담기관(주관기관만 발송)은 지금까지와 동일하게 연차 전체를
+  // 통합 1건으로 처리한다.
   const feeRef = (f: TermFee) => ({ id: f.id, status: f.status, manualOverride: f.manualOverride });
 
-  const billingUnits: BillingUnit[] = isRda2
-    ? group.fees.filter((f) => f.appliedFee > 0).map((f) => ({
+  const billingUnits: BillingUnit[] = sendToAllInstitutions
+    ? group.fees.map((f) => ({
         key: `${group.key}|${f.institutionId}`,
         institutionId: f.institutionId,
         billingInstitutionId: f.institutionId,
@@ -3813,21 +3796,16 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
         ) ?? null,
       }))
     : [{
+        // 이 분기는 sendToAllInstitutions가 false일 때만 오므로, 주관기관 앞으로만 공문을 보낸다.
         key: `${group.key}|combined`,
         institutionId: null,
         billingInstitutionId: resolvedLeadInstitutionId,
         billingLabel: resolvedLeadInstitutionName,
-        // 주관기관만 발송 대상인 전담기관은 주관기관 앞으로만 공문을 보내고, 아니면 참여기관까지 전부 보낸다.
-        recipients: sendToAllInstitutions
-          ? group.fees.map((f) => ({
-              institutionName: f.institutionName,
-              email: institutions.find((i) => i.id === f.institutionId)?.contactEmail ?? "",
-            }))
-          : [{ institutionName: resolvedLeadInstitutionName, email: leadInst?.contactEmail ?? "" }],
+        recipients: [{ institutionName: resolvedLeadInstitutionName, email: leadInst?.contactEmail ?? "" }],
         amount: group.totalApplied,
-        // 실제로 청구서를 받는 기관(주관, 혹은 전체)만 BILLED, 나머지는 CONFIRMED까지만.
-        billedFees: (sendToAllInstitutions ? group.fees : group.fees.filter((f) => f.institutionId === resolvedLeadInstitutionId)).map(feeRef),
-        confirmedFees: (sendToAllInstitutions ? [] : group.fees.filter((f) => f.institutionId !== resolvedLeadInstitutionId)).map(feeRef),
+        // 실제로 청구서를 받는 주관기관만 BILLED, 나머지 참여기관은 CONFIRMED까지만.
+        billedFees: group.fees.filter((f) => f.institutionId === resolvedLeadInstitutionId).map(feeRef),
+        confirmedFees: group.fees.filter((f) => f.institutionId !== resolvedLeadInstitutionId).map(feeRef),
         billingType: group.fees[0]?.billingType,
         invoice: group.invoice,
         receivable: group.receivable,
