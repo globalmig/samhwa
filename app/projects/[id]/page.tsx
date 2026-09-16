@@ -25,7 +25,7 @@ import MoneyInput from "@/components/common/MoneyInput";
 import DateInput from "@/components/common/DateInput";
 import NoticeLetterPreview, { type NoticeStatusRow } from "@/components/common/NoticeLetterPreview";
 import SimpleNoticeModal, { type SimpleNoticeTarget } from "@/components/common/SimpleNoticeModal";
-import DispatchModal, { DispatchDropdown, generateDocNumber, type DispatchChoice, type DispatchTarget } from "@/components/common/DispatchModal";
+import DispatchModal, { DispatchDropdown, generateDocNumber, parseEmails, type DispatchChoice, type DispatchTarget } from "@/components/common/DispatchModal";
 import ManagerPickerModal from "@/components/common/ManagerPickerModal";
 import { buildNoticeEmailHtml } from "@/lib/notice-email-html";
 import { applyManagerContactRows } from "@/lib/notice-contacts";
@@ -4565,7 +4565,10 @@ function SettlementNoticeModal({
         body: JSON.stringify({
           fromEmail: agency.noticeSenderEmail,
           senderName: companyInfo.name,
-          to: [toEmail],
+          // toEmail은 combineEmails()가 책임자+실무자 이메일을 ", "로 합친 문자열일 수 있어
+          // (예: "a@x.com, b@y.com"), 배열 원소 하나로 그대로 보내면 서버의 이메일 형식 검증
+          // (콤마·공백 불가)에 걸려 400이 난다 — parseEmails로 다시 낱개 주소 배열로 쪼갠다.
+          to: parseEmails(toEmail),
           subject,
           html,
           attachments: mailAttachments,

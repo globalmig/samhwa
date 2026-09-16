@@ -2121,7 +2121,10 @@ function BulkSettlementNoticeModal({
           body: JSON.stringify({
             fromEmail: senderAgency.noticeSenderEmail,
             senderName: companyInfo.name,
-            to: [t.recipientEmail],
+            // t.recipientEmail은 combineEmails()가 책임자+실무자 이메일을 ", "로 합친 문자열이라
+            // (예: "a@x.com, b@y.com"), 배열 원소 하나로 그대로 보내면 서버의 이메일 형식 검증
+            // (콤마·공백 불가)에 걸려 400이 난다 — parseEmails로 다시 낱개 주소 배열로 쪼갠다.
+            to: parseEmails(t.recipientEmail),
             subject,
             html,
             attachments: mailAttachments,
