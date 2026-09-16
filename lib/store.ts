@@ -679,6 +679,13 @@ export function refreshInstitutions(): Promise<void> {
   });
 }
 
+// addInstitution 직후(POST 응답이 오기 전) 곧바로 updateInstitution이 불리면(예: InstitutionQuickAdd로
+// 새 기관을 만들고 바로 이어지는 폼 저장에서 담당자 정보 등을 함께 반영) 그 PATCH가 아직 서버가 모르는
+// 임시 id("inst-...")를 그대로 실어 보낼 수 있다 — institutions.id가 SQL Server uniqueidentifier
+// 컬럼이라 변환 자체가 실패해 P2023으로 터진다. updateProjectMember의 _pendingMemberCreates와 동일한
+// 이유로, 생성이 끝나 진짜 id를 알기 전까지 들어온 수정 요청은 여기 등록해뒀다가 진짜 id로 다시 보낸다.
+const _pendingInstitutionCreates = new Map<string, Promise<string>>();
+
 export function addInstitution(data: Omit<Institution, "id">): Institution {
   const tempId = genId("inst");
   const item: Institution = { ...data, id: tempId };
@@ -686,26 +693,33 @@ export function addInstitution(data: Omit<Institution, "id">): Institution {
   record("institution", tempId, item.name, "CREATE");
   notify();
 
-  trackSync(
+  const promise = trackSync(
     throttledFetch("/api/institutions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
       .then((res) => res.json())
       .then((res: { ok: boolean; institution?: Institution; error?: string }) => {
         if (res.ok && res.institution) {
           _state = { ..._state, institutions: _state.institutions.map((i) => (i.id === tempId ? res.institution! : i)) };
-        } else {
-          _state = { ..._state, institutions: _state.institutions.filter((i) => i.id !== tempId) };
-          console.error("기관 생성 실패:", res.error);
-          reportSyncFailure(1, `기관: ${item.name}`);
+          notify();
+          return res.institution.id;
         }
+        _state = { ..._state, institutions: _state.institutions.filter((i) => i.id !== tempId) };
+        console.error("기관 생성 실패:", res.error);
+        reportSyncFailure(1, `기관: ${item.name}`);
         notify();
+        return tempId;
       })
       .catch((err) => {
         _state = { ..._state, institutions: _state.institutions.filter((i) => i.id !== tempId) };
         notify();
         console.error("기관 생성 실패:", err);
         reportSyncFailure(1, `기관: ${item.name}`);
+        return tempId;
+      })
+      .finally(() => {
+        _pendingInstitutionCreates.delete(tempId);
       })
   );
+  _pendingInstitutionCreates.set(tempId, promise);
 
   return item;
 }
@@ -790,17 +804,28 @@ export function updateInstitution(id: string, data: Partial<Institution>): void 
   record("institution", id, after.name, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   notify();
 
-  fetch(`/api/institutions/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
-    .then((res) => res.json())
-    .then((res: { ok: boolean; institution?: Institution; error?: string }) => {
-      if (res.ok && res.institution) {
-        _state = { ..._state, institutions: _state.institutions.map((i) => (i.id === id ? res.institution! : i)) };
-        notify();
-      } else if (!res.ok) {
-        console.error("기관 수정 실패:", res.error);
-      }
-    })
-    .catch((err) => console.error("기관 수정 실패:", err));
+  const sendPatch = (realId: string) => {
+    fetch(`/api/institutions/${realId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+      .then((res) => res.json())
+      .then((res: { ok: boolean; institution?: Institution; error?: string }) => {
+        if (res.ok && res.institution) {
+          _state = { ..._state, institutions: _state.institutions.map((i) => (i.id === realId ? res.institution! : i)) };
+          notify();
+        } else if (!res.ok) {
+          console.error("기관 수정 실패:", res.error);
+        }
+      })
+      .catch((err) => console.error("기관 수정 실패:", err));
+  };
+
+  // id가 아직 서버가 모르는 임시 id(방금 addInstitution으로 막 만든 직후)면, 그 생성 요청이 끝나 진짜
+  // id를 알기 전까지 이 수정 요청을 미뤄뒀다가 진짜 id로 다시 보낸다(updateProjectMember와 동일한 이유).
+  const pendingCreate = _pendingInstitutionCreates.get(id);
+  if (pendingCreate) {
+    pendingCreate.then(sendPatch);
+  } else {
+    sendPatch(id);
+  }
 }
 
 // 참조 중인 과제·참여기관·미수금·세금계산서·정산이 하나라도 있으면 삭제를 막는다 — 참조를 그대로 두고
