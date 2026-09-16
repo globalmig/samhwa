@@ -3,6 +3,7 @@
 import React, { use, useState } from "react";
 import Link from "next/link";
 import { useStore, updateInstitution, updateProjectMember } from "@/lib/store";
+import { resolveMemberSettlementTypeForTerm } from "@/lib/fee-calculator";
 import { fmtWon } from "@/lib/utils";
 import StatusBadge from "@/components/common/StatusBadge";
 import { useCanWrite } from "@/lib/permissions";
@@ -287,6 +288,13 @@ export default function InstitutionDetailPage({ params }: { params: Promise<{ id
                   const classification = getClassification(m.projectId, m.institutionGrade);
                   const project = projectsById.get(m.projectId);
                   const currentFee = getMemberCurrentFee(m);
+                  // m.settlementType은 최초 등록 시점에 고정된 기본값이라, 이후 엑셀 재업로드로
+                  // 연차별 오버라이드(settlementTypeOverrides)가 바뀌어도 여기엔 반영되지 않는다.
+                  // 과제 상세 페이지와 동일하게 현재 연차 기준으로 오버라이드를 해석해서 보여준다.
+                  const currentTerm = project?.currentTerm ?? 1;
+                  const resolvedSettlementType = resolveMemberSettlementTypeForTerm(
+                    m, currentTerm, defaultSettlementType(classification.category1)
+                  );
                   return (
                     <tr key={m.id} className="border-b border-slate-50 hover:bg-slate-50">
                       <td className="px-4 py-3">
@@ -307,10 +315,10 @@ export default function InstitutionDetailPage({ params }: { params: Promise<{ id
                       <td className="px-4 py-3 text-center">
                         {canEdit ? (
                           <select
-                            value={m.settlementType ?? defaultSettlementType(classification.category1)}
+                            value={resolvedSettlementType}
                             onChange={(e) => handleSettlementTypeChange(m.id, e.target.value as "위탁정산" | "자체정산")}
                             className={`text-xs font-medium px-2 py-0.5 rounded border-0 focus:outline-none focus:ring-2 focus:ring-blue-500/30 ${
-                              (m.settlementType ?? defaultSettlementType(classification.category1)) === "자체정산" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"
+                              resolvedSettlementType === "자체정산" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"
                             }`}
                           >
                             <option value="위탁정산">위탁정산</option>
@@ -318,9 +326,9 @@ export default function InstitutionDetailPage({ params }: { params: Promise<{ id
                           </select>
                         ) : (
                           <span className={`text-xs font-medium px-2 py-0.5 rounded ${
-                            (m.settlementType ?? defaultSettlementType(classification.category1)) === "자체정산" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"
+                            resolvedSettlementType === "자체정산" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"
                           }`}>
-                            {m.settlementType ?? defaultSettlementType(classification.category1)}
+                            {resolvedSettlementType}
                           </span>
                         )}
                       </td>
