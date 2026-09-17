@@ -66,9 +66,11 @@ export const WRITE_ACCESS_CATALOG: { key: string; label: string; group: string }
   { key: "issues-manage", label: "이슈 수정·삭제·상태변경", group: "기관 · 시스템" },
 ];
 
-// 로그인/접근거부 시 이동할 역할별 기본 페이지 (VIEWER는 통합 대시보드 비노출)
+// 로그인/접근거부 시 이동할 역할별 기본 페이지. [권한 설정]에서 "통합 대시보드"(/) 체크가
+// 꺼진 역할은 대시보드 대신 수수료 청구 관리로 보낸다 — 하드코딩된 역할이 아니라 canAccessPage로
+// 그때그때의 실제 권한 설정을 따른다.
 export function defaultLandingPath(role: Role | undefined): string {
-  if (role === "VIEWER") return "/fees";
+  if (!canAccessPage(role, "/")) return "/fees";
   return "/";
 }
 

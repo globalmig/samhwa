@@ -49,6 +49,7 @@ export async function POST(request: Request) {
     contactPhone: body.contactPhone, recipientOverrides: body.recipientOverrides,
     settlementType: body.settlementType, settlementTypeOverrides: body.settlementTypeOverrides,
     exemptRefGrade: body.exemptRefGrade, role: body.role,
+    leadName: body.leadName, leadEmail: body.leadEmail, leadOverrides: body.leadOverrides,
   };
 
   // 새로 만드는 참여기관도 결국 (institutionId, projectId) 기준 PTI 행 집합을 건드리므로,

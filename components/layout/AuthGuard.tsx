@@ -42,12 +42,22 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   }, []);
 
   const isPublicAuthPage = PUBLIC_AUTH_PATHS.includes(pathname);
+  const role = user?.role as "ADMIN" | "ACCOUNTANT" | "SETTLEMENT" | "VIEWER" | undefined;
 
   useEffect(() => {
     if (!isLoading && !user && !isPublicAuthPage) {
       router.replace("/login");
     }
   }, [user, isLoading, isPublicAuthPage, router]);
+
+  // "/"(통합 대시보드)는 [권한 설정]에서 체크가 꺼진 역할이 들어오면 "접근 권한 없음" 화면
+  // 대신 바로 수수료 청구 관리로 보낸다 — 로그인 직후 defaultLandingPath로 걸러지는 것과
+  // 같지만, 북마크·직접 주소 입력으로 "/"에 들어오는 경우까지 커버하기 위한 안전망이다.
+  useEffect(() => {
+    if (!isLoading && user && pathname === "/" && !canAccessPage(role, pathname, user.id)) {
+      router.replace(defaultLandingPath(role));
+    }
+  }, [user, isLoading, pathname, role, router]);
 
   if (isLoading) {
     return (
@@ -66,7 +76,10 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
 
   // 페이지 접근 권한 체크 (로그인·회원가입 등 인증 관련 페이지 제외)
   if (user && !isPublicAuthPage) {
-    if (!canAccessPage(user.role as "ADMIN" | "ACCOUNTANT" | "SETTLEMENT" | "VIEWER", pathname, user.id)) {
+    if (!canAccessPage(role, pathname, user.id)) {
+      // "/"는 위 useEffect가 대체 랜딩 페이지로 리다이렉트하는 중이므로, 그 사이 "접근 권한
+      // 없음" 화면이 잠깐 보이지 않도록 아무것도 그리지 않는다.
+      if (pathname === "/") return null;
       return <AccessDenied />;
     }
   }

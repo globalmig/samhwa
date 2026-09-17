@@ -62,6 +62,33 @@ export function resolveResearchLeadForTerm(
   };
 }
 
+// ─── 연차별 "기관별" 책임자(연구책임자) 이름·이메일 조회 ───────────────
+// RDA2처럼 전담기관이 "주관+참여기관 모두"를 발송대상으로 두는 과제는 참여기관마다 책임자가 다를 수
+// 있어, ProjectMember.leadName/leadEmail(+연차별 leadOverrides)에 기관 자신의 값을 따로 둔다. 이 값이
+// 한 번도 채워진 적 없는(=거의 모든) 과제는 과제 전체가 책임자 하나를 공유하므로, 그때는 지금까지처럼
+// resolveResearchLeadForTerm(과제 기본값)으로 그대로 폴백한다. resolveMemberRecipientForTerm/
+// resolveResearchLeadForTerm과 동일하게 이름·이메일은 각자 독립적으로 폴백한다 — 예를 들어 엑셀에
+// 책임자 메일주소만 채워지고 이름은 비어 있는 행이면, 이메일은 그 값을 쓰고 이름만 과제 기본값으로
+// 폴백해야지, 이메일이 있다고 이름까지 빈 문자열로 고정되면 안 된다.
+// isSplitAgency(호출부가 이미 그 시점의 전담기관 noticeRecipientScope로 계산해둔 값)가 false면
+// member.leadName/leadEmail/leadOverrides는 아예 보지 않고 곧장 과제 기본값을 쓴다 — 전담기관을
+// "주관+참여기관 모두"로 잠깐 썼다가 "주관기관만"으로 되돌린 경우, 그때 참여기관에 남아있던 값이
+// 되돌린 뒤에도 계속 새어나와 과제 기본 책임자보다 우선 적용되는 걸 막기 위함이다.
+export function resolveMemberLeadForTerm(
+  member: Pick<ProjectMember, "leadName" | "leadEmail" | "leadOverrides"> | undefined,
+  project: Pick<Project, "researchLead" | "researchLeadEmail" | "researchLeadOverrides">,
+  termNumber: number,
+  isSplitAgency: boolean,
+): { name: string; email: string } {
+  const projectDefault = resolveResearchLeadForTerm(project, termNumber);
+  if (!isSplitAgency) return projectDefault;
+  const override = member?.leadOverrides?.find((o) => o.termNumber === termNumber);
+  return {
+    name: override?.name ?? member?.leadName ?? projectDefault.name,
+    email: override?.email ?? member?.leadEmail ?? projectDefault.email,
+  };
+}
+
 // ─── 연차별 과제담당자(정/부) 조회 ───────────────────────────────────
 // 담당자도 인사이동 등으로 연차 중간에 바뀔 수 있어, 연차별 이력이 있으면(assignedManagerHistory/
 // assignedManagerPrimaryHistory) 그 연차 값을 쓰고, 없으면 assignedManager/assignedManagerPrimary

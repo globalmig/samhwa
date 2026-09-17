@@ -32,6 +32,7 @@ import {
   type FeePolicy,
   type TaxInvoice,
   type Project,
+  type ProjectMember,
   type ProjectIssue,
   type AgencyNoticeTemplateEntry,
   type SystemUser,
@@ -53,7 +54,7 @@ import { applyManagerContactRows } from "@/lib/notice-contacts";
 import { useCanWrite } from "@/lib/permissions";
 import { getCurrentUser } from "@/lib/auth";
 import { isOverdueByRule } from "@/lib/notifications";
-import { resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, MEMBER_ROLE_LABEL } from "@/lib/fee-calculator";
+import { resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveMemberLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, MEMBER_ROLE_LABEL } from "@/lib/fee-calculator";
 
 // 여러 이메일 문자열(각각 콤마 구분일 수 있음)을 하나로 합치고 중복을 제거한다 — 정산절차 안내
 // 공문은 책임자(researchLeadEmail)+실무자(recipientEmail) 두 필드를 합쳐서 기본 수신자로 쓴다.
@@ -201,6 +202,9 @@ type InfoEditTarget = {
   assignedManagerPrimary: string;
   registeredAt:   string;
   auditFirm:      string;
+  // 분리행(RDA2 등 발송대상=주관+참여기관 모두)이면 책임자이메일을 과제 전체 스칼라가 아니라
+  // leadMemberId 참여기관의 leadOverrides로 저장한다 — handleSave 참고.
+  isSplitRow:     boolean;
 };
 
 type ModalState =
@@ -790,6 +794,12 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
 
   function handleSave() {
     const project = projects.find((p) => p.id === target.projectId);
+    // 분리행(RDA2 등 발송대상=주관+참여기관 모두)이면 책임자이메일을 과제 전체 스칼라가 아니라 그
+    // 참여기관의 leadOverrides에 저장한다 — 그래야 기관마다 독립적으로 값을 가진다(안 그러면 한
+    // 기관 수정이 같은 연차의 다른 기관 값을 덮어써 "수정이 안 되는" 것처럼 보인다). 아래쪽 실무자
+    // (recipientOverrides) 저장과 같은 member를 가리키므로 미리 한 번만 찾아 재사용한다.
+    const leadMember = target.leadMemberId ? projectMembers.find((m) => m.id === target.leadMemberId) : undefined;
+    let leadMemberUpdates: Partial<ProjectMember> | null = null;
     if (project) {
       const isCurrentTerm = target.termNumber === project.currentTerm;
 
@@ -798,31 +808,71 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
       // 과거/다른 연차 행에서 고치면 그 연차만의 오버라이드로 저장되고 기본값은 그대로 둔다. 예전엔
       // 이 모달에서 고치면 어느 연차 행에서 열었든 무조건 기본값(진행 연차 값)을 덮어써서, 과거 연차
       // 행에서 고쳤는데 정작 진행 연차 값이 바뀌어버리는(그리고 정작 그 과거 연차엔 반영 안 되는) 문제가 있었다.
-      const baseName = project.researchLead ?? "";
-      const baseEmail = project.researchLeadEmail ?? "";
-      const newEmail = researchLeadEmail || "";
       let nextResearchLeadEmail = project.researchLeadEmail;
       let researchLeadOverrides = project.researchLeadOverrides;
-      if (isCurrentTerm) {
-        if (newEmail !== baseEmail) {
-          researchLeadOverrides = backfillExistingTermOverrides(
-            project.researchLeadOverrides,
-            termFees.filter((f) => f.projectNumber === project.projectNumber).map((f) => f.termNumber),
-            target.termNumber,
-            (termNumber) => ({ termNumber, name: baseName, email: baseEmail }),
-          );
-          nextResearchLeadEmail = newEmail || undefined;
+      // isSplitRow인데 leadMember를 못 찾은 경우(참여기관 레코드가 없거나 stale한 경우)는 과제 전체
+      // 공유 필드(project.researchLead(Email)Overrides)에 잘못 써버리면 안 된다 — 그러면 leadName/
+      // leadEmail이 없는 다른 참여기관들의 책임자 값(resolveMemberLeadForTerm의 폴백)까지 함께
+      // 바뀌어버린다. 실무자(recipientOverrides) 저장과 동일하게, 그냥 이 필드는 저장하지 않고
+      // 건너뛴다(아래 "!target.leadMemberId" 안내 문구가 이미 이 경우를 알려준다).
+      if (target.isSplitRow && !leadMember) {
+        // no-op: nextResearchLeadEmail/researchLeadOverrides는 기존 값 그대로 유지
+      } else if (target.isSplitRow && leadMember) {
+        // baseName/baseEmail은 "이 필드가 지금 아무 오버라이드도 없다면 보여줄 기본값"이어야 한다 —
+        // resolveMemberLeadForTerm과 동일하게 기관 자신의 값이 없으면 과제 기본값(researchLead(Email))
+        // 으로 폴백한다. 이 폴백 없이 leadMember.leadEmail만 보면(예: 한 번도 기관별 값을 넣은 적
+        // 없는 기관), researchLeadEmail 입력창엔 이미 과제 기본값이 채워져 열리는데 baseEmail은 ""라서
+        // 아무것도 안 고치고 저장만 눌러도 "바뀐 값"으로 오인해 기관에 불필요한 leadEmail을 새로 박아버린다.
+        const projectDefaultLead = resolveResearchLeadForTerm(project, target.termNumber);
+        const baseName = leadMember.leadName ?? projectDefaultLead.name;
+        const baseEmail = leadMember.leadEmail ?? projectDefaultLead.email;
+        const newEmail = researchLeadEmail || "";
+        let nextLeadEmail = leadMember.leadEmail;
+        let leadOverrides = leadMember.leadOverrides;
+        if (isCurrentTerm) {
+          if (newEmail !== baseEmail) {
+            leadOverrides = backfillExistingTermOverrides(
+              leadMember.leadOverrides,
+              termFees.filter((f) => f.projectNumber === project.projectNumber).map((f) => f.termNumber),
+              target.termNumber,
+              (termNumber) => ({ termNumber, name: baseName, email: baseEmail }),
+            );
+            nextLeadEmail = newEmail || undefined;
+          }
+        } else {
+          const nameForTerm = resolveMemberLeadForTerm(leadMember, project, target.termNumber, true).name;
+          const isDefault = newEmail === baseEmail && nameForTerm === baseName;
+          const others = (leadMember.leadOverrides ?? []).filter((o) => o.termNumber !== target.termNumber);
+          const next = isDefault
+            ? others
+            : [...others, { termNumber: target.termNumber, name: nameForTerm, email: newEmail }].sort((a, b) => a.termNumber - b.termNumber);
+          leadOverrides = next.length > 0 ? next : undefined;
         }
+        leadMemberUpdates = { leadEmail: nextLeadEmail, leadOverrides };
       } else {
-        const nameForTerm = resolveResearchLeadForTerm(project, target.termNumber).name;
-        const isDefault = newEmail === baseEmail && nameForTerm === baseName;
-        const others = (project.researchLeadOverrides ?? []).filter((o) => o.termNumber !== target.termNumber);
-        const next = isDefault
-          ? others
-          : [...others, { termNumber: target.termNumber, name: nameForTerm, email: newEmail }].sort((a, b) => a.termNumber - b.termNumber);
-        researchLeadOverrides = next.length > 0 ? next : undefined;
+        const baseName = project.researchLead ?? "";
+        const baseEmail = project.researchLeadEmail ?? "";
+        const newEmail = researchLeadEmail || "";
+        if (isCurrentTerm) {
+          if (newEmail !== baseEmail) {
+            researchLeadOverrides = backfillExistingTermOverrides(
+              project.researchLeadOverrides,
+              termFees.filter((f) => f.projectNumber === project.projectNumber).map((f) => f.termNumber),
+              target.termNumber,
+              (termNumber) => ({ termNumber, name: baseName, email: baseEmail }),
+            );
+            nextResearchLeadEmail = newEmail || undefined;
+          }
+        } else {
+          const nameForTerm = resolveResearchLeadForTerm(project, target.termNumber).name;
+          const isDefault = newEmail === baseEmail && nameForTerm === baseName;
+          const others = (project.researchLeadOverrides ?? []).filter((o) => o.termNumber !== target.termNumber);
+          const next = isDefault
+            ? others
+            : [...others, { termNumber: target.termNumber, name: nameForTerm, email: newEmail }].sort((a, b) => a.termNumber - b.termNumber);
+          researchLeadOverrides = next.length > 0 ? next : undefined;
+        }
       }
-
       // 과제담당자(부)/(정)도 동일한 문제였다 — 연차별 이력(History)에 이 연차 값만 기록하고,
       // 진행 연차 행에서 고친 경우에만 기본값(현재 진행 연차 값)도 함께 갱신한다.
       const assignedManagerHistory = upsertTermHistory(project.assignedManagerHistory, assignedManager, (termNumber) => ({ termNumber, assignedManager }));
@@ -850,7 +900,7 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
     // 실무자는 과제 단위 기본값(contactName/contactEmail)이 아니라 이 연차(termNumber)에만 적용되는
     // recipientOverrides로 저장한다 — 기본값을 직접 덮어쓰면 연차별로 다른 실무자를 쓰는 다른 연차들의
     // 화면(연차별로 override가 없으면 기본값을 그대로 보여줌)까지 함께 바뀌어버린다.
-    const member = target.leadMemberId ? projectMembers.find((m) => m.id === target.leadMemberId) : undefined;
+    const member = target.leadMemberId ? (leadMember ?? projectMembers.find((m) => m.id === target.leadMemberId)) : undefined;
     if (member) {
       const existing = member.recipientOverrides?.find((r) => r.termNumber === target.termNumber);
       const others = (member.recipientOverrides ?? []).filter((r) => r.termNumber !== target.termNumber);
@@ -866,7 +916,8 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
             recipientEmail: recipientEmail || undefined,
             recipientPhone: existing?.recipientPhone,
           }];
-      updateProjectMember(target.leadMemberId, { recipientOverrides: next.length > 0 ? next : undefined });
+      // leadMemberUpdates(책임자이메일 변경분, 분리행일 때만 채워짐)가 있으면 한 번의 호출로 같이 저장한다.
+      updateProjectMember(target.leadMemberId, { recipientOverrides: next.length > 0 ? next : undefined, ...leadMemberUpdates });
     }
     onClose();
   }
@@ -914,7 +965,8 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
 
       {!target.leadMemberId && (
         <p className="text-[11px] text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
-          이 과제에는 등록된 주관기관 담당자 정보가 없어 실무자 항목은 저장되지 않습니다.
+          이 과제에는 등록된 주관기관 담당자 정보가 없어 실무자 항목은 저장되지 않습니다
+          {target.isSplitRow && " (이 기관 앞으로 책임자이메일도 함께 저장되지 않습니다)"}.
         </p>
       )}
 
@@ -1627,9 +1679,11 @@ function useFeeRows(): FeeRow[] {
           ? (recipientMember ? MEMBER_ROLE_LABEL[recipientMember.role] : (project ? resolveProjectDivision(project) : ""))
           : (project ? resolveProjectDivision(project) : "");
 
-        // 연구책임자·책임자이메일도 연차별로 다를 수 있어(과제 상세 페이지에서 연차별로 수정) researchLeadOverrides를 먼저 본다.
+        // 연구책임자·책임자이메일도 연차별로 다를 수 있어(과제 상세 페이지에서 연차별로 수정) researchLeadOverrides를
+        // 먼저 본다. 분리행(RDA2 등)이면 그 참여기관 자신의 책임자(ProjectMember.leadOverrides/leadName/leadEmail)를
+        // 우선하고, 없으면(=대부분의 과제) resolveMemberLeadForTerm이 알아서 과제 전체 책임자로 폴백한다.
         const lead = project
-          ? resolveResearchLeadForTerm(project, f0.termNumber)
+          ? resolveMemberLeadForTerm(recipientMember, project, f0.termNumber, isSplit)
           : { name: "", email: "" };
 
         // 서류요청일/회신일을 들고 있는 TermFee — 분리행이면 그 기관 자신, 아니면 주관기관 쪽(없으면
@@ -2021,6 +2075,13 @@ function govFiscalQuarterRange(q: 1 | 2 | 3 | 4): [string, string] {
 
 // ── 정산절차 안내 공문 일괄발송 ────────────────────────────────
 interface BulkNoticeTarget {
+  // 목록/제외선택/발송결과 전부 이 값으로 식별한다 — 분리행(RDA2 등)은 같은 과제에서 기관마다 별도
+  // target이 나올 수 있어(projectId만으론 서로 구분이 안 됨) `${projectId}|${institutionId ?? ""}`로 둔다.
+  targetKey: string;
+  // 분리행(RDA2 등)이면 그 참여기관의 institutionId/institutionName — 아니면 둘 다 undefined(과제
+  // 단위 발송, 지금까지와 동일).
+  institutionId?: string;
+  institutionName?: string;
   projectId: string;
   projectNumber: string;
   termNumber: number;
@@ -2084,12 +2145,12 @@ function BulkSettlementNoticeModal({
   const [done, setDone] = useState(false);
   const [results, setResults] = useState<{ projectName: string; email: string; status: "SUCCESS" | "FAILED"; error?: string }[]>([]);
 
-  const toSend = eligible.filter((t) => !excluded.has(t.projectId));
+  const toSend = eligible.filter((t) => !excluded.has(t.targetKey));
 
-  function toggleExclude(projectId: string) {
+  function toggleExclude(targetKey: string) {
     setExcluded((prev) => {
       const next = new Set(prev);
-      if (next.has(projectId)) next.delete(projectId); else next.add(projectId);
+      if (next.has(targetKey)) next.delete(targetKey); else next.add(targetKey);
       return next;
     });
   }
@@ -2158,7 +2219,7 @@ function BulkSettlementNoticeModal({
         status,
         noticeSnapshot: { template, statusRows: t.statusRows, feeRows: t.feeRows, docNumber, issuedDate },
       });
-      newResults.push({ projectName: t.projectName, email: t.recipientEmail, status, error: errMsg });
+      newResults.push({ projectName: t.institutionName ? `${t.projectName} · ${t.institutionName}` : t.projectName, email: t.recipientEmail, status, error: errMsg });
     }
 
     setResults(newResults);
@@ -2264,14 +2325,16 @@ function BulkSettlementNoticeModal({
               })()}
               <div className="divide-y divide-slate-100">
                 {items.map((t) => (
-                  <label key={t.projectId} className="flex items-center gap-3 px-4 py-2 text-xs cursor-pointer hover:bg-slate-50">
+                  <label key={t.targetKey} className="flex items-center gap-3 px-4 py-2 text-xs cursor-pointer hover:bg-slate-50">
                     <input
                       type="checkbox"
-                      checked={!excluded.has(t.projectId)}
-                      onChange={() => toggleExclude(t.projectId)}
+                      checked={!excluded.has(t.targetKey)}
+                      onChange={() => toggleExclude(t.targetKey)}
                       className="rounded border-slate-300 text-purple-600 focus:ring-purple-500/30"
                     />
-                    <span className="flex-1 min-w-0 truncate font-medium text-slate-700">{t.projectName}</span>
+                    <span className="flex-1 min-w-0 truncate font-medium text-slate-700">
+                      {t.projectName}{t.institutionName ? ` · ${t.institutionName}` : ""}
+                    </span>
                     <span className="text-slate-400 shrink-0">{t.recipientEmail}</span>
                   </label>
                 ))}
@@ -2826,20 +2889,64 @@ export default function FeesPage() {
     }
   }
 
-  // 선택된 행 → 과제 단위로 묶어 "정산절차 안내 공문 일괄발송" 모달에 넘길 대상 목록을 만든다.
-  // 과제 상세 페이지의 단건 발송(SettlementNoticeModal)과 동일한 필드 구성을 그대로 재현한다.
+  // 선택된 행 → "정산절차 안내 공문 일괄발송" 모달에 넘길 대상 목록을 만든다. 과제 상세 페이지의
+  // 단건 발송(SettlementNoticeModal)과 동일한 필드 구성을 그대로 재현한다. 분리행(RDA2 등 발송대상=
+  // 주관+참여기관 모두)은 과제 단위로 묶지 않고 선택된 행(참여기관)마다 별도 target을 만든다 — 그
+  // 기관의 책임자+실무자에게만, 그 기관 몫의 수수료만 담아 개별 발송하기 위함. 그 외(비분리행)는
+  // 지금까지처럼 같은 과제를 하나로 묶는다.
   const bulkNoticeTargets = useMemo<BulkNoticeTarget[]>(() => {
     if (!showBulkNotice) return [];
-    const selectedProjectIds = Array.from(
-      new Set(filtered.filter((r) => selectedKeys.has(r.key)).map((r) => r.projectId))
-    ).filter(Boolean);
+    const selectedRows = filtered.filter((r) => selectedKeys.has(r.key));
 
-    return selectedProjectIds.map((projectId) => {
-      const project = projects.find((p) => p.id === projectId)!;
+    const targets: BulkNoticeTarget[] = [];
+    const seenProjectIds = new Set<string>();
+    for (const row of selectedRows) {
+      const project = projects.find((p) => p.id === row.projectId);
+      if (!project) continue;
       const agency = fundingAgencies.find((a) => a.id === project.agencyId);
       const templates = agency ? agencyNoticeTemplates.filter((t) => t.agencyShortName === agency.shortName) : [];
-      const leadMember = projectMembers.find((m) => m.projectId === projectId && m.role === "LEAD");
-      const coInstitutionCount = projectMembers.filter((m) => m.projectId === projectId && m.role !== "LEAD").length;
+
+      if (row.isSplitRow) {
+        // 그 참여기관 자신의 책임자·실무자·수수료만 담는다.
+        const member = projectMembers.find((m) => m.projectId === row.projectId && m.institutionId === row.billedInstitutionId);
+        const lead = resolveMemberLeadForTerm(member, project, row.termNumber, true);
+        const recipient = member ? resolveMemberRecipientForTerm(member, row.termNumber) : { recipientName: "", recipientEmail: "", recipientPhone: "" };
+        const statusRows: NoticeStatusRow[] = [
+          { label: "과제번호", value: project.projectNumber },
+          { label: "과제명", value: project.projectName },
+          { label: "정산구분", value: isSettlementTerm(project, row.termNumber) ? "정산" : "연차상시" },
+          { label: "연구개발기관", value: `${row.billedInstitutionName}${member ? ` (${MEMBER_ROLE_LABEL[member.role]})` : ""}` },
+          { label: "책임자", value: lead.name || "—" },
+        ];
+        const feeRows: NoticeStatusRow[] = buildNoticeFeeRows(project, row.fees, row.termNumber);
+        targets.push({
+          // 분리행은 같은 기관이라도 연차(row.termNumber)별로 독립된 발송 대상이다 — institutionId까지만
+          // 키로 쓰면 같은 기관의 서로 다른 연차 행 두 개를 함께 선택했을 때 targetKey가 겹쳐 체크박스가
+          // 서로 얽힌다(하나를 제외하면 다른 연차도 같이 제외됨).
+          targetKey: `${row.projectId}|${row.billedInstitutionId}|${row.termNumber}`,
+          institutionId: row.billedInstitutionId,
+          institutionName: row.billedInstitutionName,
+          projectId: row.projectId,
+          projectNumber: project.projectNumber,
+          termNumber: row.termNumber,
+          projectName: project.projectName,
+          agencyShortName: agency?.shortName ?? "",
+          leadInstitutionName: row.billedInstitutionName,
+          recipientEmail: combineEmails(lead.email, recipient.recipientEmail),
+          statusRows,
+          feeRows,
+          templates,
+          assignedManagerPrimary: project.assignedManagerPrimary ?? "",
+          assignedManager: project.assignedManager ?? "",
+        });
+        continue;
+      }
+
+      if (seenProjectIds.has(row.projectId)) continue;
+      seenProjectIds.add(row.projectId);
+
+      const leadMember = projectMembers.find((m) => m.projectId === row.projectId && m.role === "LEAD");
+      const coInstitutionCount = projectMembers.filter((m) => m.projectId === row.projectId && m.role !== "LEAD").length;
       const currentStage = project.stages?.find((s) => project.currentTerm >= s.startTermNumber && project.currentTerm <= s.endTermNumber);
       const currentStageStartDate = currentStage?.stageStartDate ?? project.stageStartDate ?? project.startDate;
       const currentStageEndDate = currentStage?.stageEndDate ?? project.stageEndDate ?? project.endDate;
@@ -2858,8 +2965,9 @@ export default function FeesPage() {
         termFees.filter((tf) => tf.projectNumber === project.projectNumber),
         project.currentTerm
       );
-      return {
-        projectId,
+      targets.push({
+        targetKey: row.projectId,
+        projectId: row.projectId,
         projectNumber: project.projectNumber,
         termNumber: project.currentTerm,
         projectName: project.projectName,
@@ -2874,8 +2982,9 @@ export default function FeesPage() {
         templates,
         assignedManagerPrimary: project.assignedManagerPrimary ?? "",
         assignedManager: project.assignedManager ?? "",
-      };
-    });
+      });
+    }
+    return targets;
   }, [showBulkNotice, filtered, selectedKeys, projects, fundingAgencies, agencyNoticeTemplates, projectMembers, termFees]);
 
   // 선택된 "행"(연차 단위) → 계산서발행 서류 요청/입금 확인 요청 일괄발송 대상 목록. 정산절차 안내
@@ -3865,6 +3974,7 @@ export default function FeesPage() {
                                   assignedManagerPrimary: row.assignedManagerPrimary,
                                   registeredAt:    row.registeredAt,
                                   auditFirm:       row.auditFirm,
+                                  isSplitRow:      row.isSplitRow,
                                 },
                               })
                             }

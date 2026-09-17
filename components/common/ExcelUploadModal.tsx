@@ -171,6 +171,16 @@ interface MemberAggregate {
   contactName?: string;
   contactNamesByTerm: Map<number, string>;
   contactNameConflictTerms: Set<number>;
+  // 기관별 책임자(연구책임자) — "연구책임자"/"책임자 메일주소" 컬럼에서 읽는다. buildProjectScalarAggregates
+  // (과제 전체 스칼라, 주관기관 행만 채택)와 달리 이건 기관 하나(agg)당 집계라 주관·공동 구분 없이 그
+  // 기관 행 그대로 읽는다 — RDA2처럼 참여기관마다 책임자가 다른 과제를 위한 값. contactEmail/contactName과
+  // 동일한 방식(마지막 값/연차별/충돌 감지)으로 다룬다.
+  leadName?: string;
+  leadEmail?: string;
+  leadNamesByTerm: Map<number, string>;
+  leadEmailsByTerm: Map<number, string>;
+  leadNameConflictTerms: Set<number>;
+  leadEmailConflictTerms: Set<number>;
   // "연차별기관별"(현재 진행중인 연차 실적) 시트에서 이미 값을 받았는지 — "단계기관별" 시트는
   // 단계 전체의 정산 시점 스냅샷이라 지난 단계의 오래된 역할·정산형태·등급을 담고 있을 수 있어서,
   // 연차별 시트에 값이 있으면 그걸 우선하고 단계기관별 값으론 덮어쓰지 않는다.
@@ -285,6 +295,31 @@ function buildRecipientOverridesFromExcel(
   return merged.length > 0 ? merged : undefined;
 }
 
+// buildRecipientOverridesFromExcel과 동일한 방식(연차별 값 + 충돌 연차 스킵)으로, 기관 자신의
+// 연차별 책임자(연구책임자) 이름·메일주소를 ProjectMember.leadOverrides로 반영한다. RDA2처럼
+// "주관+참여기관 모두"가 발송대상인 과제에서만 호출된다(호출부의 isSplitAgency 분기 참고).
+function buildLeadOverridesFromExcel(
+  agg: MemberAggregate,
+  existingMember: Pick<ProjectMember, "leadName" | "leadEmail">,
+  existingOverrides: NonNullable<ProjectMember["leadOverrides"]> | undefined
+): ProjectMember["leadOverrides"] {
+  const termNumbers = new Set<number>([...agg.leadEmailsByTerm.keys(), ...agg.leadNamesByTerm.keys()]);
+  const perTerm = Array.from(termNumbers)
+    .filter((termNumber) => !agg.leadEmailConflictTerms.has(termNumber) && !agg.leadNameConflictTerms.has(termNumber))
+    .map((termNumber) => ({
+      termNumber,
+      name: agg.leadNamesByTerm.get(termNumber) ?? existingMember.leadName ?? "",
+      email: agg.leadEmailsByTerm.get(termNumber) ?? resolveLeadEmailForTerm(agg, termNumber) ?? existingMember.leadEmail ?? "",
+    }));
+  if (perTerm.length === 0) return existingOverrides;
+  const newTermNumbers = new Set(perTerm.map((p) => p.termNumber));
+  const merged = [
+    ...(existingOverrides ?? []).filter((o) => !newTermNumbers.has(o.termNumber)),
+    ...perTerm,
+  ].sort((a, b) => a.termNumber - b.termNumber);
+  return merged.length > 0 ? merged : undefined;
+}
+
 // buildRecipientOverridesFromExcel과 동일한 방식으로, "연차별기관별" 시트의 주관기관 행에 담긴
 // 연차별 연구책임자 이름·메일주소를 Project.researchLeadOverrides로 직접 반영한다. 같은 연차 안에서
 // 서로 다른 값이 동시에 관측된 연차(scalarInfo의 ...ConflictTerms)는 건너뛰고 기존 오버라이드를
@@ -359,10 +394,46 @@ function resolveContactNameForTerm(agg: MemberAggregate, term: number): string |
   return names.size === 1 ? [...names][0] : agg.contactName;
 }
 
+// resolveContactEmailForTerm/resolveContactNameForTerm과 동일 — 기관별 책임자(연구책임자) 메일주소·이름.
+function resolveLeadEmailForTerm(agg: MemberAggregate, term: number): string | undefined {
+  if (!agg.leadEmailConflictTerms.has(term)) {
+    const termEmail = agg.leadEmailsByTerm.get(term);
+    if (termEmail) return termEmail;
+  }
+  const emails = new Set(
+    [...agg.leadEmailsByTerm.entries()]
+      .filter(([termNumber]) => !agg.leadEmailConflictTerms.has(termNumber))
+      .map(([, email]) => email)
+  );
+  return emails.size === 1 ? [...emails][0] : agg.leadEmail;
+}
+
+function resolveLeadNameForTerm(agg: MemberAggregate, term: number): string | undefined {
+  if (!agg.leadNameConflictTerms.has(term)) {
+    const termName = agg.leadNamesByTerm.get(term);
+    if (termName) return termName;
+  }
+  const names = new Set(
+    [...agg.leadNamesByTerm.entries()]
+      .filter(([termNumber]) => !agg.leadNameConflictTerms.has(termNumber))
+      .map(([, name]) => name)
+  );
+  return names.size === 1 ? [...names][0] : agg.leadName;
+}
+
 function cleanRecipientOverridesForExcelMerge(
   overrides: ProjectMember["recipientOverrides"],
 ): ProjectMember["recipientOverrides"] {
   const cleaned = (overrides ?? []).filter((o) => o.recipientEmail !== "");
+  return cleaned.length > 0 ? cleaned : undefined;
+}
+
+// cleanRecipientOverridesForExcelMerge와 동일 — 기관별 책임자(leadOverrides)에서 빈 이메일로
+// 지워진 항목을 걸러낸다.
+function cleanLeadOverridesForExcelMerge(
+  overrides: ProjectMember["leadOverrides"],
+): ProjectMember["leadOverrides"] {
+  const cleaned = (overrides ?? []).filter((o) => o.email !== "");
   return cleaned.length > 0 ? cleaned : undefined;
 }
 
@@ -420,12 +491,16 @@ function toDateStr(raw: string): string {
 
 // "연차별기관별"(연차·예산) + "단계기관별"(정산형태·역할) 시트를 과제+기관 단위로 합산해
 // 참여기관(ProjectMember) 등록에 쓸 데이터를 만든다. 이게 있어야 등록 시 연차 수수료가 자동 계산된다.
-// "연차별기관별" 시트는 실무상 "현재 진행 중인 연차"만 담아 올리는 실적 시트이므로, 그 "연차" 값은
-// 항상 과제 전체 기준 절대연차로 그대로 신뢰한다("단계" 컬럼이 있어도 오프셋을 더하지 않음).
-// "단계기관별" 시트는 과제 전체 계획(단계 구조·총연차)을 나타낼 뿐, 이 절대연차 해석에는 관여하지 않는다.
+// "연차별기관별" 시트는 실무상 "현재 진행 중인 연차"만 담아 올리는 실적 시트라 "단계" 컬럼이 함께
+// 채워져 있어도 그 "연차" 값은 대부분 이미 절대연차다. 다만 여러 단계 분량을 한 파일에 몰아 올리면
+// 단계마다 "연차"를 1부터 다시 세는 경우가 있어(예: 1단계도 "1연차", 2단계도 "1연차") 서로 다른
+// 단계의 연차가 같은 번호로 겹친다. computeAnnualStageOffsets는 그런 충돌이 실제로 관측된 과제만
+// 골라 오프셋을 만들어두므로, 있으면 더해 절대연차로 바꾸고 없으면(대부분의 정상적인 단일 연차
+// 업로드) 지금처럼 "연차" 값을 그대로 쓴다 — 이미 절대연차인 값을 잘못 건드리지 않기 위함이다.
 function buildMemberAggregates(
   sheets: ParsedSheet[],
-  institutions: readonly Pick<Institution, "bizNumber" | "referenceGrade">[]
+  institutions: readonly Pick<Institution, "bizNumber" | "referenceGrade">[],
+  existingProjects: readonly Pick<Project, "projectNumber" | "stages">[]
 ): {
   members: MemberAggregate[];
   projectMaxTerm: Map<string, number>;
@@ -442,6 +517,7 @@ function buildMemberAggregates(
       referenceGradeByBiz.set(normBiz(inst.bizNumber), inst.referenceGrade);
     }
   }
+  const stageOffsetsByProject = computeAnnualStageOffsets(sheets, existingProjects);
 
   for (const sheet of sheets) {
     const get = (field: string, row: Record<string, string>) => {
@@ -474,6 +550,10 @@ function buildMemberAggregates(
           contactEmailConflictTerms: new Set(),
           contactNamesByTerm: new Map(),
           contactNameConflictTerms: new Set(),
+          leadNamesByTerm: new Map(),
+          leadEmailsByTerm: new Map(),
+          leadNameConflictTerms: new Set(),
+          leadEmailConflictTerms: new Set(),
           budgetsByTerm: new Map(),
           totalCashBudgetFallback: 0,
           totalInKindBudgetFallback: 0,
@@ -499,6 +579,18 @@ function buildMemberAggregates(
         }
       }
 
+      // computeAnnualStageOffsets가 이 과제에서 "절대연차라면 있을 수 없는 충돌"(같은 연차 번호를
+      // 서로 다른 단계가 공유)을 실제로 관측했을 때만 오프셋을 만들어둔다 — 그런 과제만 오프셋을 더해
+      // 절대연차로 바꾸고, 그 외(대부분의 정상적인 단일 연차 업로드 등)는 지금까지처럼 "연차" 값을
+      // 그대로 쓴다. "단계기관별" 시트 행에서는 안 쓰이지만(그쪽은 자체 정산대상시작/종료단계·연차
+      // 컬럼을 따로 쓴다) 계산 자체는 해가 없어 조건 없이 둔다.
+      const rawTermYear = parseInt(get("termYear", row), 10) || 1;
+      const stageNum = parseInt(get("term", row), 10);
+      const stageOffset = Number.isFinite(stageNum) && stageNum > 0
+        ? stageOffsetsByProject.get(normNum)?.get(stageNum)
+        : undefined;
+      const termNumber = stageOffset !== undefined ? stageOffset + rawTermYear : rawTermYear;
+
       if (sheet.def.key === "annual") {
         if (roleStr.includes("주관")) agg.role = "LEAD";
         else if (roleStr.includes("위탁")) agg.role = "ENTRUSTED";
@@ -520,24 +612,47 @@ function buildMemberAggregates(
           // 실무자 메일주소는 연차마다 값이 다를 수 있어(담당자 교체) 연차별로도 모은다 — 같은
           // 연차 안에서 서로 다른 값이 두 번 이상 나오면(중복 행 등) 그 연차는 신뢰할 수 없으니
           // contactEmailConflictTerms로 표시하고, 이미 기록된 값은 덮어쓰지 않는다.
-          const termNumberForEmail = parseInt(get("termYear", row), 10) || 1;
-          const existingEmailForTerm = agg.contactEmailsByTerm.get(termNumberForEmail);
+          const existingEmailForTerm = agg.contactEmailsByTerm.get(termNumber);
           if (existingEmailForTerm !== undefined && existingEmailForTerm !== contactEmailStr) {
-            agg.contactEmailConflictTerms.add(termNumberForEmail);
+            agg.contactEmailConflictTerms.add(termNumber);
           } else {
-            agg.contactEmailsByTerm.set(termNumberForEmail, contactEmailStr);
+            agg.contactEmailsByTerm.set(termNumber, contactEmailStr);
           }
         }
         const contactNameStr = get("contactName", row);
         if (contactNameStr) {
           agg.contactName = contactNameStr;
           // 실무자명도 실무자 메일주소와 동일한 방식(연차별 이력 + 충돌 감지)으로 다룬다.
-          const termNumberForName = parseInt(get("termYear", row), 10) || 1;
-          const existingNameForTerm = agg.contactNamesByTerm.get(termNumberForName);
+          const existingNameForTerm = agg.contactNamesByTerm.get(termNumber);
           if (existingNameForTerm !== undefined && existingNameForTerm !== contactNameStr) {
-            agg.contactNameConflictTerms.add(termNumberForName);
+            agg.contactNameConflictTerms.add(termNumber);
           } else {
-            agg.contactNamesByTerm.set(termNumberForName, contactNameStr);
+            agg.contactNamesByTerm.set(termNumber, contactNameStr);
+          }
+        }
+
+        // 기관별 책임자(연구책임자) — buildProjectScalarAggregates(과제 전체 스칼라)는 "주관"기관 행만
+        // 채택하지만, 여기는 기관(agg) 하나당 집계이므로 주관·공동 구분 없이 이 행 그대로 읽는다.
+        // RDA2처럼 참여기관마다 책임자 메일주소가 다른 과제를 위한 값 — 호출부(committing 루프)에서
+        // isSplitAgency(발송대상=주관+참여기관 모두)인 과제만 실제로 ProjectMember에 반영한다.
+        const leadEmailStr = get("researchLeadEmail", row);
+        if (leadEmailStr) {
+          agg.leadEmail = leadEmailStr;
+          const existingLeadEmailForTerm = agg.leadEmailsByTerm.get(termNumber);
+          if (existingLeadEmailForTerm !== undefined && existingLeadEmailForTerm !== leadEmailStr) {
+            agg.leadEmailConflictTerms.add(termNumber);
+          } else {
+            agg.leadEmailsByTerm.set(termNumber, leadEmailStr);
+          }
+        }
+        const leadNameStr = get("institutionLead", row);
+        if (leadNameStr) {
+          agg.leadName = leadNameStr;
+          const existingLeadNameForTerm = agg.leadNamesByTerm.get(termNumber);
+          if (existingLeadNameForTerm !== undefined && existingLeadNameForTerm !== leadNameStr) {
+            agg.leadNameConflictTerms.add(termNumber);
+          } else {
+            agg.leadNamesByTerm.set(termNumber, leadNameStr);
           }
         }
       } else {
@@ -558,10 +673,8 @@ function buildMemberAggregates(
 
       if (sheet.def.key === "annual") {
         // rcms-columns.ts 상 field명은 "termYear"지만 실제로는 "연차"(회차) 값이고,
-        // 달력상 실제 연도는 "supportYear"(지원연도) 컬럼이 담당한다. "단계" 컬럼 값과 무관하게
-        // 항상 과제 전체 기준 절대연차로 그대로 쓴다 — "단계기관별" 시트는 전체 계획(단계 구조)만
-        // 나타낼 뿐, 이 시트에 실제로 몇 연차까지 올라왔는지와는 무관하기 때문이다.
-        const termNumber = parseInt(get("termYear", row), 10) || 1;
+        // 달력상 실제 연도는 "supportYear"(지원연도) 컬럼이 담당한다. termNumber는 위에서 이미
+        // 단계 오프셋까지 반영해 절대연차로 계산해뒀다.
         const supportYear = parseInt(get("supportYear", row), 10) || new Date().getFullYear();
         // "연차_기관_총사업비(현금/현물)"처럼 이 연차 전용 컬럼이 있으면 그쪽을 우선한다 —
         // 일부 RCMS 파일엔 과제 전체 누적 총액 컬럼("현금사업비 총액")도 같이 있어서 그걸 그대로
@@ -1005,6 +1118,95 @@ function computeStageOffsets(
     cumulative += lengthByStage.get(n)!;
   }
   return offsets;
+}
+
+// "연차별기관별" 시트는 실무상 "지금 진행 중인 연차" 한 줄만 올라오는 실적 파일이 대부분이라, 그런
+// 파일은 "단계" 컬럼이 채워져 있어도 "연차" 값이 이미 과제 전체 기준 절대연차인 경우가 많다(기존
+// 설계가 "단계" 값과 무관하게 항상 절대연차로 신뢰했던 이유). 반면 이번에 문제가 된 것처럼 여러 단계
+// 분량을 한 파일에 한꺼번에 담아 올리면, 단계마다 "연차"를 1부터 다시 세는 경우가 있어(예: 1단계도
+// "1연차", 2단계도 "1연차") 서로 다른 단계의 연차가 같은 번호로 겹친다.
+// 이 두 경우를 구분할 절대적인 신호가 파일에 없으므로(같은 "연차"=5도 원래 절대값일 수도, 상대값일
+// 수도 있음), "절대연차로 보면 모순되는 충돌"이 실제로 관측될 때만 상대→절대 변환을 적용한다. 충돌은
+// 이 파일 안에서(여러 단계를 한 파일에 몰아 올릴 때 같은 연차 번호를 서로 다른 단계가 공유하는 경우)
+// 뿐 아니라, 이미 등록된 과제의 단계 구조와 비교해서도 찾는다 — 파일에 최신 단계 행 하나만 올라와도,
+// 그 "연차" 값을 절대연차로 봤을 때 이미 등록된 다른 단계의 범위와 겹쳐버리면 그것도 모순이다(아래
+// 참고). 그런 충돌이 전혀 없는 파일(단계 하나만 등장하고 기존 단계 범위와도 안 겹치는 보통의 실적
+// 업로드 등)은 지금까지처럼 "연차" 값을 그대로 절대연차로 둔다 — 이미 절대연차인 값에 오프셋을
+// 잘못 더해 실제 서비스 중인 과제의 연차 데이터를 어긋나게 만들 위험을 피하기 위함이다.
+function computeAnnualStageOffsets(
+  sheets: ParsedSheet[],
+  existingProjects: readonly Pick<Project, "projectNumber" | "stages">[]
+): Map<string, Map<number, number>> {
+  const maxRelTermByProject = new Map<string, Map<number, number>>(); // normNum -> stageNum -> 관측된 최대 연차
+  const stagesByRawTerm = new Map<string, Map<number, Set<number>>>(); // normNum -> 연차값 -> 그 연차값을 쓴 단계번호 집합
+  const rowsByProject = new Map<string, { stageNum: number; relTerm: number }[]>(); // normNum -> (단계, 연차) 원본 관측치
+  for (const sheet of sheets) {
+    if (sheet.def.key !== "annual") continue;
+    const get = (field: string, row: Record<string, string>) => {
+      const m = sheet.mapping.find((x) => x.field === field);
+      return getCellVal(row, m?.mappedTo ?? null);
+    };
+    for (const row of sheet.rows) {
+      const normNum = normProjectNum(get("projectNumber", row));
+      if (!normNum) continue;
+      const stageNum = parseInt(get("term", row), 10);
+      if (!Number.isFinite(stageNum) || stageNum <= 0) continue;
+      const relTerm = parseInt(get("termYear", row), 10) || 1;
+
+      let byStage = maxRelTermByProject.get(normNum);
+      if (!byStage) { byStage = new Map(); maxRelTermByProject.set(normNum, byStage); }
+      byStage.set(stageNum, Math.max(byStage.get(stageNum) ?? 0, relTerm));
+
+      let byRawTerm = stagesByRawTerm.get(normNum);
+      if (!byRawTerm) { byRawTerm = new Map(); stagesByRawTerm.set(normNum, byRawTerm); }
+      let stagesForTerm = byRawTerm.get(relTerm);
+      if (!stagesForTerm) { stagesForTerm = new Set(); byRawTerm.set(relTerm, stagesForTerm); }
+      stagesForTerm.add(stageNum);
+
+      let rows = rowsByProject.get(normNum);
+      if (!rows) { rows = []; rowsByProject.set(normNum, rows); }
+      rows.push({ stageNum, relTerm });
+    }
+  }
+
+  // "절대연차라면 있을 수 없는" 충돌이 실제로 관측된 과제만 변환 대상으로 삼는다. 충돌은 두 가지
+  // 방식으로 찾는다 — (1) 이 파일 안에서 같은 연차 번호를 서로 다른 단계가 공유하는 경우(여러 단계를
+  // 한 파일에 몰아 올릴 때), (2) 이 파일엔 한 단계 행만 있어도, 그 "연차" 값을 절대연차로 봤을 때
+  // 이미 등록된 과제의 다른 단계 범위 안에 들어가 버리는 경우(예: 1·2단계가 이미 절대연차 1~4로
+  // 등록된 과제에 3단계 "연차1"만 올라오면, 그대로면 1단계 몫과 겹친다 — 파일에 1단계 행이 없어도
+  // 이미 아는 정보만으로 모순을 알 수 있다).
+  const projectsNeedingOffset = new Set<string>();
+  for (const [normNum, byRawTerm] of stagesByRawTerm) {
+    for (const stages of byRawTerm.values()) {
+      if (stages.size > 1) { projectsNeedingOffset.add(normNum); break; }
+    }
+  }
+
+  const existingStagesByNorm = new Map<string, Project["stages"]>();
+  for (const p of existingProjects) existingStagesByNorm.set(normProjectNum(p.projectNumber), p.stages);
+
+  for (const [normNum, rows] of rowsByProject) {
+    if (projectsNeedingOffset.has(normNum)) continue;
+    const existingStages = existingStagesByNorm.get(normNum);
+    if (!existingStages || existingStages.length === 0) continue;
+    const hasConflict = rows.some(({ stageNum, relTerm }) =>
+      existingStages.some((s) => relTerm >= s.startTermNumber && relTerm <= s.endTermNumber && s.stageNumber !== stageNum)
+    );
+    if (hasConflict) projectsNeedingOffset.add(normNum);
+  }
+
+  const offsetsByProject = new Map<string, Map<number, number>>();
+  for (const normNum of projectsNeedingOffset) {
+    const byStage = maxRelTermByProject.get(normNum)!;
+    const info: ProjectStageInfo = {
+      ranges: new Map([...byStage].map(([stageNum, maxTerm]) => [stageNum, { start: 1, end: maxTerm }])),
+      dateRanges: new Map(),
+      hasMissing: false,
+      skipReasons: [],
+    };
+    offsetsByProject.set(normNum, computeStageOffsets(info, existingStagesByNorm.get(normNum)));
+  }
+  return offsetsByProject;
 }
 
 // ProjectStageInfo(+기존 stages) → Project.agreementType/stages. 이번 파일에 단계 정보가 전혀
@@ -2575,17 +2777,18 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
   const [managerPickerName, setManagerPickerName] = useState<string | null>(null);
 
   // "단계기관별" 시트의 정산대상시작/종료단계·연차 값으로 과제별 단계 구조(Project.stages)를 추정
-  // — 아래 buildMemberAggregates가 "연차별기관별" 시트의 상대연차를 절대연차로 바꾸는 데 이 결과가 필요하므로 먼저 계산한다.
   const stageAggregates = useMemo(() => {
     const map = buildStageAggregates(parsedSheets);
     supplementStageDatesFromAnnual(parsedSheets, map);
     return map;
   }, [parsedSheets]);
 
-  // "연차별기관별" + "단계기관별" 시트를 과제+기관 단위로 합산 — 참여기관(ProjectMember) 등록에 사용
+  // "연차별기관별" + "단계기관별" 시트를 과제+기관 단위로 합산 — 참여기관(ProjectMember) 등록에 사용.
+  // existingProjects는 "연차별기관별" 시트의 "단계"+"연차"(상대값일 수 있음)를 절대연차로 바꿀 때,
+  // 이번 파일에 없는 이전 단계 길이를 이미 등록된 과제에서 보충하는 데 쓰인다(computeAnnualStageOffsets 참고).
   const { members: memberAggregates, projectMaxTerm } = useMemo(
-    () => buildMemberAggregates(parsedSheets, institutions),
-    [parsedSheets, institutions]
+    () => buildMemberAggregates(parsedSheets, institutions, projects),
+    [parsedSheets, institutions, projects]
   );
 
   // 과제담당자·자율성트랙·과제코드·연구책임자 등 과제 레벨 단일값 — 여러 행에 값이 갈리면 등록하지 않고 이슈로 남긴다
@@ -3372,6 +3575,19 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
     const authorName = getCurrentUser()?.name ?? "시스템";
     let stageAlertCount = 0;
 
+    // 과제별로 전담기관의 발송대상(noticeRecipientScope)이 "주관+참여기관 모두"(RDA2 등)인지 미리
+    // 판별해둔다 — 기관별 책임자(leadName/leadEmail/leadOverrides)는 이런 과제에서만 반영한다. 이
+    // 시점엔 registeredAgencies가 기존 전담기관은 물론 이번 실행에서 새로 만든 전담기관까지 다 채워져
+    // 있다(바로 위 "전문기관" 등록 루프가 이미 끝났으므로).
+    const agencyScopeByProject = new Map<string, boolean>(); // normProjectNum → isSplitAgency
+    for (const row of previewRows) {
+      const normNum = normProjectNum(row.projectNumber);
+      if (!normNum || agencyScopeByProject.has(normNum)) continue;
+      const agencyId = registeredAgencies.get(row.agencyName);
+      const scope = agencyId ? fundingAgencies.find((a) => a.id === agencyId)?.noticeRecipientScope : undefined;
+      agencyScopeByProject.set(normNum, scope === "LEAD_AND_PARTICIPANTS");
+    }
+
     // 참여기관 등록/갱신 — 이게 등록돼야 연차 수수료가 자동으로 계산된다 (autoGenerateTermFees 트리거)
     for (const agg of memberAggregates) {
       const normNum = normProjectNum(agg.projectNumber);
@@ -3399,6 +3615,11 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       const targetTerm = projectMaxTerm.get(normNum) ?? 1;
       const contactEmailForTargetTerm = resolveContactEmailForTerm(agg, targetTerm);
       const contactNameForTargetTerm = resolveContactNameForTerm(agg, targetTerm);
+      // 기관별 책임자는 전담기관 발송대상이 "주관+참여기관 모두"(RDA2 등)인 과제에만 반영한다 — 그
+      // 외 과제는 지금처럼 과제 전체가 책임자 하나(Project.researchLead(Email))를 공유한다.
+      const isSplitAgency = agencyScopeByProject.get(normNum) ?? false;
+      const leadEmailForTargetTerm = isSplitAgency ? resolveLeadEmailForTerm(agg, targetTerm) : undefined;
+      const leadNameForTargetTerm = isSplitAgency ? resolveLeadNameForTerm(agg, targetTerm) : undefined;
 
       if (!existingMember) {
         if (!approved) continue; // 아직 승인되지 않은 연차의 신규 참여기관은 만들지 않는다
@@ -3440,6 +3661,13 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             { contactName: institution?.contactName, contactEmail: institution?.contactEmail, contactPhone: institution?.contactPhone },
             undefined,
           ),
+          // 발송대상이 "주관+참여기관 모두"인 과제(isSplitAgency)만 기관 자신의 책임자 값을 싣는다 —
+          // 그 외 과제는 아예 안 보내 과제 전체 책임자(Project.researchLead(Email))를 그대로 공유한다.
+          ...(isSplitAgency ? {
+            leadName: leadNameForTargetTerm || undefined,
+            leadEmail: leadEmailForTargetTerm || undefined,
+            leadOverrides: buildLeadOverridesFromExcel(agg, { leadName: undefined, leadEmail: undefined }, undefined),
+          } : {}),
         });
         memberCount++;
       } else {
@@ -3483,6 +3711,33 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           updates.recipientOverrides = buildRecipientOverridesFromExcel(agg, existingMember, recipientOverrides);
           if (contactEmailForTargetTerm) updates.contactEmail = contactEmailForTargetTerm;
           if (contactNameForTargetTerm) updates.contactName = contactNameForTargetTerm;
+        }
+
+        // 기관별 책임자 — 위 실무자 블록과 완전히 동일한 규칙(값이 있을 때만 반영, 소급 방지)이되
+        // isSplitAgency(발송대상=주관+참여기관 모두)인 과제에서만 동작한다.
+        if (isSplitAgency && (leadEmailForTargetTerm || leadNameForTargetTerm || agg.leadEmailsByTerm.size > 0 || agg.leadNamesByTerm.size > 0)) {
+          let leadOverrides = cleanLeadOverridesForExcelMerge(existingMember.leadOverrides);
+          const leadEmailChanged = !!(existingMember.leadEmail && leadEmailForTargetTerm && leadEmailForTargetTerm !== existingMember.leadEmail);
+          const leadNameChanged = !!(existingMember.leadName && leadNameForTargetTerm && leadNameForTargetTerm !== existingMember.leadName);
+          if (leadEmailChanged || leadNameChanged) {
+            const existingTermNumbers = new Set([
+              ...termFees.filter((f) => f.projectNumber === agg.projectNumber).map((f) => f.termNumber),
+              ...agg.budgetsByTerm.keys(),
+            ]);
+            leadOverrides = backfillExistingTermOverrides(
+              existingMember.leadOverrides,
+              existingTermNumbers,
+              targetTerm,
+              (termNumber) => ({
+                termNumber,
+                name: existingMember.leadName ?? "",
+                email: existingMember.leadEmail ?? "",
+              }),
+            );
+          }
+          updates.leadOverrides = buildLeadOverridesFromExcel(agg, existingMember, leadOverrides);
+          if (leadEmailForTargetTerm) updates.leadEmail = leadEmailForTargetTerm;
+          if (leadNameForTargetTerm) updates.leadName = leadNameForTargetTerm;
         }
 
         if (approved) {

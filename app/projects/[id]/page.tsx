@@ -11,12 +11,12 @@ import {
 } from "react-icons/fi";
 import {
   useStore, updateProject, addProjectIssue, updateProjectIssue, deleteProjectIssue, addTaxInvoice, updateTaxInvoice,
-  addReceivable, updateReceivable, addEmailDispatch, updateTermFee, updateUnclaimedFee,
+  addReceivable, updateReceivable, addEmailDispatch, updateEmailDispatch, updateTermFee, updateUnclaimedFee,
   updateProjectMember, autoGenerateTermFees, addProjectMember, deleteProjectMember, deleteProject, deleteProjectTerms,
   setTermOtherFirmHandled, setTermBillingType, setTermDates, resolveProjectId,
 } from "@/lib/store";
 import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type EmailDispatch, type FeePolicy, type AnnualFinancials, type FundingAgency, EMPTY_NOTICE_TEMPLATE } from "@/lib/mock";
-import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, MEMBER_ROLE_LABEL, type CalcMember } from "@/lib/fee-calculator";
+import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveMemberLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, MEMBER_ROLE_LABEL, type CalcMember } from "@/lib/fee-calculator";
 import { fmtWonFull, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange, nowKST, todayKST } from "@/lib/utils";
 import { fmtValue, fieldLabel, describeOverrideChange } from "@/lib/audit-log-format";
 import StatusBadge from "@/components/common/StatusBadge";
@@ -3030,7 +3030,7 @@ function BillingBlock({
   canEditEmails: boolean;
   emailDispatches: EmailDispatch[];
 }) {
-  const { fundingAgencies } = useStore();
+  const { fundingAgencies, agencyNoticeTemplates, termFees, companyInfo } = useStore();
   const [issuingInvoice, setIssuingInvoice] = useState(false);
   const [invForm, setInvForm] = useState({
     issuedAt: todayKST(),
@@ -3058,9 +3058,23 @@ function BillingBlock({
 
   // 책임자(연구책임자) 이름·이메일 — 정산절차 안내 공문 발송 시 실무자와 함께 수신하는 정보. 연구책임자가
   // 연차 중간에 바뀌는 경우가 있어 실무자와 동일한 방식(연차별 오버라이드)으로 이 연차에만 적용되는
-  // 값을 저장한다(오버라이드가 없으면 과제 기본 정보의 책임자이름·이메일을 그대로 보여준다).
-  const baseLead = { name: project.researchLead ?? "", email: project.researchLeadEmail ?? "" };
-  const resolvedLead = resolveResearchLeadForTerm(project, termNumber);
+  // 값을 저장한다(오버라이드가 없으면 과제 기본 정보의 책임자이름·이메일을 그대로 보여준다). RDA2처럼
+  // 발송대상이 "주관+참여기관 모두"라 unit이 기관별로 쪼개진(unit.institutionId 있음) 경우엔 그 기관의
+  // ProjectMember.leadOverrides로 저장해 기관마다 독립적으로 값을 가진다 — 그 외(unit.institutionId
+  // 없음)는 지금까지처럼 과제 전체가 공유하는 Project.researchLeadOverrides에 저장한다.
+  // unit.institutionId가 없으면(=이 전담기관이 지금은 "주관기관만" 발송대상이라 분리행이 아닌 경우)
+  // recipientMember(주관기관 레코드)에 예전에 분리행이었을 때 남은 leadName/leadEmail이 있어도
+  // 무시하고 과제 기본값만 본다 — 전담기관 설정을 되돌린 뒤에도 옛 값이 계속 새어나오는 걸 막는다.
+  const isSplitUnit = !!unit.institutionId;
+  // resolveMemberLeadForTerm과 동일하게 이름·이메일을 각자 독립적으로 폴백시킨다 — 기관 자신의 값이
+  // 한쪽만 채워져 있으면(예: 엑셀에서 책임자 메일주소만 들어온 경우) 나머지 한쪽은 과제 기본값으로
+  // 채워야지, 이 쌍 전체를 "기관 값 없음"으로 보고 둘 다 과제 기본값으로 되돌리면 안 되고, 반대로
+  // 폴백 없이 빈 문자열로 두면(예전 방식) 아무것도 안 고치고 저장만 눌러도 "바뀐 값"으로 오인해
+  // 불필요한 leadOverrides가 생긴다.
+  const baseLead = isSplitUnit
+    ? { name: recipientMember?.leadName ?? project.researchLead ?? "", email: recipientMember?.leadEmail ?? project.researchLeadEmail ?? "" }
+    : { name: project.researchLead ?? "", email: project.researchLeadEmail ?? "" };
+  const resolvedLead = resolveMemberLeadForTerm(recipientMember, project, termNumber, isSplitUnit);
   const [editingLead, setEditingLead] = useState(false);
   const [leadDraft, setLeadDraft] = useState({ name: "", email: "" });
 
@@ -3070,12 +3084,55 @@ function BillingBlock({
   }
 
   function saveLead() {
-    const others = (project.researchLeadOverrides ?? []).filter((o) => o.termNumber !== termNumber);
+    // isSplitUnit(=RDA2 등 기관별로 쪼개진 단위)인데 recipientMember를 못 찾은 경우는
+    // project.researchLeadOverrides(과제 전체 공유값)에 잘못 써버리면 안 된다 — 그러면 이 값이
+    // resolveMemberLeadForTerm의 폴백으로 쓰이는 다른 참여기관들의 책임자 값까지 함께 바뀐다.
+    // 실무자 섹션(바로 아래, recipientMember 없으면 편집 UI 자체를 숨김)과 동일하게, 이 경우엔
+    // 편집 버튼이 애초에 노출되지 않으므로(아래 JSX 참고) 여기까지 오지 않는 게 정상이지만, 방어적으로
+    // 한 번 더 막아둔다.
+    if (isSplitUnit && !recipientMember) return;
     const isDefault = leadDraft.name === baseLead.name && leadDraft.email === baseLead.email;
-    const next = isDefault ? others : [...others, { termNumber, name: leadDraft.name, email: leadDraft.email }];
-    updateProject(project.id, { researchLeadOverrides: next.length > 0 ? next : undefined });
+    if (isSplitUnit && recipientMember) {
+      const others = (recipientMember.leadOverrides ?? []).filter((o) => o.termNumber !== termNumber);
+      const next = isDefault ? others : [...others, { termNumber, name: leadDraft.name, email: leadDraft.email }];
+      updateProjectMember(recipientMember.id, { leadOverrides: next.length > 0 ? next : undefined });
+    } else {
+      const others = (project.researchLeadOverrides ?? []).filter((o) => o.termNumber !== termNumber);
+      const next = isDefault ? others : [...others, { termNumber, name: leadDraft.name, email: leadDraft.email }];
+      updateProject(project.id, { researchLeadOverrides: next.length > 0 ? next : undefined });
+    }
     setEditingLead(false);
   }
+
+  // 정산절차 안내 공문(기관별 개별 발송) — RDA2 등 발송대상이 "주관+참여기관 모두"인 전담기관은 과제
+  // 헤더의 공통 발송 버튼을 숨기고(그 위 조건 참고) 참여기관마다 여기서 개별로 보낸다. 그 기관의
+  // 책임자(resolvedLead)+실무자(recipient)에게만 가고, 수수료 요약도 그 기관 몫(unitTermFees)만 담아
+  // 다른 기관 금액이 섞여 나가지 않게 한다.
+  const unitNoticeAgency = fundingAgencies.find((a) => a.id === project.agencyId);
+  const unitNoticeTemplates = unitNoticeAgency
+    ? agencyNoticeTemplates.filter((t) => t.agencyShortName === unitNoticeAgency.shortName)
+    : [];
+  const [showUnitNotice, setShowUnitNotice] = useState(false);
+  const unitTermFees = termFees.filter((f) =>
+    f.projectNumber === projectNumber && f.termNumber === termNumber &&
+    (unit.institutionId ? f.institutionId === unit.institutionId : true)
+  );
+  const unitNoticeFeeRows: NoticeStatusRow[] = buildNoticeFeeRows(project, unitTermFees, termNumber);
+  const unitCurrentStage = project.stages?.find((s) => termNumber >= s.startTermNumber && termNumber <= s.endTermNumber);
+  const unitStageStartDate = unitCurrentStage?.stageStartDate ?? project.stageStartDate ?? project.startDate;
+  const unitStageEndDate = unitCurrentStage?.stageEndDate ?? project.stageEndDate ?? project.endDate;
+  const unitNoticeStatusRows: NoticeStatusRow[] = [
+    { label: "과제번호", value: projectNumber },
+    { label: "과제명", value: project.projectName },
+    { label: "단계연구개발기간", value: `${fmtDate(unitStageStartDate)} ~ ${fmtDate(unitStageEndDate)}` },
+    { label: "대상기간", value: `${fmtDate(project.firstStartDate ?? project.startDate)} ~ ${fmtDate(project.finalEndDate ?? project.endDate)}` },
+    { label: "정산구분", value: isSettlementTerm(project, termNumber) ? "정산" : "연차상시" },
+    { label: "연구개발기관", value: `${unit.billingLabel}${recipientMember ? ` (${MEMBER_ROLE_LABEL[recipientMember.role]})` : ""}` },
+    { label: "책임자", value: resolvedLead.name || "—" },
+  ];
+  const unitNoticeSeq = emailDispatches.filter((e) => e.emailType === "SETTLEMENT_NOTICE").length + 1;
+  const unitNoticeDocNumber = `${companyInfo.docNumberPrefix} ${new Date().getFullYear()}-${String(unitNoticeSeq).padStart(4, "0")}`;
+  const unitNoticeIssuedDate = todayKST().replace(/-/g, ".");
 
   // 계산서발행 서류 요청 / 입금 확인 요청 — 첨부파일 없이 메일 본문 하나만 보내는 간단 안내 메일.
   const [simpleNotice, setSimpleNotice] = useState<SimpleNoticeTarget | null>(null);
@@ -3368,7 +3425,7 @@ function BillingBlock({
             <span>{resolvedLead.name || "-"}</span>
             <span className="text-slate-300">·</span>
             <span>{resolvedLead.email || "-"}</span>
-            {canEditInvoices && (
+            {canEditInvoices && !(isSplitUnit && !recipientMember) && (
               <button type="button" onClick={startEditLead} className="text-slate-400 hover:text-blue-600 transition-colors">
                 <FiEdit2 size={12} />
               </button>
@@ -3422,6 +3479,20 @@ function BillingBlock({
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* 정산절차 안내 공문 — 분리 단위(unit.institutionId 있음, RDA2 등)에서만 이 기관 전용으로
+          개별 발송한다. 과제 헤더의 공통 버튼은 이런 과제에서 숨겨져 있다(위 참고). */}
+      {unit.institutionId && unitNoticeAgency && unitNoticeTemplates.length > 0 && canEditEmails && (
+        <div className="flex items-center gap-3">
+          <span className="text-xs font-semibold text-slate-600 w-24 shrink-0">정산안내공문</span>
+          <button
+            onClick={() => setShowUnitNotice(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-lg hover:bg-purple-100 transition-colors"
+          >
+            <FiFileText size={12} /> 이 기관에 정산절차 안내 공문 발송
+          </button>
         </div>
       )}
 
@@ -3628,6 +3699,23 @@ function BillingBlock({
       {dispatchTarget && (
         <Modal title="세금계산서 공문 발송" onClose={() => setDispatchTarget(null)} size="lg">
           <DispatchModal target={dispatchTarget} onClose={() => setDispatchTarget(null)} />
+        </Modal>
+      )}
+      {showUnitNotice && unitNoticeAgency && (
+        <Modal title="정산절차 안내 공문" onClose={() => setShowUnitNotice(false)} size="xl">
+          <SettlementNoticeModal
+            project={project}
+            agencyLabel={`${unitNoticeAgency.name} (${unitNoticeAgency.shortName})`}
+            agency={unitNoticeAgency}
+            templates={unitNoticeTemplates}
+            statusRows={unitNoticeStatusRows}
+            feeRows={unitNoticeFeeRows}
+            recipientEmail={combineEmails(resolvedLead.email, recipient?.recipientEmail)}
+            recipientInstitutionName={unit.billingLabel}
+            docNumber={unitNoticeDocNumber}
+            issuedDate={unitNoticeIssuedDate}
+            onClose={() => setShowUnitNotice(false)}
+          />
         </Modal>
       )}
     </div>
@@ -4502,6 +4590,7 @@ function SettlementNoticeModal({
   statusRows,
   feeRows,
   recipientEmail,
+  recipientInstitutionName,
   docNumber,
   issuedDate,
   onClose,
@@ -4513,11 +4602,14 @@ function SettlementNoticeModal({
   statusRows: NoticeStatusRow[];
   feeRows: NoticeStatusRow[];
   recipientEmail: string;
+  // RDA2 등 참여기관별로 개별 발송할 때는 그 기관명을, 아니면(기본값 미지정) 과제 주관기관명을
+  // addEmailDispatch의 recipientInstitution에 남긴다.
+  recipientInstitutionName?: string;
   docNumber: string;
   issuedDate: string;
   onClose: () => void;
 }) {
-  const { companyInfo, users } = useStore();
+  const { companyInfo, users, emailDispatches } = useStore();
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
   const [toEmail, setToEmail] = useState(recipientEmail);
   const [sending, setSending] = useState(false);
@@ -4550,12 +4642,38 @@ function SettlementNoticeModal({
     setSending(true);
     setSendError("");
     const subject = `[${project.projectNumber}] ${template.title || "정산절차 안내 및 수수료 청구"}`;
-    const html = buildNoticeEmailHtml({ template, statusRows, feeRows, docNumber, issuedDate, companyInfo });
+    // docNumber(prop)는 모달을 열 당시(렌더 시점)의 미리보기 값이라, RDA2처럼 같은 과제의 여러
+    // 참여기관에 모달을 각각 열어두고 거의 동시에 보내면 두 모달이 같은 번호를 보여줄 수 있다 —
+    // 실제 발송에 쓸 번호는 지금 이 순간(비동기 fetch 이전, 동기 구간) 라이브 emailDispatches
+    // 기준으로 다시 계산해 확정한다. addEmailDispatch를 fetch 이전에 동기 호출해 바로 그 값을
+    // emailDispatches에 반영해두면, 자바스크립트가 한 번에 하나의 동기 구간만 실행한다는 특성상
+    // 뒤이어 다른 기관의 send()가 (아직 이 fetch가 안 끝났어도) 실행될 땐 이미 이 예약을 보고
+    // 다음 번호를 계산하게 된다.
+    const liveSeq = emailDispatches.filter((e) => e.emailType === "SETTLEMENT_NOTICE").length + 1;
+    const liveDocNumber = `${companyInfo.docNumberPrefix} ${new Date().getFullYear()}-${String(liveSeq).padStart(4, "0")}`;
+    const html = buildNoticeEmailHtml({ template, statusRows, feeRows, docNumber: liveDocNumber, issuedDate, companyInfo });
     // template.attachments는 본문의 "[붙임]" 목록에 이름만 나열될 뿐, 실제 파일(dataUrl)을 함께
-    // 넘겨주지 않으면 메일에 파일이 붙지 않는다 — DispatchModal과 동일하게 dataUrl이 있는 것만 첨부한다.
+    // 넘겨주지 않으면 메일에 붙지 않는다 — DispatchModal과 동일하게 dataUrl이 있는 것만 첨부한다.
     const mailAttachments = template.attachments
       .filter((a): a is { name: string; dataUrl: string } => !!a.dataUrl)
       .map((a) => ({ filename: a.name, dataUrl: a.dataUrl }));
+
+    // 문서번호를 확정한 그 자리(fetch 이전, 동기 구간)에 PENDING으로 미리 등록해 번호를 예약한다 —
+    // 실제 발송 성공/실패는 fetch가 끝난 뒤 아래에서 status만 갱신한다.
+    const dispatch = addEmailDispatch({
+      batchId: `BATCH-${Date.now()}`,
+      sentAt: nowKST(),
+      senderName: companyInfo.name,
+      recipientInstitution: recipientInstitutionName ?? project.leadInstitutionName,
+      recipientEmail: toEmail,
+      subject,
+      emailType: "SETTLEMENT_NOTICE",
+      projectNumber: project.projectNumber,
+      termNumber: project.currentTerm,
+      attachments: template.attachments.map((a) => a.name),
+      status: "PENDING",
+      noticeSnapshot: { template, statusRows, feeRows, docNumber: liveDocNumber, issuedDate },
+    });
 
     let status: "SUCCESS" | "FAILED" = "SUCCESS";
     try {
@@ -4584,20 +4702,7 @@ function SettlementNoticeModal({
       setSendError("메일 발송 중 네트워크 오류가 발생했습니다.");
     }
 
-    addEmailDispatch({
-      batchId: `BATCH-${Date.now()}`,
-      sentAt: nowKST(),
-      senderName: companyInfo.name,
-      recipientInstitution: project.leadInstitutionName,
-      recipientEmail: toEmail,
-      subject,
-      emailType: "SETTLEMENT_NOTICE",
-      projectNumber: project.projectNumber,
-      termNumber: project.currentTerm,
-      attachments: template.attachments.map((a) => a.name),
-      status,
-      noticeSnapshot: { template, statusRows, feeRows, docNumber, issuedDate },
-    });
+    updateEmailDispatch(dispatch.batchId, { status });
     setSending(false);
     if (status === "SUCCESS") setSent(true);
   }
@@ -4797,7 +4902,10 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
             <p className="text-sm text-slate-500 mt-0.5">{project.leadInstitutionName} · {project.agency}</p>
           </div>
           <div className="flex items-center gap-2">
-            {noticeAgency && canSendNotice && (
+            {/* RDA2 등 발송대상이 "주관+참여기관 모두"인 전담기관은 이 과제 전체를 묶은 공문 대신
+                참여기관마다 아래 수수료 관리 탭의 BillingBlock에서 개별로 발송한다(그 기관 책임자+
+                실무자에게만 발송하기 위함) — 그래서 여기선 LEAD_ONLY 전담기관일 때만 노출한다. */}
+            {noticeAgency && canSendNotice && noticeAgency.noticeRecipientScope !== "LEAD_AND_PARTICIPANTS" && (
               <button
                 onClick={() => setShowNotice(true)}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 border border-purple-200 rounded-lg hover:bg-purple-100 transition-colors"

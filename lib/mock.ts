@@ -1063,6 +1063,13 @@ export interface ProjectMember {
   // 연차별 공문 수신자(실무자) — 담당자가 연차 중간에 바뀌는 경우가 많아(특히 RDA2처럼 기관별로
   // 공문을 따로 보내는 과제) 특정 연차만 다르게 기록한다. 없는 연차는 contactName/Email/Phone을 그대로 쓴다.
   recipientOverrides?: RecipientOverride[];
+  // 기관별 책임자(연구책임자) — RDA2처럼 전담기관이 "주관+참여기관 모두"를 발송대상으로 두는 과제는
+  // 참여기관마다 책임자가 다를 수 있다. 값이 없으면 resolveMemberLeadForTerm이 과제 기본값
+  // (Project.researchLead/researchLeadEmail)으로 폴백하므로, 그 외 대부분의 과제는 영향이 없다.
+  leadName?: string;
+  leadEmail?: string;
+  // 연차별 책임자 — contactName/Email의 recipientOverrides와 동일한 방식(연차 중간 교체 대응).
+  leadOverrides?: ResearchLeadOverride[];
   // 수수료 산정 필드
   cashBudget?: number;         // 총 현금사업비
   inKindBudget?: number;       // 총 현물사업비

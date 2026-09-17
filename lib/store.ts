@@ -2803,8 +2803,25 @@ export function addEmailDispatch(data: Omit<EmailDispatch, "id">): EmailDispatch
     .then((res) => res.json())
     .then((res: { ok: boolean; emailDispatch?: EmailDispatch; error?: string }) => {
       if (res.ok && res.emailDispatch) {
-        _state = { ..._state, emailDispatches: _state.emailDispatches.map((e) => (e.id === tempId ? res.emailDispatch! : e)) };
+        // updateEmailDispatch가 이 POST 응답이 오기 전에(레코드가 아직 tempId일 때) 이미 status를
+        // 확정했을 수 있다(정산절차 안내 공문처럼 PENDING으로 먼저 예약해두는 흐름) — 그 경우 서버가
+        // 돌려준 res.emailDispatch.status는 그때 보낸 원래 값(PENDING 등)일 뿐이라, 그대로 덮어쓰면
+        // 방금 확정된 상태가 되돌아간다. 지금 로컬에 반영돼 있는 status를 우선하고, 보낸 값과
+        // 달라져 있으면(=그 사이 확정됐으면) 서버에도 뒤늦게 PATCH로 맞춰준다.
+        const current = _state.emailDispatches.find((e) => e.id === tempId);
+        const finalStatus = current?.status ?? res.emailDispatch.status;
+        _state = {
+          ..._state,
+          emailDispatches: _state.emailDispatches.map((e) => (e.id === tempId ? { ...res.emailDispatch!, status: finalStatus } : e)),
+        };
         notify();
+        if (finalStatus !== res.emailDispatch.status) {
+          fetch(`/api/email-dispatches/${res.emailDispatch.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: finalStatus }),
+          }).catch((err) => console.error("공문 발송이력 상태 갱신 실패:", err));
+        }
       } else if (!res.ok) {
         console.error("공문 발송이력 저장 실패:", res.error);
       }
@@ -2812,6 +2829,32 @@ export function addEmailDispatch(data: Omit<EmailDispatch, "id">): EmailDispatch
     .catch((err) => console.error("공문 발송이력 저장 실패:", err));
 
   return item;
+}
+
+// 정산절차 안내 공문(SETTLEMENT_NOTICE)처럼, 실제 메일 발송 결과(성공/실패)를 알기 전에 문서번호부터
+// 확정해두려고 status="PENDING"으로 먼저 addEmailDispatch를 호출해둔 레코드를, 발송 결과가 나온 뒤
+// SUCCESS/FAILED로 확정하는 데 쓴다.
+// addEmailDispatch가 로컬에 즉시 만들어주는 id는 임시 id(tempId)이고, 그 함수 내부의 POST 응답이
+// 돌아오면 실제 서버 id로 조용히 교체된다 — 이 교체가 보통(로컬 DB insert 하나) 실제 메일 발송
+// (/api/notices/send, 외부 메일 서버 왕복)보다 먼저 끝나므로, 호출부가 addEmailDispatch 직후 받은
+// tempId를 그대로 들고 있다가 나중에(메일 발송이 끝난 뒤) 넘기면 이미 실제 id로 바뀌어 있어 못 찾는다.
+// 그래서 id가 아니라, 교체돼도 그대로 남아있는 batchId로 찾는다 — 찾은 레코드의 "현재" id(swap이
+// 이미 끝났다면 실제 서버 id, 아직이면 tempId)로 로컬 갱신 + 서버 PATCH 대상을 정한다. swap이 아직
+// 안 끝난(tempId인) 드문 경우엔 서버에 그 레코드 자체가 아직 없다는 뜻이라 PATCH를 건너뛴다 — 대신
+// addEmailDispatch의 POST가 뒤늦게 응답으로 돌아올 때(그 함수 내부의 .then() 참고) 그 시점의 로컬
+// status를 우선해 반영하고, 필요하면 그때 가서 PATCH를 보낸다. 그 덕에 로컬 상태도 서버 상태도
+// 최종적으로는 여기서 확정한 값으로 정확히 맞춰진다.
+export function updateEmailDispatch(batchId: string, data: Pick<EmailDispatch, "status">): void {
+  const before = _state.emailDispatches.find((e) => e.batchId === batchId);
+  if (!before) return;
+  const after = { ...before, ...data };
+  _state = { ..._state, emailDispatches: _state.emailDispatches.map((e) => (e.id === before.id ? after : e)) };
+  record("emailDispatch", before.id, `${after.recipientInstitution} · ${after.subject}`, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
+  notify();
+
+  if (before.id.startsWith("em-")) return; // 아직 tempId(서버에 이 레코드 자체가 없음) — 주석 참고
+  fetch(`/api/email-dispatches/${before.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
+    .catch((err) => console.error("공문 발송이력 상태 갱신 실패:", err));
 }
 
 // ============================================================

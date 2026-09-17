@@ -12,6 +12,7 @@ type SharedExtra = Record<string, unknown>;
 const SHARED_KEYS = [
   "feeRate", "calculatedFee", "institutionGrade", "gradeOverrides", "contactName", "contactEmail",
   "contactPhone", "recipientOverrides", "settlementType", "settlementTypeOverrides", "exemptRefGrade", "role",
+  "leadName", "leadEmail", "leadOverrides",
 ] as const;
 
 // 커넥션 풀(10) 고갈로 인한 타임아웃/재시도 유도 에러는 흔히 발생하는 일시적 문제라, 클라이언트가

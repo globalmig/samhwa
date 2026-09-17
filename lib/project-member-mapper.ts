@@ -15,6 +15,9 @@ type SharedExtra = {
   contactEmail?: string;
   contactPhone?: string;
   recipientOverrides?: ProjectMember["recipientOverrides"];
+  leadName?: string;
+  leadEmail?: string;
+  leadOverrides?: ProjectMember["leadOverrides"];
   settlementType?: ProjectMember["settlementType"];
   settlementTypeOverrides?: ProjectMember["settlementTypeOverrides"];
   exemptRefGrade?: ProjectMember["exemptRefGrade"];
@@ -73,6 +76,9 @@ export function groupPtisToMembers(rows: PtiWithTerm[]): ProjectMember[] {
       contactEmail: extra.contactEmail,
       contactPhone: extra.contactPhone,
       recipientOverrides: extra.recipientOverrides,
+      leadName: extra.leadName,
+      leadEmail: extra.leadEmail,
+      leadOverrides: extra.leadOverrides,
       cashBudget: extra.cashBudget,
       inKindBudget: extra.inKindBudget,
       settlementType: extra.settlementType,
