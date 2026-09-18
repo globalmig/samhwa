@@ -42,7 +42,7 @@ import {
   resolveMemberRecipientForTerm,
   resolveResearchLeadForTerm,
 } from "@/lib/fee-calculator";
-import { resolveTermDateRange, nowKST, todayKST, formatBizNumber, splitVatInclusive } from "@/lib/utils";
+import { resolveTermDateRange, nowKST, todayKST, formatBizNumber, splitVatInclusive, computeOverallDatesFromStages, isValidDateStr, computeCurrentTerm } from "@/lib/utils";
 import ManagerPickerModal from "@/components/common/ManagerPickerModal";
 import { useExcelUploadDiagnostics } from "@/lib/use-excel-upload-diagnostics";
 
@@ -750,9 +750,10 @@ export interface ProjectScalarInfo {
   internalAssignedAts: Set<string>;  // 내부배정일
   // 총개발시작일자 — 신규 과제(아직 Project로 등록되지 않아 startDate를 알 수 없는 상태)에서
   // "엑셀 연차 vs 캘린더 계산 연차" 불일치를 미리보기 단계에서 미리 점검하는 데 쓴다. 최초시작일/
-  // 최종종료일(Project.firstStartDate/finalEndDate)도 이 총개발시작일자/총개발종료일자를 그대로
-  // 신뢰해서 채운다 — 단계기관별 시트가 아직 모든 단계를 담고 있지 않아도(예: 마지막 단계가 아직
-  // 협약 전이라 파일에 없음) RCMS가 명시한 과제 전체 기간과 어긋나지 않게 하기 위함.
+  // 최종종료일(Project.firstStartDate/finalEndDate)은 원칙적으로 단계별 실제 날짜(단계기관별 시트)
+  // 최소/최대로 채운다(computeOverallDatesFromStages) — 이 컬럼은 실무상 "해당 단계" 하나의
+  // 시작/종료일만 담겨 올라오는 경우가 있어(연차별기관별 시트가 최신 단계 행만 포함) 전체 기간
+  // 산정에는 신뢰할 수 없다. 단계 정보가 아예 없는 일괄협약 과제에서만 이 값으로 폴백한다.
   startDates: Set<string>;
   endDates: Set<string>;
 }
@@ -1257,6 +1258,13 @@ function resolveStageStructure(
   };
 }
 
+// computeOverallDatesFromStages(lib/utils.ts)로 과제 전체 기간(firstStartDate/finalEndDate)을
+// 계산한다 — "총개발시작일자/총개발종료일자" 컬럼이 아니라 단계별 실제 날짜(기존 DB값과 이번 파일
+// 값이 이미 병합된 상태)의 최소/최대를 쓴다. RCMS 다운로드 파일에서 그 컬럼은 실무상 이번에 업로드
+// 하는 "해당 단계" 하나의 시작/종료일만 담겨 올라오는 경우가 있어(예: 연차별기관별 시트가 최신 단계
+// 행만 포함), 그 값을 그대로 믿으면 여러 단계짜리 과제의 전체 기간이 단계 하나의 기간으로 줄어드는
+// 문제가 있었다. 단계 정보가 아예 없는 일괄협약 과제는 호출부에서 총개발시작일자/총개발종료일자로 폴백한다.
+
 // 엑셀에 담긴 과제 중 이미 등록된 과제를, 진행중인 연차(currentTerm)와 비교해
 // 신규/다음연차/동일연차/과거연차로 분류한다 (신규 과제는 여기서 다루지 않는다).
 function computeProjectUpdates(
@@ -1417,7 +1425,7 @@ function computeTermCalendarMismatches(
     const maxStageEndTerm = stages ? Math.max(...stages.map((s) => s.endTermNumber)) : batchEndTerm;
     const totalTerms = Math.max(1, excelTerm, maxStageEndTerm, existingProject?.totalTerms ?? 1);
 
-    const calendarTerm = computeCurrentTerm(startDate, totalTerms, today);
+    const calendarTerm = computeCurrentTerm({ startDate, stages }, totalTerms, today);
     if (calendarTerm !== excelTerm) {
       const projectName = existingProject?.projectName
         ?? (scalarInfo && scalarInfo.projectNames.size >= 1 ? [...scalarInfo.projectNames][0] : "");
@@ -1449,19 +1457,6 @@ function resolveRenamedProject(
   if (byNameDate.length === 1) return { project: byNameDate[0], ambiguousCandidates: [] };
   if (byNameDate.length > 1) return { project: null, ambiguousCandidates: byNameDate };
   return { project: null, ambiguousCandidates: [] };
-}
-
-// autoGenerateTermFees와 동일한 방식(startDate + 연차-1년)으로 "현재 몇 연차인지" 추정
-function computeCurrentTerm(startDate: string, totalTerms: number, today: string): number {
-  const start = new Date(startDate);
-  if (Number.isNaN(start.getTime())) return 1;
-  let current = 1;
-  for (let term = 1; term <= totalTerms; term++) {
-    const termStart = new Date(start);
-    termStart.setFullYear(start.getFullYear() + term - 1);
-    if (termStart.toISOString().slice(0, 10) <= today) current = term;
-  }
-  return current;
 }
 
 // autoGenerateTermFees(store.ts)와 동일한 방식으로 termYear를 계산한다 — 엑셀의 "지원연도" 값이 아니라
@@ -2496,6 +2491,12 @@ function buildAnnualSheetRowsFromData(
     // 기관별로 따로 보여줘야 실제 발행될 계산서와 대응이 맞는다 — app/fees/page.tsx의
     // splitByInstitution(agency.noticeRecipientScope) 판정과 동일하게 맞춘다.
     const splitByInstitution = agencyObj?.noticeRecipientScope === "LEAD_AND_PARTICIPANTS";
+    // 최초시작일/최종종료일 — firstStartDate/finalEndDate가 비어 있는(과거 업로드분 등) 과제는
+    // project.startDate(당해시작일)로 폴백하면 "과제 전체 기간"이 아니라 진행 중인 연차 하나의 기간처럼
+    // 보인다. 그 전에 stages(단계별 실제 날짜)의 최소/최대로 한 번 더 폴백해 전체 기간을 복원한다.
+    const stageOverallDates = computeOverallDatesFromStages(project.stages);
+    const overallStartDate = project.firstStartDate ?? stageOverallDates.start ?? project.startDate ?? "";
+    const overallEndDate = project.finalEndDate ?? stageOverallDates.end ?? project.endDate ?? "";
     // 이 과제에서 실제로 사업비가 입력된 연차 전체(참여기관 아무나 하나라도 그 연차 데이터가 있으면 포함).
     const termNumbers = Array.from(new Set(members.flatMap((m) => (m.annualBudgets ?? []).map((b) => b.termNumber)))).sort((a, b) => a - b);
     for (const termNumber of termNumbers) {
@@ -2564,8 +2565,8 @@ function buildAnnualSheetRowsFromData(
           project.assignedManagerPrimary ?? "",
           project.assignedManager ?? "",
           project.projectType === "AUTONOMY_TRACK" ? "자율성트랙" : "",
-          project.firstStartDate ?? project.startDate ?? "",
-          project.finalEndDate ?? project.endDate ?? "",
+          overallStartDate,
+          overallEndDate,
           resolveStageNumberForTerm(project, termNumber),
           String(termNumber),
           String(ab.termYear ?? ""),
@@ -2629,6 +2630,9 @@ function buildStageSheetRows(
   stageEndDate: string,
   repTerm: number,
 ): string[][] {
+  // 최초시작일/최종종료일 — buildAnnualSheetRowsFromData와 동일하게 firstStartDate/finalEndDate가
+  // 비어 있는 과제는 stages(단계별 실제 날짜)의 최소/최대로 폴백해 "해당 단계"가 아닌 전체 기간을 보여준다.
+  const stageOverallDates = computeOverallDatesFromStages(project.stages);
   return sortedMembers.map((member) => {
     const isLead = member.role === "LEAD";
     const institution = institutions.find((i) => i.id === member.institutionId);
@@ -2639,7 +2643,8 @@ function buildStageSheetRows(
     const totalInKind = (member.annualBudgets ?? []).reduce((sum, b) => sum + (b.inKindBudget ?? 0), 0);
     return [
       agencyName, "", project.projectNumber, project.projectName,
-      project.firstStartDate ?? project.startDate ?? "", project.finalEndDate ?? project.endDate ?? "",
+      project.firstStartDate ?? stageOverallDates.start ?? project.startDate ?? "",
+      project.finalEndDate ?? stageOverallDates.end ?? project.endDate ?? "",
       String(stageNumber), String(relStartTerm), String(stageNumber), String(relEndTerm),
       stageStartDate, stageEndDate,
       settlementType,
@@ -3472,7 +3477,7 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         // 진행 연차는 캘린더 역산이 아니라 엑셀에 적힌 값을 그대로 신뢰한다 — "연차별기관별_연구비집행"
         // 시트는 항상 현재 진행 중인 연차 하나만 담아 업로드하는 것이 실무 규칙이기 때문. 캘린더 계산은
         // (이 과제의 연차별 행이 파일에 아예 없어 값을 모를 때의) 폴백이자, calendarMismatches 경고·이슈용 참고값이다.
-        const currentTerm = projectMaxTerm.get(normNum) ?? computeCurrentTerm(startDateStr, totalTerms, today);
+        const currentTerm = projectMaxTerm.get(normNum) ?? computeCurrentTerm({ startDate: startDateStr, stages }, totalTerms, today);
         // 연구책임자 이름·메일주소 — 연차별로 값이 다를 수 있어(인사이동 등) 진행 연차(currentTerm)
         // 기준 값을 우선 채택한다. 파일에 담긴 다른 연차의 값은 아래 researchLeadOverrides로 따로 반영된다.
         const researchLead = resolveScalarForTerm(scalarInfo?.researchLeadsByTerm, currentTerm, scalarInfo?.researchLeads);
@@ -3494,12 +3499,15 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         const currentStage = stages?.find((s) => currentTerm >= s.startTermNumber && currentTerm <= s.endTermNumber);
         const stageDateRange = currentStage ? stageInfo?.dateRanges.get(currentStage.stageNumber) : undefined;
 
-        // 최초시작일/최종종료일 — "연차별기관별" 시트의 총개발시작일자/총개발종료일자를 그대로 신뢰한다.
-        // (예전엔 관측된 단계들의 날짜 범위를 합쳐 최소/최대로 잡았는데, 단계기관별 시트가 아직 마지막
-        // 단계를 담고 있지 않으면(협약 전 등) 실제보다 짧게 계산되는 문제가 있었다.) 한 과제의 여러 행에
-        // 서로 다른 값이 있으면(데이터 오류) 특정할 수 없으니 undefined로 두고 기존 값을 유지한다.
-        const overallStartDate = scalarInfo && scalarInfo.startDates.size === 1 ? [...scalarInfo.startDates][0] : undefined;
-        const overallEndDate = scalarInfo && scalarInfo.endDates.size === 1 ? [...scalarInfo.endDates][0] : undefined;
+        // 최초시작일/최종종료일 — 단계들(stages)의 실제 날짜 범위 중 최소 시작일/최대 종료일을 쓴다
+        // (computeOverallDatesFromStages 주석 참고). 단계 정보가 없는 일괄협약 과제는 "연차별기관별"
+        // 시트의 총개발시작일자/총개발종료일자로 폴백한다 — 그마저 한 과제의 여러 행에 서로 다른 값이
+        // 있으면(데이터 오류) 특정할 수 없으니 undefined로 두고 기존 값을 유지한다.
+        const stageOverallDates = computeOverallDatesFromStages(stages);
+        const overallStartDate = stageOverallDates.start
+          ?? (scalarInfo && scalarInfo.startDates.size === 1 ? [...scalarInfo.startDates][0] : undefined);
+        const overallEndDate = stageOverallDates.end
+          ?? (scalarInfo && scalarInfo.endDates.size === 1 ? [...scalarInfo.endDates][0] : undefined);
 
         // 연차상시/정산 — 엑셀에 명시적으로 있으면(과제구분 컬럼) 그 값을 쓰고, 없으면 방금 계산한
         // 단계 구조·총연차 기준으로 판정(다른 화면과 동일 기준)한다.
@@ -3935,11 +3943,14 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         (researchLead !== undefined && researchLead !== existingProject.researchLead) ||
         (researchLeadEmail !== undefined && researchLeadEmail !== existingProject.researchLeadEmail);
 
-      // 최초시작일/최종종료일 — 신규/과제번호변경 분기와 동일하게 총개발시작일자/총개발종료일자를
-      // 그대로 신뢰한다. 예전엔 이 "기존 과제 연차 갱신" 분기에서 전혀 갱신하지 않아서, 최초 등록 이후
-      // RCMS에서 단계가 추가되거나 총개발종료일자가 정정돼도 재업로드로는 영영 반영되지 않았다.
-      const overallStartDate = scalarInfo && scalarInfo.startDates.size === 1 ? [...scalarInfo.startDates][0] : undefined;
-      const overallEndDate = scalarInfo && scalarInfo.endDates.size === 1 ? [...scalarInfo.endDates][0] : undefined;
+      // 최초시작일/최종종료일 — 신규/과제번호변경 분기와 동일하게 단계들의 실제 날짜 범위 중 최소
+      // 시작일/최대 종료일을 쓴다. 예전엔 이 "기존 과제 연차 갱신" 분기에서 전혀 갱신하지 않아서, 최초
+      // 등록 이후 RCMS에서 단계가 추가되거나 종료일이 정정돼도 재업로드로는 영영 반영되지 않았다.
+      const stageOverallDates = computeOverallDatesFromStages(stages);
+      const overallStartDate = stageOverallDates.start
+        ?? (scalarInfo && scalarInfo.startDates.size === 1 ? [...scalarInfo.startDates][0] : undefined);
+      const overallEndDate = stageOverallDates.end
+        ?? (scalarInfo && scalarInfo.endDates.size === 1 ? [...scalarInfo.endDates][0] : undefined);
 
       const safeUpdates: Partial<Project> = {
         firstStartDate: overallStartDate ?? existingProject.firstStartDate,
@@ -4093,7 +4104,10 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
 
       for (const b of agg.budgetsByTerm.values()) {
         if (!b.auditFirm || !isOtherFirmName(b.auditFirm)) continue;
-        const termYear = computeTermYear(startDate, b.termNumber);
+        // setTermOtherFirmHandled가 termYear로 TermFee를 찾으므로(store.ts), autoGenerateTermFees가
+        // 그 연차에 실제로 부여한 termYear와 반드시 같은 값을 써야 한다 — 이 행 자체에 실제 시작일이
+        // 있으면 그 연도를 그대로 쓰고(store.ts가 우선하는 값과 동일), 없을 때만 공식으로 역산한다.
+        const termYear = isValidDateStr(b.termStartDate) ? Number(b.termStartDate.slice(0, 4)) : computeTermYear(startDate, b.termNumber);
         setTermOtherFirmHandled(projectNumber, termYear, b.termNumber, true);
       }
     }

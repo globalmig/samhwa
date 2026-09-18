@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useState, useMemo, useEffect, useRef, type ReactNode, type MouseEvent as ReactMouseEvent } from "react";
+import { use, useState, useMemo, useEffect, useRef, Fragment, type ReactNode, type MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -16,8 +16,8 @@ import {
   setTermOtherFirmHandled, setTermBillingType, setTermDates, resolveProjectId,
 } from "@/lib/store";
 import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type EmailDispatch, type FeePolicy, type AnnualFinancials, type FundingAgency, EMPTY_NOTICE_TEMPLATE } from "@/lib/mock";
-import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveMemberLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, MEMBER_ROLE_LABEL, type CalcMember } from "@/lib/fee-calculator";
-import { fmtWonFull, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange, nowKST, todayKST } from "@/lib/utils";
+import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveMemberLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveProjectDivision, resolveProjectCodeForTerm, resolveStageNumberForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, MEMBER_ROLE_LABEL, type CalcMember } from "@/lib/fee-calculator";
+import { fmtWonFull, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange, nowKST, todayKST, computeOverallDatesFromStages } from "@/lib/utils";
 import { fmtValue, fieldLabel, describeOverrideChange } from "@/lib/audit-log-format";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
@@ -139,11 +139,13 @@ function useDragScroll<T extends HTMLElement>() {
   return { ref, onMouseDown, onMouseMove, onMouseUp: endDrag, onMouseLeave: endDrag };
 }
 
-// ─── 연차번호 → 연도 변환 (당해시작일 기준) ───────────────────
-function termNumberToYear(startDate: string, termNumber: number): number {
-  const d = new Date(startDate);
-  d.setFullYear(d.getFullYear() + termNumber - 1);
-  return d.getFullYear();
+// ─── 연차번호 → 연도 변환 ───────────────────────────────────
+// resolveTermDateRange(lib/utils.ts)에 위임한다 — 그 연차가 속한 단계에 실제 단계시작일이 있으면
+// 그 기준으로, 없으면 project.startDate 기준으로 계산한다(lib/store.ts의 autoGenerateTermFees와
+// 동일한 공식). 여기서 독자적으로 project.startDate만 보고 역산하면, 실제 TermFee에 부여되는
+// termYear와 어긋날 수 있다.
+function termNumberToYear(project: { startDate: string; stages?: Project["stages"] }, termNumber: number): number {
+  return Number(resolveTermDateRange(project, termNumber).start.slice(0, 4));
 }
 
 // 콤마·세미콜론·공백으로 구분된 이메일 문자열 여러 개를 하나로 합치고 중복을 제거한다 — 정산절차
@@ -164,6 +166,9 @@ interface TermGroup {
   key: string;
   termYear: number;
   termNumber: number;
+  // 이 연차가 속한 단계 — 일괄협약이거나 단계 정보가 없으면 undefined(resolveStageNumberForTerm과 동일 기준).
+  // 목록을 단계별로 묶어 보여주는 데만 쓰고, 수수료 계산 자체는 여전히 project.stages를 직접 참조한다.
+  stageNumber: number | undefined;
   fees: TermFee[];
   totalApplied: number;
   totalCalculated: number;
@@ -488,7 +493,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
     // 값과 이력이 어긋난다. 단, 이 세 값을 실제로 건드리지 않았으면(과제명만 고치는 등) 여기서
     // 손대지 않는다 — 예전엔 매번 무조건 다시 만들어서, 관련 없는 값만 고쳐도 변경이력에 "연차별
     // 사업비 이력"이 "-"에서 값이 생긴 것처럼 남고, 그 값이 실제로 그 연차에 고정(백필)돼버렸다.
-    const savedTermYear = termNumberToYear(draft.startDate, draft.currentTerm);
+    const savedTermYear = termNumberToYear(draft, draft.currentTerm);
     const financialsChanged =
       (draft.govGrant ?? 0) !== (project!.govGrant ?? 0) ||
       (draft.privateCash ?? 0) !== (project!.privateCash ?? 0) ||
@@ -669,7 +674,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
     setEditingPastFinancials(true);
   }
   function savePastFinancialsEdit() {
-    const termYear = viewFinancialsRecord?.termYear ?? termNumberToYear(project!.startDate, viewTerm);
+    const termYear = viewFinancialsRecord?.termYear ?? termNumberToYear(project!, viewTerm);
     const updated: AnnualFinancials = { termYear, termNumber: viewTerm, ...pastFinancialsDraft };
     const annualFinancials = [
       ...(project!.annualFinancials ?? []).filter((a) => a.termNumber !== viewTerm),
@@ -711,7 +716,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       if (bd) {
         const existing = m.annualBudgets ?? [];
         const termYear = existing.find((a) => a.termNumber === viewTerm)?.termYear
-          ?? termNumberToYear(project!.startDate, viewTerm);
+          ?? termNumberToYear(project!, viewTerm);
         changes.annualBudgets = [
           ...existing.filter((a) => a.termNumber !== viewTerm),
           { termYear, termNumber: viewTerm, cashBudget: bd.cashBudget, inKindBudget: bd.inKindBudget },
@@ -1110,8 +1115,9 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             )}
           </div>
 
-          {/* 과제 전체 기간 — 엑셀 업로드 시 총개발시작일자/총개발종료일자로 채워지며, 단계협약 여부와
-              무관하게 직접 수정도 가능하다. */}
+          {/* 과제 전체 기간 — 엑셀 업로드 시 총개발시작일자/총개발종료일자로 채워지고, 아래 협약구조에서
+              단계 시작일/종료일을 입력·수정하면 그 범위(최소~최대)로도 자동 갱신된다. 단계협약 여부와
+              무관하게 직접 수정도 가능하다(수정 후 단계 날짜를 다시 바꾸면 새 범위로 덮어써진다). */}
           <div className="rounded-lg border border-slate-100 bg-slate-50/50 px-4 py-4 space-y-3">
             <p className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
               <FiCalendar size={12} className="text-slate-400" /> 과제 전체 기간
@@ -1240,7 +1246,18 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               agreementType={draft.agreementType}
               stages={draft.stages}
               totalTerms={draft.totalTerms}
-              onChange={(agreementType, stages) => setDraft((p) => ({ ...p, agreementType, stages }))}
+              onChange={(agreementType, stages) => {
+                // 단계별 시작일/종료일을 입력하면 위 "과제 전체 기간"(최초시작일/최종종료일)도 그 범위
+                // (최소~최대)로 자동 맞춘다 — 엑셀 업로드와 동일한 규칙. 그 뒤에도 직접 덮어쓸 수 있다.
+                const overall = computeOverallDatesFromStages(stages);
+                setDraft((p) => ({
+                  ...p,
+                  agreementType,
+                  stages,
+                  firstStartDate: overall.start ?? p.firstStartDate,
+                  finalEndDate: overall.end ?? p.finalEndDate,
+                }));
+              }}
             />
           </div>
         </div>
@@ -1326,6 +1343,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
             projectId={projectId}
             projectNumber={project.projectNumber}
             startDate={project.startDate}
+            stages={project.stages}
             totalTerms={maxViewableTerm}
             institutions={institutions}
             existingInstitutionIds={new Set(members.map((m) => m.institutionId))}
@@ -2139,7 +2157,7 @@ function AnnualBudgetEditor({
       const existing = member.annualBudgets?.find((a) => a.termNumber === termNumber);
       return {
         termNumber,
-        termYear: existing?.termYear ?? termNumberToYear(project.startDate, termNumber),
+        termYear: existing?.termYear ?? termNumberToYear(project, termNumber),
         cashBudget: existing?.cashBudget ?? 0,
         inKindBudget: existing?.inKindBudget ?? 0,
       };
@@ -2519,6 +2537,7 @@ function AddMemberForm({
   projectId,
   projectNumber,
   startDate,
+  stages,
   totalTerms,
   institutions,
   existingInstitutionIds,
@@ -2527,6 +2546,7 @@ function AddMemberForm({
   projectId: string;
   projectNumber: string;
   startDate: string;
+  stages?: Project["stages"];
   totalTerms: number;
   institutions: Institution[];
   existingInstitutionIds: Set<string>;
@@ -2540,7 +2560,7 @@ function AddMemberForm({
   const [rows, setRows] = useState(() =>
     Array.from({ length: Math.max(1, totalTerms) }, (_, i) => {
       const termNumber = i + 1;
-      return { termNumber, termYear: termNumberToYear(startDate, termNumber), cashBudget: 0, inKindBudget: 0 };
+      return { termNumber, termYear: termNumberToYear({ startDate, stages }, termNumber), cashBudget: 0, inKindBudget: 0 };
     })
   );
   const [error, setError] = useState("");
@@ -4466,7 +4486,8 @@ function FeeManagementTab({ projectId }: { projectId: string }) {
         (c) => c.projectNumber === projectNumber && c.termYear === y && c.termNumber === n
       ) ?? null;
       return {
-        key, termYear: y, termNumber: n, fees, totalApplied, totalCalculated, invoice, receivable, unclaimed, termStatus,
+        key, termYear: y, termNumber: n, stageNumber: resolveStageNumberForTerm(project, n),
+        fees, totalApplied, totalCalculated, invoice, receivable, unclaimed, termStatus,
         generalFee: calc?.generalFee ?? null,
         exemptFeeTotal: calc?.exemptFeeTotal ?? null,
         baseFee: calc?.baseFee ?? null,
@@ -4476,6 +4497,19 @@ function FeeManagementTab({ projectId }: { projectId: string }) {
       };
     }).sort((a, b) => b.termYear !== a.termYear ? b.termYear - a.termYear : b.termNumber - a.termNumber);
   }, [project, termFees, termFeeCalcs, taxInvoices, receivables, unclaimedFees, members]);
+
+  // 목록은 여전히 연차(termYear+termNumber) 단위 평면 리스트지만, 단계협약 과제는 연차가 바뀔 때마다
+  // ("N단계" 값이 바로 앞 카드와 달라질 때마다) 구분 헤더를 끼워 넣어 어느 카드가 몇 단계 소속인지
+  // 한눈에 보이게 한다. 일괄협약 과제는 stageNumber가 항상 undefined라 헤더가 전혀 끼어들지 않고
+  // 지금까지와 동일한 순수 평면 리스트로 보인다.
+  const termGroupRows = useMemo(() => {
+    return termGroups.map((group, idx) => {
+      const prevStageNumber = idx > 0 ? termGroups[idx - 1].stageNumber : undefined;
+      const showStageHeader = group.stageNumber !== undefined && group.stageNumber !== prevStageNumber;
+      const stageInfo = showStageHeader ? project?.stages?.find((s) => s.stageNumber === group.stageNumber) : undefined;
+      return { group, showStageHeader, stageInfo };
+    });
+  }, [termGroups, project]);
 
   if (!project) return null;
 
@@ -4519,34 +4553,50 @@ function FeeManagementTab({ projectId }: { projectId: string }) {
           </div>
         </div>
       )}
-      {termGroups.map((group) => (
-        <div key={group.key} className="flex items-start gap-2">
-          {canRecalc && (
-            <input
-              type="checkbox"
-              checked={selectedTermKeys.has(group.key)}
-              disabled={group.termStatus !== "DRAFT"}
-              onChange={() => toggleTermSelected(group.key)}
-              title={group.termStatus !== "DRAFT" ? "확정·청구완료된 연차는 삭제할 수 없습니다" : "이 연차 선택"}
-              className="mt-5 shrink-0 rounded border-slate-300 text-red-600 focus:ring-red-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
-            />
+      {termGroupRows.map(({ group, showStageHeader, stageInfo }) => (
+        <Fragment key={group.key}>
+          {showStageHeader && (
+            <div className="flex items-center gap-2 px-1 pt-2 first:pt-0">
+              <span className="text-xs font-semibold text-slate-500 shrink-0">
+                {group.stageNumber}단계
+                {stageInfo && ` (${stageInfo.startTermNumber}~${stageInfo.endTermNumber}연차)`}
+              </span>
+              {stageInfo?.stageStartDate && stageInfo.stageEndDate && (
+                <span className="text-[11px] text-slate-400 shrink-0">
+                  {fmtDate(stageInfo.stageStartDate)} ~ {fmtDate(stageInfo.stageEndDate)}
+                </span>
+              )}
+              <div className="flex-1 h-px bg-slate-200" />
+            </div>
           )}
-          <div className="flex-1 min-w-0">
-            <TermSection
-              group={group}
-              allFees={termFees}
-              project={project}
-              projectNumber={project.projectNumber}
-              agencyId={project.agencyId}
-              leadInstitutionId={project.leadInstitutionId}
-              leadInstitutionName={project.leadInstitutionName}
-              members={members}
-              isSettlement={isSettlementTerm(project, group.termNumber)}
-              taxInvoices={taxInvoices}
-              receivables={receivables}
-            />
+          <div className="flex items-start gap-2">
+            {canRecalc && (
+              <input
+                type="checkbox"
+                checked={selectedTermKeys.has(group.key)}
+                disabled={group.termStatus !== "DRAFT"}
+                onChange={() => toggleTermSelected(group.key)}
+                title={group.termStatus !== "DRAFT" ? "확정·청구완료된 연차는 삭제할 수 없습니다" : "이 연차 선택"}
+                className="mt-5 shrink-0 rounded border-slate-300 text-red-600 focus:ring-red-500/30 disabled:opacity-30 disabled:cursor-not-allowed"
+              />
+            )}
+            <div className="flex-1 min-w-0">
+              <TermSection
+                group={group}
+                allFees={termFees}
+                project={project}
+                projectNumber={project.projectNumber}
+                agencyId={project.agencyId}
+                leadInstitutionId={project.leadInstitutionId}
+                leadInstitutionName={project.leadInstitutionName}
+                members={members}
+                isSettlement={isSettlementTerm(project, group.termNumber)}
+                taxInvoices={taxInvoices}
+                receivables={receivables}
+              />
+            </div>
           </div>
-        </div>
+        </Fragment>
       ))}
 
       {showDeleteTermsConfirm && (

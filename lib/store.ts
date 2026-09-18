@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { getCurrentUser } from "./auth";
-import { nowKST, todayKST } from "./utils";
+import { nowKST, todayKST, resolveTermDateRange, findRepresentativeTermStartDate } from "./utils";
 import { diffForAudit } from "./audit-diff";
 import { ADMIN_ONLY_LOCKED_PAGES } from "./permission-constants";
 import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveProjectCodeForTerm, type CalcMember } from "./fee-calculator";
@@ -106,6 +106,9 @@ export interface FeesFilters {
   termEndDateTo: string;
   agencyAssignedFrom: string;
   agencyAssignedTo: string;
+  // 목록 정렬 기준 — NAME(과제명 가나다순, 기본값) / REGISTERED(등록일 최신순) /
+  // AGENCY_ASSIGNED(전담기관배정일 최신순)
+  sortBy: "NAME" | "REGISTERED" | "AGENCY_ASSIGNED";
 }
 
 const DEFAULT_FEES_FILTERS: FeesFilters = {
@@ -126,6 +129,7 @@ const DEFAULT_FEES_FILTERS: FeesFilters = {
   termEndDateTo: "",
   agencyAssignedFrom: "",
   agencyAssignedTo: "",
+  sortBy: "NAME",
 };
 
 interface StoreState {
@@ -1426,127 +1430,23 @@ export function addProjectMember(data: Omit<ProjectMember, "id">): ProjectMember
 // 수수료 산정에 영향을 주는 필드 — 변경 시 해당 과제의 연차별 수수료를 자동 재산정한다.
 const FEE_AFFECTING_FIELDS = ["budget", "cashBudget", "inKindBudget", "institutionGrade", "gradeOverrides", "settlementType", "settlementTypeOverrides", "annualBudgets", "role"] as const;
 
-function getStageRangeForTerm(project: Project, termNumber: number): { startTermNumber: number; endTermNumber: number } {
-  const isBatch = !project.agreementType || project.agreementType === "BATCH";
-  if (isBatch) return { startTermNumber: 1, endTermNumber: project.totalTerms };
-  const stage = (project.stages ?? []).find((s) => termNumber >= s.startTermNumber && termNumber <= s.endTermNumber);
-  return stage ? { startTermNumber: stage.startTermNumber, endTermNumber: stage.endTermNumber } : { startTermNumber: 1, endTermNumber: project.totalTerms };
-}
-
-function isStageSettledForTerm(project: Project, termNumber: number): boolean {
-  const isBatch = !project.agreementType || project.agreementType === "BATCH";
-  const settlementTermNumber = isBatch ? project.totalTerms : getStageRangeForTerm(project, termNumber).endTermNumber;
-  return _state.termFees.some(
-    (tf) => tf.projectNumber === project.projectNumber && tf.termNumber === settlementTermNumber &&
-      (tf.status === "CONFIRMED" || tf.status === "BILLED")
-  );
-}
-
-function logMemberChangeMemo(before: ProjectMember, content: string) {
-  addProjectIssue({
-    projectId: before.projectId,
-    projectNumber: before.projectNumber,
-    content,
-    author: getCurrentUser()?.name ?? "시스템",
-    createdAt: nowKST(),
-    priority: "MEDIUM",
-    status: "OPEN",
-    institutionName: before.institutionName,
-  });
-}
-
-// 정산구분은 기관이 속한 "단계" 전체의 특성이다 — 한 단계 안에서 연차마다 다른 정산구분을
-// 갖는 건 의미가 없으므로, 특정 연차에서 정산구분이 바뀌면 그 연차가 속한 단계 전체(과거 연차
-// 포함)에 동일하게 소급 반영한다(양방향: 자체→위탁, 위탁→자체 모두). 단계가 이미 정산
-// 완료됐으면(정산 연차가 CONFIRMED/BILLED) 과거를 소급해서 건드리지 않고 null을 반환한다.
-// 등급(institutionGrade/gradeOverrides)은 화면 표시용 참고 라벨일 뿐이라 여기서는 절대 건드리지
-// 않는다 — 면제/일반 수수료 버킷 분류는 fee-calculator.ts가 오직 그 시점의 정산구분만으로
-// 판단하므로, 등급 표시가 바뀌지 않아도 계산은 정산구분을 따라 정확히 달라진다.
-function cascadeSettlementStage(
-  project: Project,
-  originTerm: number,
-  targetType: "위탁정산" | "자체정산",
-  baseAfterSettlementOverrides: { termNumber: number; settlementType: "위탁정산" | "자체정산" }[]
-): { termNumber: number; settlementType: "위탁정산" | "자체정산" }[] | null {
-  if (isStageSettledForTerm(project, originTerm)) return null;
-
-  const stageRange = getStageRangeForTerm(project, originTerm);
-  const stageTerms: number[] = [];
-  for (let t = stageRange.startTermNumber; t <= stageRange.endTermNumber; t++) stageTerms.push(t);
-
-  return [
-    ...baseAfterSettlementOverrides.filter((o) => o.termNumber < stageRange.startTermNumber || o.termNumber > stageRange.endTermNumber),
-    ...stageTerms.map((t) => ({ termNumber: t, settlementType: targetType })),
-  ].sort((a, b) => a.termNumber - b.termNumber);
-}
-
-// 정산구분 변경은 두 갈래로 나눠 다르게 남긴다:
-//  - "무엇이 바뀌었다/자동 반영됐다"처럼 결과를 그대로 알리기만 하면 되는 경우는 메모(이슈)를
-//    만들지 않는다 — updateProjectMember가 매번 record()로 변경이력(AuditEntry)에 변경 전/후
-//    값을 그대로 남기므로 거기서 확인할 수 있다.
-//  - 자동 반영이 "안 됐거나 못 한" 경우(이미 정산 완료된 단계라 소급을 못 한 경우)는 담당자가
-//    직접 확인/조치해야 하니 메모(이슈)로 남긴다.
-function applyMemberChangeTracking(before: ProjectMember, data: Partial<ProjectMember>): Partial<ProjectMember> {
-  const result: Partial<ProjectMember> = { ...data };
-  const project = _state.projects.find((p) => p.id === before.projectId);
-
-  function warnCascadeBlocked(originTerm: number, targetType: "위탁정산" | "자체정산") {
-    logMemberChangeMemo(before,
-      `${before.institutionName}: ${originTerm}연차에서 ${targetType}으로 변경됐지만 이미 정산 완료된 단계라 정산구분이 자동으로 소급 반영되지 않았습니다. 확인해주세요.`
-    );
-  }
-
-  if (project && data.settlementTypeOverrides !== undefined) {
-    const beforeOverrides = before.settlementTypeOverrides ?? [];
-    const afterOverrides = data.settlementTypeOverrides;
-    const changed = afterOverrides.filter((o) => {
-      const prevAtTerm = beforeOverrides.find((b) => b.termNumber === o.termNumber)?.settlementType ?? before.settlementType;
-      return prevAtTerm !== o.settlementType;
-    });
-    if (changed.length > 0) {
-      const originTerm = Math.min(...changed.map((o) => o.termNumber));
-      const targetType = changed.find((o) => o.termNumber === originTerm)!.settlementType;
-      const cascaded = cascadeSettlementStage(project, originTerm, targetType, afterOverrides);
-      if (cascaded) {
-        result.settlementTypeOverrides = cascaded;
-      } else {
-        warnCascadeBlocked(originTerm, targetType);
-      }
-    }
-  } else if (project && data.settlementType !== undefined && data.settlementType !== before.settlementType) {
-    // 엑셀 업로드 경로 — 연차별 오버라이드가 아니라 과제×기관당 단일값을 그대로 덮어쓰므로,
-    // 지금 진행연차(currentTerm)를 기준 연차로 보고 동일한 소급 반영 규칙을 적용한다.
-    const originTerm = project.currentTerm ?? 1;
-    const targetType = data.settlementType;
-    const cascaded = cascadeSettlementStage(project, originTerm, targetType, before.settlementTypeOverrides ?? []);
-    if (cascaded) {
-      result.settlementTypeOverrides = cascaded;
-    } else {
-      warnCascadeBlocked(originTerm, targetType);
-    }
-  }
-
-  return result;
-}
-
 export function updateProjectMember(id: string, data: Partial<ProjectMember>): void {
   const before = _state.projectMembers.find((m) => m.id === id);
   if (!before) return;
-  const trackedData = applyMemberChangeTracking(before, data);
-  const after = { ...before, ...trackedData };
+  const after = { ...before, ...data };
   _state = { ..._state, projectMembers: _state.projectMembers.map((m) => (m.id === id ? after : m)) };
   record("projectMember", id, `${after.projectNumber} · ${after.institutionName}`, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
-  if (FEE_AFFECTING_FIELDS.some((f) => f in trackedData)) {
+  if (FEE_AFFECTING_FIELDS.some((f) => f in data)) {
     autoGenerateTermFees(before.projectId);
   }
-  if ("cashBudget" in trackedData || "inKindBudget" in trackedData) {
+  if ("cashBudget" in data || "inKindBudget" in data) {
     recalcProjectTotalBudget(before.projectId);
   }
   // 참여기관목록에서 역할을 "주관"으로 바꾸면 실제 과제의 주관기관(project.leadInstitutionId·
   // leadInstitutionName)도 함께 바뀌어야 한다 — 안 그러면 목록 표시와, 이 값을 그대로 참조하는
   // 수수료·공문발송·매출·수금 로직이 서로 다른 기관을 주관기관으로 보게 된다. 주관은 항상 한 곳이어야
   // 하므로 기존에 "주관"이던 다른 참여기관은 "공동"으로 강등한다.
-  if (trackedData.role === "LEAD" && before.role !== "LEAD") {
+  if (data.role === "LEAD" && before.role !== "LEAD") {
     _state.projectMembers
       .filter((m) => m.projectId === after.projectId && m.id !== after.id && m.role === "LEAD")
       .forEach((m) => updateProjectMember(m.id, { role: "PARTICIPANT" }));
@@ -1561,7 +1461,7 @@ export function updateProjectMember(id: string, data: Partial<ProjectMember>): v
   // 속성을 통째로 빼버려 서버가 그 필드를 아예 못 받는다(그 필드 하나만 보낼 때 특히 — 서버의
   // "이 필드가 body에 있으면 반영" 로직 자체가 안 켜져서 삭제가 저장되지 않는다). null로 바꿔
   // 보내 서버가 "명시적으로 비웠다"를 구분할 수 있게 한다.
-  const body = JSON.stringify(trackedData, (_k, v) => (v === undefined ? null : v));
+  const body = JSON.stringify(data, (_k, v) => (v === undefined ? null : v));
 
   // item.id가 아직 서버가 모르는 임시 id(방금 addProjectMember로 막 만든 직후)면, 그 생성 요청이
   // 끝나 진짜 id를 알기 전까지 이 수정 요청을 미뤄뒀다가 진짜 id로 다시 보낸다(수정 7 — 안 그러면
@@ -1573,7 +1473,7 @@ export function updateProjectMember(id: string, data: Partial<ProjectMember>): v
     // 수천 개의 개별 요청이 되는 걸 막아 속도를 크게 높인다(자세한 이유는 그 라우트 주석 참고).
     // 배치 밖(평소 단건 수정)에서는 지금까지처럼 즉시 개별 요청을 보낸다.
     if (_batchDepth > 0) {
-      queueMemberPatch(realId, trackedData as Record<string, unknown>);
+      queueMemberPatch(realId, data as Record<string, unknown>);
       return;
     }
     trackSync(
@@ -3645,7 +3545,6 @@ export function autoGenerateTermFees(projectId: string): void {
   if (!policy) return;
 
   const today = todayKST();
-  const startDate = new Date(project.startDate);
 
   // 협약 유형 파악
   const isBatch = !project.agreementType || project.agreementType === "BATCH";
@@ -3681,11 +3580,14 @@ export function autoGenerateTermFees(projectId: string): void {
     if (tf.status !== "CONFIRMED" && tf.status !== "BILLED") return false;
     return isStageSettled(getStageNumber(tf.termNumber));
   });
-  // 이미 확정되어 보존되는 기관×연차 조합 — 아래 생성 루프에서 덮어쓰지 않도록 건너뛴다.
+  // 이미 확정되어 보존되는 기관×연차 조합 — 아래 생성 루프에서 덮어쓰지 않도록 건너뛴다. termYear는
+  // 키에 넣지 않는다 — 한 프로젝트 안에서 termNumber만으로 이미 유일하고(1..totalTerms), termYear를
+  // 넣으면 이번 실행에서 그 연차의 termYear 계산이 지난 실행과 달라질 때(예: 실제 날짜를 새로 알게
+  // 됐거나 project.startDate를 나중에 바로잡은 경우) 이미 확정된 연차를 못 찾아 중복 생성하게 된다.
   const lockedKeys = new Set(
     keptFees
       .filter((tf) => tf.projectNumber === project.projectNumber)
-      .map((tf) => `${tf.termYear}|${tf.termNumber}|${tf.institutionId}`)
+      .map((tf) => `${tf.termNumber}|${tf.institutionId}`)
   );
 
   // 정산구분(자체/위탁)은 사실상 "단계" 단위 특성이다 — 단계 도중에 위탁으로 바뀌면 그 단계
@@ -3739,10 +3641,11 @@ export function autoGenerateTermFees(projectId: string): void {
   const activeTermNumbers = new Set<number>();
 
   for (let termNumber = 1; termNumber <= project.totalTerms; termNumber++) {
-    const termStartDate = new Date(startDate);
-    termStartDate.setFullYear(startDate.getFullYear() + termNumber - 1);
-    const termStartStr = termStartDate.toISOString().slice(0, 10);
-    const termYear = termStartDate.getFullYear();
+    // 이 연차가 실제로 언제 시작하는지 — 참여기관에 실제 날짜가 있으면 그걸 쓰고, 없으면 단계
+    // 인지형 공식(resolveTermDateRange: 그 연차가 속한 단계에 stageStartDate가 있으면 그 기준,
+    // 없으면 project.startDate 기준)으로 역산한다.
+    const termStartStr = findRepresentativeTermStartDate(members, termNumber, project.projectNumber) ?? resolveTermDateRange(project, termNumber).start;
+    const termYear = Number(termStartStr.slice(0, 4));
 
     const isActive = termStartStr <= today;
     const feeStatus: TermFee["status"] = isActive ? "DRAFT" : "SCHEDULED";
@@ -3811,14 +3714,17 @@ export function autoGenerateTermFees(projectId: string): void {
     // 단, 이월액 집계(instAnnualUnclaimed → stageUnclaimedByInst)는 확정 여부와 무관하게 항상 계산해야 한다 —
     // 그렇지 않으면 그 연차가 확정되는 순간 해당 기관들의 미청구 몫이 이후 정산 연차 집계에서 통째로 빠지는 오류가 생긴다.
     for (const cm of calcMembers) {
-      const isLocked = lockedKeys.has(`${termYear}|${termNumber}|${cm.institutionId}`);
+      const isLocked = lockedKeys.has(`${termNumber}|${cm.institutionId}`);
 
       const member = members.find((m) => m.institutionId === cm.institutionId);
       const ab = member?.annualBudgets?.find((b) => b.termNumber === termNumber);
       // 아직 확정 안 된(DRAFT) 연차라도 "타회계법인 진행" 체크는 재생성 때마다 유지해야 한다 —
       // 안 그러면 사업비를 수정하거나 참여기관을 추가하는 등 재계산이 한 번만 더 돌아도 체크가 조용히 풀린다.
+      // termYear가 아니라 termNumber로 찾는다 — 지난 실행에서 계산된 termYear가 이번 실행과
+      // 다를 수 있어(위 lockedKeys와 동일한 이유) termYear까지 조건에 넣으면 같은 연차의 이전
+      // 기록을 못 찾아 "타회계법인" 체크·이월 처리 등이 조용히 초기화된다.
       const prevFee = _state.termFees.find(
-        (tf) => tf.projectNumber === project.projectNumber && tf.termYear === termYear &&
+        (tf) => tf.projectNumber === project.projectNumber &&
           tf.termNumber === termNumber && tf.institutionId === cm.institutionId
       );
 
@@ -3952,7 +3858,7 @@ export function autoGenerateTermFees(projectId: string): void {
       ]);
       for (const instId of carriedInstIds) {
         if (activeInstitutionIds.has(instId)) continue; // 이 연차에도 참여 중이면 위 루프에서 이미 처리됨
-        if (lockedKeys.has(`${termYear}|${termNumber}|${instId}`)) continue;
+        if (lockedKeys.has(`${termNumber}|${instId}`)) continue;
         const ownExemptCarried = stageExemptUnclaimedByInst[stageNumber]?.[instId] ?? 0;
         const totalCarried = (stageUnclaimedByInst[stageNumber]?.[instId] ?? 0) + ownExemptCarried;
         if (totalCarried <= 0) continue;
@@ -3962,7 +3868,7 @@ export function autoGenerateTermFees(projectId: string): void {
         if (resolveSettlementTypeForCalc(member, termNumber, stageNumber, policy.defaultSettlementType ?? "자체정산") !== "위탁정산") continue;
 
         const prevFee = _state.termFees.find(
-          (tf) => tf.projectNumber === project.projectNumber && tf.termYear === termYear &&
+          (tf) => tf.projectNumber === project.projectNumber &&
             tf.termNumber === termNumber && tf.institutionId === instId
         );
         newFees.push({

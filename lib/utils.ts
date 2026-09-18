@@ -59,6 +59,15 @@ export function fmtRate(r: number): string {
   return `${r}%`;
 }
 
+// "YYYY-MM-DD" 형식이 맞는지 확인 — 엑셀 셀에 날짜가 아닌 값(오타, 다른 형식, 텍스트)이 들어있어도
+// toDateStr(ExcelUploadModal.tsx)이 그 값을 그대로 통과시키는 경우가 있어, 그런 값을 실제 날짜
+// 계산(연도 추출, 오늘과 비교)에 쓰기 전에 걸러내는 데 쓴다. 걸러내지 않으면 Number(...)가 NaN을
+// 반환하거나 문자열 비교가 엉뚱한 결과를 내는데, 둘 다 예외를 던지지 않아 조용히 잘못된 값(예:
+// TermFee.termYear = NaN)이 저장되어 이후 서버 동기화가 실패하는 원인이 될 수 있다.
+export function isValidDateStr(s: string | undefined | null): s is string {
+  return !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
+}
+
 // 과제 시작일(1연차 기준일) + 연차번호로부터 그 연차의 당해시작일/당해종료일을 계산.
 // 수수료 청구 관리 목록·과제 상세 등 여러 화면에서 동일하게 적용하기 위한 공통 함수 —
 // 각자 따로 계산하면 화면마다 당해시작일/종료일 산정 기준이 어긋난다.
@@ -71,22 +80,84 @@ export function termDateRange(projectStartDate: string, termNumber: number): { s
   return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
 }
 
+// 단계들(stages)의 실제 날짜 중 최소 시작일/최대 종료일 — 과제 전체 기간(firstStartDate/finalEndDate)의
+// 진짜 경계. 단계가 추가/수정될 때마다 이 값으로 과제 전체 기간을 자동 갱신하는 데 쓴다(엑셀 업로드·
+// 다운로드와 화면 수동입력 양쪽에서 공유). 단계에 날짜가 하나도 없으면(또는 단계 자체가 없으면) 빈 값.
+export function computeOverallDatesFromStages(
+  stages: { stageStartDate?: string; stageEndDate?: string }[] | undefined
+): { start?: string; end?: string } {
+  if (!stages || stages.length === 0) return {};
+  let start: string | undefined;
+  let end: string | undefined;
+  for (const s of stages) {
+    if (s.stageStartDate && (!start || s.stageStartDate < start)) start = s.stageStartDate;
+    if (s.stageEndDate && (!end || s.stageEndDate > end)) end = s.stageEndDate;
+  }
+  return { start, end };
+}
+
 // termDateRange와 같지만, 그 연차가 속한 단계에 실제 단계시작일(stageStartDate)이 있으면 과제 전체
 // 시작일이 아니라 그 단계 시작일을 기준으로 계산한다 — 계약변경 등으로 단계 시작이 늦춰지면, 그 단계
 // 안 연차들의 당해시작일/종료일도 같이 밀려야 실제 진행 일정과 맞기 때문이다. 단계 정보가 없거나(일괄협약)
 // 그 단계에 날짜가 없으면 기존처럼 과제 전체 시작일 기준으로 계산한다.
-export function resolveTermDateRange(
-  project: {
-    startDate: string;
-    stages?: { stageNumber: number; startTermNumber: number; endTermNumber: number; stageStartDate?: string; stageEndDate?: string }[];
-  },
-  termNumber: number
-): { start: string; end: string } {
+// stageStartDate는 부가 정보라 형식이 깨져 있으면(isValidDateStr) 조용히 무시하고 과제 전체 시작일로
+// 넘어간다 — 반면 project.startDate는 필수값이라 여기서 걸러내지 않는다: 그게 깨졌다면 이 연차의
+// 날짜를 계산할 근거가 아예 없다는 뜻이라, 잘못된 값(예: 오늘 날짜)으로 조용히 넘어가지 않고
+// termDateRange가 예외를 던지게 둬서 그 프로젝트만 실패로 표시되고(다른 프로젝트 배치에는 영향 없음)
+// 문제가 있는 채로 계산이 진행되지 않게 한다.
+type ProjectDateLike = {
+  startDate: string;
+  stages?: { stageNumber: number; startTermNumber: number; endTermNumber: number; stageStartDate?: string; stageEndDate?: string }[];
+};
+
+export function resolveTermDateRange(project: ProjectDateLike, termNumber: number): { start: string; end: string } {
   const stage = project.stages?.find((s) => termNumber >= s.startTermNumber && termNumber <= s.endTermNumber);
-  if (stage?.stageStartDate) {
+  if (isValidDateStr(stage?.stageStartDate)) {
     return termDateRange(stage.stageStartDate, termNumber - stage.startTermNumber + 1);
   }
   return termDateRange(project.startDate, termNumber);
+}
+
+// autoGenerateTermFees(lib/store.ts)와 동일한 규칙으로 "현재 몇 연차인지" 추정 — resolveTermDateRange를
+// 그대로 재사용해서(재구현하지 않음) 두 곳의 계산이 어긋날 여지를 없앤다. project.startDate 자체가
+// 형식이 깨져 있으면(빈 값 등) 계산을 포기하고 1연차로 본다 — 이 함수는 참고용 경고(calendarMismatch)
+// 에만 쓰이므로, 값을 모를 땐 경고를 못 띄우는 쪽(1 반환)이 엉뚱한 경고를 띄우는 쪽보다 안전하다.
+// (단계 시작일만 깨진 경우는 resolveTermDateRange가 그 단계만 조용히 건너뛰므로 안전하다.)
+export function computeCurrentTerm(project: ProjectDateLike, totalTerms: number, today: string): number {
+  if (Number.isNaN(new Date(project.startDate).getTime())) return 1;
+  let current = 1;
+  for (let term = 1; term <= totalTerms; term++) {
+    const termStart = resolveTermDateRange(project, term).start;
+    if (termStart <= today) current = term;
+  }
+  return current;
+}
+
+// 그 연차의 실제 시작일 — 참여기관들이 엑셀로 올린 실제 날짜(ProjectMember.annualBudgets[].
+// termStartDate, "연차별기관별" 시트의 "이 연차의 실제 시작일") 중 유효한 값들을 모아, 전부 같은
+// 값이면(distinct 1개) 그 값을 신뢰해서 반환한다. 이 값은 특정 기관 고유의 값이 아니라 그 연차
+// 전체에 공통으로 적용돼야 하는 값이라 주관/참여기관을 구분하지 않고 동등하게 취급한다. 값이
+// 하나도 없거나(0개, 정상적인 경우 — 아직 그 연차 데이터가 없거나 일괄협약처럼 이 컬럼을 안 쓰는
+// 경우) 서로 달라(2개 이상, 데이터 오류) 하나로 특정할 수 없으면 undefined를 반환해 호출부가 공식
+// (resolveTermDateRange)으로 폴백하게 한다. 값이 갈리는 경우에만 console.warn으로 남겨 나중에
+// 추적할 수 있게 한다 — 0개인 흔한 정상 케이스까지 경고하면 로그가 무의미해진다.
+export function findRepresentativeTermStartDate(
+  members: { annualBudgets?: { termNumber: number; termStartDate?: string }[] }[],
+  termNumber: number,
+  projectNumber?: string
+): string | undefined {
+  const distinct = new Set<string>();
+  for (const m of members) {
+    const d = m.annualBudgets?.find((b) => b.termNumber === termNumber)?.termStartDate;
+    if (isValidDateStr(d)) distinct.add(d);
+  }
+  if (distinct.size === 1) return [...distinct][0];
+  if (distinct.size > 1) {
+    console.warn(
+      `[findRepresentativeTermStartDate] ${projectNumber ?? "(unknown project)"} ${termNumber}연차 실제 시작일이 기관마다 달라(${[...distinct].join(", ")}) 공식으로 폴백합니다.`
+    );
+  }
+  return undefined;
 }
 
 // 기준일로부터 n개월 뒤 날짜(yyyy-mm-dd). 잘못된 날짜면 빈 문자열.

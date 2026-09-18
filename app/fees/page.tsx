@@ -26,6 +26,7 @@ import {
   updateFeesFilters,
   resetFeesFilters,
   runBulkSyncBatch,
+  type FeesFilters,
 } from "@/lib/store";
 import {
   type TermFee,
@@ -39,7 +40,7 @@ import {
   type Receivable,
   EMPTY_NOTICE_TEMPLATE,
 } from "@/lib/mock";
-import { fmtWon, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange, nowKST, todayKST } from "@/lib/utils";
+import { fmtWon, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange, nowKST, todayKST, computeOverallDatesFromStages } from "@/lib/utils";
 import Modal from "@/components/common/Modal";
 import DateInput from "@/components/common/DateInput";
 import InstitutionQuickAdd from "@/components/common/InstitutionQuickAdd";
@@ -1336,13 +1337,13 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">
-            최초시작일 <span className="text-slate-400 font-normal">· 과제 전체 기간(미입력시 당해시작일 사용)</span>
+            최초시작일 <span className="text-slate-400 font-normal">· 과제 전체 기간(아래 단계 날짜 입력 시 자동 반영, 미입력시 당해시작일 사용)</span>
           </label>
           <DateInput value={form.firstStartDate} onChange={(v) => s("firstStartDate", v)} className="w-full" />
         </div>
         <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">
-            최종종료일 <span className="text-slate-400 font-normal">· 과제 전체 기간(미입력시 당해종료일 사용)</span>
+            최종종료일 <span className="text-slate-400 font-normal">· 과제 전체 기간(아래 단계 날짜 입력 시 자동 반영, 미입력시 당해종료일 사용)</span>
           </label>
           <DateInput value={form.finalEndDate} onChange={(v) => s("finalEndDate", v)} className="w-full" />
         </div>
@@ -1351,7 +1352,18 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
         agreementType={form.agreementType}
         stages={form.stages}
         totalTerms={form.totalTerms}
-        onChange={(agreementType, stages) => setForm((p) => ({ ...p, agreementType, stages }))}
+        onChange={(agreementType, stages) => {
+          // 단계별 시작일/종료일을 입력하면 최초시작일/최종종료일도 그 범위(최소~최대)로 자동 맞춘다 —
+          // 엑셀 업로드와 동일한 규칙. 그 뒤에도 위 최초시작일/최종종료일 칸에서 직접 덮어쓸 수 있다.
+          const overall = computeOverallDatesFromStages(stages);
+          setForm((p) => ({
+            ...p,
+            agreementType,
+            stages,
+            firstStartDate: overall.start ?? p.firstStartDate,
+            finalEndDate: overall.end ?? p.finalEndDate,
+          }));
+        }}
       />
       <div className="rounded-lg border border-slate-100 bg-slate-50/50 px-4 py-3 space-y-3">
         <p className="text-xs font-semibold text-slate-600">사업비 구분 (당해 기준 — 참여기관·연차별 사업비는 등록 후 상세 화면에서 추가)</p>
@@ -1876,6 +1888,25 @@ function useFeeRows(): FeeRow[] {
 
     return rows;
   }, [termFees, projects, unclaimedFees, receivables, fundingAgencies, feePolicies, projectMembers, taxInvoices, projectIssues]);
+}
+
+// ── 목록 정렬 ─────────────────────────────────────────────────
+// 같은 과제의 연차별 행들이 화면에서 항상 붙어 보여야 하므로(그룹핑·페이지네이션이 이를 전제로
+// 한다), 사용자가 고른 기준(과제명/등록일/전담기관배정일)은 "과제" 단위로만 비교하고, 같은
+// 과제 안에서는 항상 최근 연차가 위로 오게 고정한다.
+function compareFeeRows(a: FeeRow, b: FeeRow, sortBy: FeesFilters["sortBy"]): number {
+  let primary = 0;
+  if (sortBy === "REGISTERED") {
+    primary = (b.registeredAt || "").localeCompare(a.registeredAt || "");
+  } else if (sortBy === "AGENCY_ASSIGNED") {
+    primary = (b.agencyAssignedAt || "").localeCompare(a.agencyAssignedAt || "");
+  } else {
+    primary = a.projectName.localeCompare(b.projectName, "ko");
+  }
+  if (primary !== 0) return primary;
+  if (a.projectNumber !== b.projectNumber) return a.projectNumber.localeCompare(b.projectNumber);
+  if (a.termYear !== b.termYear) return b.termYear - a.termYear;
+  return b.termNumber - a.termNumber;
 }
 
 // ── UnclaimedAmountCell (손실금액 직접 입력) ────────────────────
@@ -2632,6 +2663,7 @@ export default function FeesPage() {
     collectionStatus: filterCollectionStatus,
     onlyReceivable: filterOnlyReceivable,
     invoiceDateFrom, invoiceDateTo, termEndDateFrom, termEndDateTo,
+    sortBy,
   } = feesFilters;
   const setFilterProjectNumber   = (v: string) => updateFeesFilters({ projectNumber: v });
   const setFilterProjectName     = (v: string) => updateFeesFilters({ projectName: v });
@@ -2653,11 +2685,15 @@ export default function FeesPage() {
   useEffect(() => {
     const status = searchParams.get("status");
     if (status) updateFeesFilters({ projectStatus: status });
+    // 전담기관 필터(shortName 기준) — 대시보드의 "전담기관별 수금 현황" 행 클릭 시 이 값으로 딥링크된다.
+    const agency = searchParams.get("agency");
+    if (agency) updateFeesFilters({ agency });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const { agencyAssignedFrom, agencyAssignedTo } = feesFilters;
   const setAgencyAssignedFrom = (v: string) => updateFeesFilters({ agencyAssignedFrom: v });
   const setAgencyAssignedTo   = (v: string) => updateFeesFilters({ agencyAssignedTo: v });
+  const setSortBy = (v: FeesFilters["sortBy"]) => updateFeesFilters({ sortBy: v });
   const [expandedKey, setExpandedKey]     = useState<string | null>(null);
   const [modal, setModal]                 = useState<ModalState | null>(null);
   const [selectedKeys, setSelectedKeys]   = useState<Set<string>>(new Set());
@@ -2773,11 +2809,11 @@ export default function FeesPage() {
           && matchStatus && matchAgency && matchBillingType && matchCollectionStatus
           && matchOnlyReceivable && matchFrom && matchTo && matchEndFrom && matchEndTo
           && matchAssignedFrom && matchAssignedTo;
-      }),
+      }).sort((a, b) => compareFeeRows(a, b, sortBy)),
     [allRows, filterProjectNumber, filterProjectName, filterLeadInstitution, filterResearchLead,
      filterAssignedManager, filterAssignedManagerPrimary,
      filterProjectStatus, filterAgency, filterBillingType, filterCollectionStatus, filterOnlyReceivable,
-     invoiceDateFrom, invoiceDateTo, termEndDateFrom, termEndDateTo, agencyAssignedFrom, agencyAssignedTo]
+     invoiceDateFrom, invoiceDateTo, termEndDateFrom, termEndDateTo, agencyAssignedFrom, agencyAssignedTo, sortBy]
   );
 
   // ── 페이지네이션 — 과제 10개 단위로 끊는다(한 과제가 연차별로 여러 행을 차지하므로
@@ -3592,8 +3628,21 @@ export default function FeesPage() {
         </div>
       )}
 
-      {/* 컬럼 고정 토글 — 화면이 좁아 오른쪽 스크롤 영역이 부족할 때 꺼서 표 전체를 자유롭게 스크롤할 수 있다. */}
-      <div className="flex justify-end">
+      {/* 정렬 기준 + 컬럼 고정 토글 */}
+      <div className="flex items-center justify-between">
+        <label className="flex items-center gap-1.5 text-xs text-slate-500">
+          <FiSliders size={12} className="text-slate-300" />
+          정렬
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as FeesFilters["sortBy"])}
+            className="text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 text-slate-600 bg-white hover:border-slate-300 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+          >
+            <option value="NAME">가나다순</option>
+            <option value="REGISTERED">등록순</option>
+            <option value="AGENCY_ASSIGNED">전담기관배정일</option>
+          </select>
+        </label>
         <button
           type="button"
           role="switch"

@@ -20,16 +20,18 @@ export default function DashboardPage() {
   const router = useRouter();
   const { receivables, projectIssues, termFees, taxInvoices, projects, fundingAgencies } = useStore();
 
-  // 연도별 대시보드 — 배정일(과제 등록일) 기준. 등록일 미입력 과제는 연도별 집계에서 제외한다.
-  // 올해 연도는 등록된 과제가 아직 없어도 항상 선택지에 포함해 — 해가 바뀔 때마다 자동으로 새 연도가
-  // 드롭다운에 나타나고, 그 해 첫 과제가 등록되기 전에도 미리 선택할 수 있다. 관측된 연도만 모으면
-  // 특정 해에 등록된 과제가 하나도 없을 때 그 해가 통째로 빠져(예: 2024·2026년만 있고 2025년 없음)
+  // 연도별 대시보드 — 전담기관배정일(agencyAssignedAt) 기준. 등록일(registeredAt)은 삼화 내부에
+  // 과제를 등록한 날짜일 뿐, 전담기관이 과제를 배정한 시점과는 별개라 연도별 집계 기준으로 쓰면 안 된다.
+  // 전담기관배정일 미입력 과제는 연도별 집계에서 제외한다.
+  // 올해 연도는 배정된 과제가 아직 없어도 항상 선택지에 포함해 — 해가 바뀔 때마다 자동으로 새 연도가
+  // 드롭다운에 나타나고, 그 해 첫 과제가 배정되기 전에도 미리 선택할 수 있다. 관측된 연도만 모으면
+  // 특정 해에 배정된 과제가 하나도 없을 때 그 해가 통째로 빠져(예: 2024·2026년만 있고 2025년 없음)
   // 목록에 구멍이 생기므로, 가장 오래된 연도부터 올해까지 빠짐없이 채운다.
   const availableYears = useMemo(() => {
     const currentYear = new Date().getFullYear();
     let minYear = currentYear;
     for (const p of projects) {
-      if (p.registeredAt) minYear = Math.min(minYear, Number(p.registeredAt.slice(0, 4)));
+      if (p.agencyAssignedAt) minYear = Math.min(minYear, Number(p.agencyAssignedAt.slice(0, 4)));
     }
     const years: string[] = [];
     for (let y = currentYear; y >= minYear; y--) years.push(String(y));
@@ -38,10 +40,10 @@ export default function DashboardPage() {
   const [selectedYear, setSelectedYear] = useState<"ALL" | string>("ALL");
 
   const projects_ = useMemo(
-    () => (selectedYear === "ALL" ? projects : projects.filter((p) => p.registeredAt?.slice(0, 4) === selectedYear)),
+    () => (selectedYear === "ALL" ? projects : projects.filter((p) => p.agencyAssignedAt?.slice(0, 4) === selectedYear)),
     [projects, selectedYear]
   );
-  const unregisteredCount = useMemo(() => projects.filter((p) => !p.registeredAt).length, [projects]);
+  const unregisteredCount = useMemo(() => projects.filter((p) => !p.agencyAssignedAt).length, [projects]);
   const projectNumbers = useMemo(() => new Set(projects_.map((p) => p.projectNumber)), [projects_]);
   const receivables_ = useMemo(
     () => (selectedYear === "ALL" ? receivables : receivables.filter((r) => projectNumbers.has(r.projectNumber))),
@@ -116,15 +118,15 @@ export default function DashboardPage() {
   const agencyRows = useMemo(() => {
     const projectByNumber = new Map(projects_.map((p) => [p.projectNumber, p]));
     type AgencyRow = {
-      id: string; name: string;
+      id: string; name: string; shortName: string;
       projectCount: number; totalFee: number;
       issuedAmount: number; issuedCount: number;
       collectedAmount: number; collectedCount: number;
     };
     const map = new Map<string, AgencyRow>();
-    function getEntry(agencyId: string, agencyName: string): AgencyRow {
+    function getEntry(agencyId: string, agencyName: string, agencyShortName: string): AgencyRow {
       const entry = map.get(agencyId) ?? {
-        id: agencyId, name: agencyName,
+        id: agencyId, name: agencyName, shortName: agencyShortName,
         projectCount: 0, totalFee: 0,
         issuedAmount: 0, issuedCount: 0,
         collectedAmount: 0, collectedCount: 0,
@@ -150,7 +152,7 @@ export default function DashboardPage() {
       if (!agency) continue;
       const splitByInstitution = agency.noticeRecipientScope === "LEAD_AND_PARTICIPANTS";
       const rowCount = splitByInstitution ? Math.max(1, fees.length) : 1;
-      getEntry(agency.id, agency.name).projectCount += rowCount;
+      getEntry(agency.id, agency.name, agency.shortName).projectCount += rowCount;
     }
 
     // 수수료 — 연차별 적용 수수료 합계
@@ -158,7 +160,7 @@ export default function DashboardPage() {
       const project = projectByNumber.get(f.projectNumber);
       const agency = project ? fundingAgencies.find((a) => a.id === project.agencyId) : undefined;
       if (!agency) continue;
-      getEntry(agency.id, agency.name).totalFee += f.appliedFee;
+      getEntry(agency.id, agency.name, agency.shortName).totalFee += f.appliedFee;
     }
 
     // 청구/수금 — receivables 기준. 발행취소된 세금계산서에 딸린 행은 activeReceivables_에서
@@ -167,7 +169,7 @@ export default function DashboardPage() {
       const project = projectByNumber.get(r.projectNumber);
       const agency = project ? fundingAgencies.find((a) => a.id === project.agencyId) : undefined;
       if (!agency) continue;
-      const entry = getEntry(agency.id, agency.name);
+      const entry = getEntry(agency.id, agency.name, agency.shortName);
       entry.issuedAmount += r.billedAmount;
       entry.issuedCount += 1;
       entry.collectedAmount += r.paidAmount;
@@ -210,7 +212,7 @@ export default function DashboardPage() {
       </div>
       {selectedYear !== "ALL" && unregisteredCount > 0 && (
         <p className="text-[11px] text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
-          등록일(배정일) 미입력 과제 {unregisteredCount}건은 연도별 집계에서 제외됩니다. 정확한 통계를 위해 과제 상세에서 담당자·등록일을 입력해 주세요.
+          전담기관배정일 미입력 과제 {unregisteredCount}건은 연도별 집계에서 제외됩니다. 정확한 통계를 위해 과제 상세에서 전담기관배정일을 입력해 주세요.
         </p>
       )}
 
@@ -356,7 +358,7 @@ export default function DashboardPage() {
                   <tr
                     key={row.id}
                     className="group border-b border-slate-50 hover:bg-blue-50/40 transition-colors cursor-pointer"
-                    onClick={() => router.push(`/projects?agency=${encodeURIComponent(row.name)}`)}
+                    onClick={() => router.push(`/projects?agency=${encodeURIComponent(row.shortName)}`)}
                   >
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-2">
