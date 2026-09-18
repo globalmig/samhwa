@@ -2613,7 +2613,7 @@ export default function FeesPage() {
   // 쓸 수 있는 계산서발행 서류 요청/입금 확인 요청 일괄발송에도 필요해서 둘 중 하나만 있어도 보여준다.
   const canSelectRows = canEdit || canSendSimpleNotice || canDeleteProjects;
   const allRows     = useFeeRows();
-  const { fundingAgencies, projects, projectMembers, institutions, agencyNoticeTemplates, users, emailDispatches, termFees, feesFilters } = useStore();
+  const { fundingAgencies, projects, projectMembers, institutions, agencyNoticeTemplates, users, emailDispatches, termFees, taxInvoices, receivables, unclaimedFees, feesFilters } = useStore();
   const searchParams = useSearchParams();
   const router = useRouter();
   // 검색 필터는 store(feesFilters)에 보관해 과제 상세로 들어갔다 나오는 등 다른 화면을 거쳐도
@@ -3287,7 +3287,7 @@ export default function FeesPage() {
     const projectIds = new Set(filtered.map((r) => r.projectId).filter(Boolean));
     const targetProjects = projects.filter((p) => projectIds.has(p.id));
     const targetMembers = projectMembers.filter((m) => projectIds.has(m.projectId));
-    downloadCurrentDataAsUploadTemplate(targetProjects, targetMembers, institutions, fundingAgencies);
+    downloadCurrentDataAsUploadTemplate(targetProjects, targetMembers, institutions, fundingAgencies, termFees, taxInvoices, receivables, unclaimedFees);
   }
 
   return (

@@ -33,9 +33,13 @@ const connectSrc = ["'self'", TURNSTILE_ORIGIN, CF_INSIGHTS_ORIGIN, turnstileWor
 // CSP를 테스트해보니 정적 페이지에서 nonce가 전혀 붙지 않아 스크립트가 전부 막히는
 // 것을 확인함). 그래서 script-src는 nonce 대신 unsafe-inline으로 완화하되, 외부
 // 스크립트 출처는 Turnstile 도메인 하나로만 제한한다.
+// 개발 모드에서 React가 서버 에러 스택을 브라우저에서 재구성하는 데 eval()을 쓴다
+// (프로덕션에서는 쓰지 않음) — Next.js 공식 CSP 가이드 권장대로 dev에서만 완화한다.
+const isDev = process.env.NODE_ENV === "development";
+
 const csp = [
   `default-src 'self'`,
-  `script-src 'self' 'unsafe-inline' ${TURNSTILE_ORIGIN} ${CF_INSIGHTS_ORIGIN}`,
+  `script-src 'self' 'unsafe-inline' ${TURNSTILE_ORIGIN} ${CF_INSIGHTS_ORIGIN}${isDev ? " 'unsafe-eval'" : ""}`,
   `style-src 'self' 'unsafe-inline'`,
   `img-src 'self' blob: data:`,
   `font-src 'self'`,

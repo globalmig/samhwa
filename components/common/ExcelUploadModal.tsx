@@ -31,7 +31,7 @@ import {
   getStoreState,
   getSyncBatchProgress,
 } from "@/lib/store";
-import type { Project, ProjectMember, AnnualBudget, AnnualFinancials, Institution, SystemUser, FundingAgency } from "@/lib/mock";
+import type { Project, ProjectMember, AnnualBudget, AnnualFinancials, Institution, SystemUser, FundingAgency, TermFee, TaxInvoice, Receivable, UnclaimedFee } from "@/lib/mock";
 import { getCurrentUser } from "@/lib/auth";
 import {
   isSettlementTerm,
@@ -42,7 +42,7 @@ import {
   resolveMemberRecipientForTerm,
   resolveResearchLeadForTerm,
 } from "@/lib/fee-calculator";
-import { resolveTermDateRange, nowKST, todayKST, formatBizNumber } from "@/lib/utils";
+import { resolveTermDateRange, nowKST, todayKST, formatBizNumber, splitVatInclusive } from "@/lib/utils";
 import ManagerPickerModal from "@/components/common/ManagerPickerModal";
 import { useExcelUploadDiagnostics } from "@/lib/use-excel-upload-diagnostics";
 
@@ -464,7 +464,11 @@ function strSimilarity(a: string, b: string): number {
 
 function getCellVal(row: Record<string, string>, mappedTo: string | null): string {
   if (!mappedTo) return "";
-  return (row[mappedTo] ?? "").toString().trim();
+  const v = (row[mappedTo] ?? "").toString().trim();
+  // "현재 데이터로 채운 양식" 다운로드가 빈 칸을 "-"로 표시해주기 시작하면서(가독성 목적), 그
+  // 파일을 그대로 재업로드했을 때 "-"가 날짜·이름 등 실제 값으로 잘못 등록되지 않도록 빈 값과
+  // 동일하게 취급한다 — 모든 컬럼 파싱이 결국 이 함수를 거치므로 여기 한 곳만 고치면 된다.
+  return v === "-" ? "" : v;
 }
 
 function parseAmount(s: string): number {
@@ -2455,22 +2459,43 @@ function resolveStageNumberForTerm(project: Pick<Project, "agreementType" | "sta
 // "주관"/"위탁"만 문자열 포함으로 구분하고 나머지는 전부 "공동"(PARTICIPANT)으로 취급하므로 그대로 맞춘다.
 const ROLE_LABEL: Record<ProjectMember["role"], string> = { LEAD: "주관", ENTRUSTED: "위탁", PARTICIPANT: "공동" };
 
+// Receivable.status → "수금표시" 컬럼 값. app/fees/page.tsx 수금상태 필터 드롭다운과 동일한 한글 라벨.
+const RECEIVABLE_STATUS_LABEL: Record<Receivable["status"], string> = {
+  PAID: "완납", PARTIAL: "일부납부", PENDING: "대기", OVERDUE: "연체",
+};
+
+// "엑셀 다운로드"(현재 데이터로 채운 양식)에서만 RCMS 업로드 컬럼 뒤에 참고용으로 덧붙이는 계산서·수금
+// 현황 컬럼 — 재업로드 대상이 아니라서(RCMS가 입력받는 값이 아님) 빈 양식(downloadExcelTemplate)과
+// 공유하는 ANNUAL_SHEET_HEADERS/NOTES에는 넣지 않고 별도로 관리한다.
+const ANNUAL_SHEET_BILLING_HEADERS = ["발행구분", "계산서일자", "공급가액", "부가세", "합계", "수금표시", "수금액", "수금일", "미수액", "손실금액"];
+const ANNUAL_SHEET_BILLING_NOTES = ANNUAL_SHEET_BILLING_HEADERS.map(() => "참고용 (계산서·수금 현황 — 재업로드 대상 아님)");
+
 // 현재 등록된 과제·참여기관·연차별 사업비 데이터를 "연차별기관별_연구비 집행" 업로드 양식과 똑같은
 // 컬럼 구조로 채워 넣는다 — 빈 양식(downloadExcelTemplate)과 헤더가 완전히 동일해서 그대로 다시
 // 업로드할 수 있다. "엑셀 다운로드"(수수료청구관리 리포트, 과제 단위 요약)와는 목적이 다르다 — 리포트는
 // 계산서·수금 현황을 보여주는 결과물이고, 이건 참여기관×연차 단위로 사업비·등급·정산형태 등 RCMS가
 // 실제로 입력받는 원본 데이터를 그대로 다시 꺼낸 것이라 재업로드에 필요한 필수값이 전부 채워져 있다.
+// (다만 ANNUAL_SHEET_BILLING_HEADERS만큼은 예외 — 재업로드용이 아니라 참고용으로 뒤에 덧붙인다.)
 function buildAnnualSheetRowsFromData(
   projects: Project[],
   projectMembers: ProjectMember[],
   institutions: Institution[],
   fundingAgencies: FundingAgency[],
+  termFees: TermFee[],
+  taxInvoices: TaxInvoice[],
+  receivables: Receivable[],
+  unclaimedFees: UnclaimedFee[],
 ): string[][] {
   const rows: string[][] = [];
   for (const project of projects) {
     const members = projectMembers.filter((m) => m.projectId === project.id);
     if (members.length === 0) continue;
-    const agencyName = fundingAgencies.find((a) => a.id === project.agencyId)?.name ?? project.agency ?? "";
+    const agencyObj = fundingAgencies.find((a) => a.id === project.agencyId);
+    const agencyName = agencyObj?.name ?? project.agency ?? "";
+    // RDA2처럼 전담기관이 참여기관별로 계산서를 따로 발행하는 과제는 예상 공급가액·부가세·합계도
+    // 기관별로 따로 보여줘야 실제 발행될 계산서와 대응이 맞는다 — app/fees/page.tsx의
+    // splitByInstitution(agency.noticeRecipientScope) 판정과 동일하게 맞춘다.
+    const splitByInstitution = agencyObj?.noticeRecipientScope === "LEAD_AND_PARTICIPANTS";
     // 이 과제에서 실제로 사업비가 입력된 연차 전체(참여기관 아무나 하나라도 그 연차 데이터가 있으면 포함).
     const termNumbers = Array.from(new Set(members.flatMap((m) => (m.annualBudgets ?? []).map((b) => b.termNumber)))).sort((a, b) => a - b);
     for (const termNumber of termNumbers) {
@@ -2478,6 +2503,17 @@ function buildAnnualSheetRowsFromData(
       // 행에만 채우는" 컬럼들을 빈 양식 예시와 동일한 방식으로 보여주기 위함(가독성 목적, 파서는
       // 행 순서를 가리지 않는다).
       const sortedMembers = [...members].sort((a, b) => (a.role === "LEAD" ? -1 : b.role === "LEAD" ? 1 : 0));
+      // "현금사업비총액"/"현물사업비총액" — sumTermFinancials(정부출연금 등 합산)와 동일한 패턴으로,
+      // 이 연차에 참여한 기관 전체의 사업비를 합산한다("연차_기관_총사업비"는 기관 하나만의 값인 것과 구분).
+      const termTotalCash = members.reduce((sum, m) => sum + (m.annualBudgets?.find((b) => b.termNumber === termNumber)?.cashBudget ?? 0), 0);
+      const termTotalInKind = members.reduce((sum, m) => sum + (m.annualBudgets?.find((b) => b.termNumber === termNumber)?.inKindBudget ?? 0), 0);
+      // 세금계산서가 아직 발행 전이어도 app/fees/page.tsx처럼 산정된 수수료(TermFee.appliedFee)로
+      // "예상 공급가액/부가세/합계"를 보여주기 위한 이 연차 전체 합계 — 타회계법인 처리분은 삼화가
+      // 청구할 금액이 아니므로 제외한다(app/fees/page.tsx의 appliedFeeTotal 계산과 동일).
+      const termYearForTerm = members.map((m) => m.annualBudgets?.find((b) => b.termNumber === termNumber)?.termYear).find((y) => y !== undefined);
+      const termAppliedFeeTotal = termFees
+        .filter((tf) => tf.projectNumber === project.projectNumber && tf.termYear === termYearForTerm && tf.termNumber === termNumber)
+        .reduce((sum, f) => sum + (f.otherFirmHandled ? 0 : f.appliedFee), 0);
       for (const member of sortedMembers) {
         const ab = member.annualBudgets?.find((b) => b.termNumber === termNumber);
         if (!ab) continue;
@@ -2496,6 +2532,31 @@ function buildAnnualSheetRowsFromData(
         const govGrantValue = annualFinancialsForTerm?.govGrant ?? (isCurrentTerm ? project.govGrant : undefined);
         const privateCashValue = annualFinancialsForTerm?.privateCash ?? (isCurrentTerm ? project.privateCash : undefined);
         const privateInKindValue = annualFinancialsForTerm?.privateInKind ?? (isCurrentTerm ? project.privateInKind : undefined);
+        // TermFee는 참여기관별로 1행씩 있어 그대로 기관 단위로 찾는다. TaxInvoice/Receivable은 기관별로
+        // 따로 발행·수금하는 과제(RDA2 등)에서만 institutionId가 채워지고, 없으면 그 연차 전체를 묶은
+        // 통합 레코드라 다른 "주관기관 행에만 채우는" 컬럼들과 동일하게 주관기관 행에만 표시한다.
+        // UnclaimedFee는 애초에 기관별 구분이 없는 연차 단위 집계라 항상 주관기관 행에만 표시한다.
+        const termFee = termFees.find((tf) => tf.projectNumber === project.projectNumber && tf.termYear === ab.termYear && tf.termNumber === termNumber && tf.institutionId === member.institutionId);
+        const taxInvoice = taxInvoices.find((ti) => ti.projectNumber === project.projectNumber && ti.termYear === ab.termYear && ti.termNumber === termNumber && (ti.institutionId ? ti.institutionId === member.institutionId : isLead));
+        const receivable = receivables.find((rv) => rv.projectNumber === project.projectNumber && rv.termYear === ab.termYear && rv.termNumber === termNumber && (rv.institutionId ? rv.institutionId === member.institutionId : isLead));
+        const unclaimedFee = isLead ? unclaimedFees.find((uf) => uf.projectNumber === project.projectNumber && uf.termYear === ab.termYear && uf.termNumber === termNumber) : undefined;
+        // 발행구분 폴백은 화면(useFeeRows)과 동일하게 맞춘다 — TermFee.billingType이 비어 있으면
+        // project.billingType, 그것도 비어 있으면 "취소되지 않은 계산서가 있으면 정발행"으로 판별한다.
+        // 이 마지막 단계가 없으면 billingType을 명시적으로 저장한 적 없는 대부분의 연차가 화면과 달리
+        // 빈 값으로 내려받아진다.
+        const activeTaxInvoice = taxInvoice && taxInvoice.status !== "CANCELED" ? taxInvoice : undefined;
+        const billingType = termFee?.billingType ?? project.billingType ?? (activeTaxInvoice ? "정발행" : "");
+        // 공급가액/부가세/합계 — 계산서 발행 전(또는 발행취소 후)에도 app/fees/page.tsx와 동일하게
+        // 산정된 수수료로 "예상 금액"을 보여준다. splitByInstitution 과제는 기관별로 따로 발행되므로
+        // 그 기관 자신의 TermFee.appliedFee만, 아니면 이 연차 전체 합계를 주관기관 행에만 보여준다
+        // (taxInvoice/receivable을 주관기관 행에만 표시하는 것과 동일한 기준).
+        const showsFeeEstimate = splitByInstitution || isLead;
+        const appliedFeeTotal = !showsFeeEstimate ? 0
+          : splitByInstitution ? (termFee && !termFee.otherFirmHandled ? termFee.appliedFee : 0)
+          : termAppliedFeeTotal;
+        const supplyAmountValue = showsFeeEstimate ? (activeTaxInvoice?.supplyAmount ?? (appliedFeeTotal > 0 ? splitVatInclusive(appliedFeeTotal).supplyAmount : 0)) : undefined;
+        const taxAmountValue = showsFeeEstimate ? (activeTaxInvoice?.taxAmount ?? (appliedFeeTotal > 0 ? splitVatInclusive(appliedFeeTotal).taxAmount : 0)) : undefined;
+        const totalAmountValue = showsFeeEstimate ? (activeTaxInvoice?.totalAmount ?? appliedFeeTotal) : undefined;
         rows.push([
           agencyName,
           project.projectNumber,
@@ -2530,8 +2591,22 @@ function buildAnnualSheetRowsFromData(
           isLead ? String(govGrantValue ?? "") : "",
           isLead ? String(privateCashValue ?? "") : "",
           isLead ? String(privateInKindValue ?? "") : "",
-          "",
-          "",
+          // "현금사업비총액"/"현물사업비총액" — 위 termTotalCash/termTotalInKind(이 연차 참여기관 전체
+          // 합산). 다른 "연차 전체" 값(정부출연금 등)과 동일하게 주관기관 행에만 채운다 — 참여기관
+          // 행마다 반복하면 그 기관만의 값처럼 보여 "연차_기관_총사업비"와 혼동될 수 있다.
+          // 업로드 파서는 "연차_기관_총사업비"가 채워져 있으면 이 칸을 읽지 않으니 재업로드에는 영향 없다.
+          isLead ? String(termTotalCash) : "",
+          isLead ? String(termTotalInKind) : "",
+          billingType,
+          taxInvoice?.issuedAt ?? "",
+          supplyAmountValue !== undefined ? String(supplyAmountValue) : "",
+          taxAmountValue !== undefined ? String(taxAmountValue) : "",
+          totalAmountValue !== undefined ? String(totalAmountValue) : "",
+          receivable ? RECEIVABLE_STATUS_LABEL[receivable.status] : "",
+          receivable ? String(receivable.paidAmount) : "",
+          receivable?.paidAt ?? "",
+          receivable ? String(receivable.receivableAmount) : "",
+          unclaimedFee ? String(unclaimedFee.amount) : "",
         ]);
       }
     }
@@ -2623,21 +2698,29 @@ export async function downloadCurrentDataAsUploadTemplate(
   projectMembers: ProjectMember[],
   institutions: Institution[],
   fundingAgencies: FundingAgency[],
+  termFees: TermFee[],
+  taxInvoices: TaxInvoice[],
+  receivables: Receivable[],
+  unclaimedFees: UnclaimedFee[],
 ) {
-  const rows = buildAnnualSheetRowsFromData(projects, projectMembers, institutions, fundingAgencies);
+  const rows = buildAnnualSheetRowsFromData(projects, projectMembers, institutions, fundingAgencies, termFees, taxInvoices, receivables, unclaimedFees);
   const stageRows = buildStageSheetRowsFromData(projects, projectMembers, institutions, fundingAgencies);
   const wb = new ExcelJS.Workbook();
+  // 데이터가 없어 빈 칸인 셀은 "-"로 표시해 "값이 없는 건지 안 채워진 건지" 구분되게 한다 — 위
+  // getCellVal이 업로드 시 "-"를 빈 값과 동일하게 읽으므로, 이 파일을 그대로 재업로드해도 안전하다.
+  const dash = (v: string) => (v === "" ? "-" : v);
 
   const ws = wb.addWorksheet("연차별기관별_연구비 집행", { views: [{ state: "frozen", ySplit: 2 }] });
-  ws.addRow(ANNUAL_SHEET_NOTES);
-  ws.addRow(ANNUAL_SHEET_HEADERS);
-  rows.forEach((r) => ws.addRow(r));
+  ws.addRow([...ANNUAL_SHEET_NOTES, ...ANNUAL_SHEET_BILLING_NOTES]);
+  ws.addRow([...ANNUAL_SHEET_HEADERS, ...ANNUAL_SHEET_BILLING_HEADERS]);
+  rows.forEach((r) => ws.addRow(r.map(dash)));
   styleAnnualSheet(ws);
+  ANNUAL_SHEET_BILLING_HEADERS.forEach((_, i) => { ws.getColumn(ANNUAL_SHEET_HEADERS.length + i + 1).width = 16; });
 
   const stageWs = wb.addWorksheet("단계기관별", { views: [{ state: "frozen", ySplit: 2 }] });
   stageWs.addRow(STAGE_SHEET_NOTES);
   stageWs.addRow(STAGE_SHEET_HEADERS);
-  stageRows.forEach((r) => stageWs.addRow(r));
+  stageRows.forEach((r) => stageWs.addRow(r.map(dash)));
   styleStageSheet(stageWs);
 
   await downloadWorkbook(wb, `RCMS_업로드_양식_현재데이터_${todayKST()}.xlsx`);
