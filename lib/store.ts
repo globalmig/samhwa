@@ -1100,7 +1100,15 @@ export function updateProject(id: string, data: Partial<Project>): void {
   }
   record("project", id, after.projectName, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   if (PROJECT_FEE_AFFECTING_FIELDS.some((f) => f in data)) {
-    autoGenerateTermFees(id);
+    // persistTermCodes:false — 이 함수가 곧바로 아래에서 이 과제에 PATCH를 한 번 더 보낼 것이므로,
+    // 새로 발급된 termCodes가 있으면 별도 요청 대신 그 PATCH 바디에 함께 실어 원자적으로 반영한다
+    // (두 PATCH가 거의 동시에 나가면 원격 DB 왕복 지연 동안 서로 수정 전 상태를 읽어 나중에 쓰는
+    // 쪽이 상대 요청의 termCodes 변경을 통째로 덮어써 유실시키는 경합이 있었다).
+    const newTermCodes = autoGenerateTermFees(id, { persistTermCodes: false });
+    if (newTermCodes.length > 0) {
+      const latest = _state.projects.find((p) => p.id === id);
+      if (latest) data = { ...data, termCodes: latest.termCodes };
+    }
   }
   if ("leadInstitutionId" in data) {
     ensureLeadMember(after);
@@ -3529,20 +3537,28 @@ export function setDefaultSimpleNoticeTemplate(id: string): void {
 // 연차 수수료 자동 산정
 // ============================================================
 
-export function autoGenerateTermFees(projectId: string): void {
+// persistTermCodes=false로 부르면 새로 발급된 연차별 과제코드(termCodes)를 서버에 직접 PATCH하지
+// 않고 반환만 한다 — updateProject처럼 이 호출 직후 자기 자신도 같은 과제에 PATCH를 보낼 caller가
+// 그 결과를 자신의 PATCH 바디에 함께 실어 한 번의 요청으로 보내게 하기 위함이다(두 PATCH가 거의
+// 동시에 나가면, 원격 DB 왕복 지연 때문에 각자 수정 전 상태를 읽은 채로 서로의 extraData를 덮어써
+// termCodes가 유실되는 경합이 실제로 발생했다).
+export function autoGenerateTermFees(
+  projectId: string,
+  options?: { persistTermCodes?: boolean }
+): { termNumber: number; code: string }[] {
   projectId = resolveProjectId(projectId);
   if (_bulkRecalcSuspendDepth > 0) {
     _pendingFeeRecalcProjectIds.add(projectId);
-    return;
+    return [];
   }
   const project = _state.projects.find((p) => p.id === projectId);
-  if (!project) return;
+  if (!project) return [];
   // 완료된 과제는 정책·기관정보가 바뀌어도 재산정 대상에서 제외 — 과거 확정 내역을 그대로 보존한다.
-  if (project.status === "COMPLETED") return;
+  if (project.status === "COMPLETED") return [];
 
   const members = _state.projectMembers.filter((m) => m.projectId === projectId);
   const policy = resolvePolicy(project.agencyId, _state.feePolicies, project.programType ?? "GENERAL");
-  if (!policy) return;
+  if (!policy) return [];
 
   const today = todayKST();
 
@@ -4015,7 +4031,35 @@ export function autoGenerateTermFees(projectId: string): void {
   // addProject 쪽에서 실제 id로 다시 이 함수를 호출해 정상 동기화된다.
   const projectTermFees = _state.termFees.filter((f) => f.projectNumber === project.projectNumber);
   const projectTermFeeCalcs = _state.termFeeCalcs.filter((c) => c.projectId === project.id);
-  if (project.id.startsWith("p-")) return; // 과제 생성 응답에서 실제 ID로 다시 동기화한다.
+  if (project.id.startsWith("p-")) return newTermCodes; // 과제 생성 응답에서 실제 ID로 다시 동기화한다.
+
+  // 위에서 새로 발급한 연차별 과제코드(termCodes)는 지금까지 _state에만 반영되고 서버로는 한 번도
+  // 나가지 않았다 — sync-fees는 termFees/termFeeCalcs만 보낸다. 그래서 새로고침 전까지는 화면에
+  // 연차마다 다른 코드가 보이다가, 새로고침하면 서버엔 없던 값이라 resolveProjectCodeForTerm이
+  // 전부 project.projectCode(1연차 코드)로 폴백해 "연차마다 다르던 과제코드가 동일하게 보이는"
+  // 문제가 있었다. termFees 동기화와 마찬가지로 내부 자동처리라 별도 변경이력은 남기지 않는다.
+  // persistTermCodes:false(updateProject가 자기 PATCH에 합쳐 보내는 경우)면 여기서는 안 보낸다.
+  if (options?.persistTermCodes !== false && newTermCodes.length > 0) {
+    trackSync(
+      throttledFetch(`/api/projects/${project.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ termCodes: updatedProjects.find((p) => p.id === project.id)?.termCodes }),
+      })
+        .then((res) => res.json())
+        .then((res: { ok: boolean; error?: string }) => {
+          if (!res.ok) {
+            console.error("과제코드 발급 저장 실패:", res.error);
+            reportSyncFailure(1, `과제코드 발급: ${project.projectNumber} ${project.projectName}`);
+          }
+        })
+        .catch((err) => {
+          console.error("과제코드 발급 저장 실패:", err);
+          reportSyncFailure(1, `과제코드 발급: ${project.projectNumber} ${project.projectName}`);
+        })
+    );
+  }
+
   // throttledFetch/trackSync를 거치지 않고 일반 fetch로 나가면 엑셀 대량 업로드 구간(다른 add*/update*
   // 호출들과 함께 동시 요청 6개 제한을 받아야 함)에서 이 요청만 무제한으로 동시에 쏟아져 나가고,
   // beginSyncBatch()/endSyncBatchAndWait() 집계에도 안 잡혀 실패해도 사용자에게 보이지 않았다.
@@ -4054,6 +4098,7 @@ export function autoGenerateTermFees(projectId: string): void {
         reportSyncFailure(1, `연차수수료 동기화: ${project.projectNumber} ${project.projectName}`);
       })
   );
+  return newTermCodes;
 }
 
 // ============================================================
