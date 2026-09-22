@@ -3141,11 +3141,14 @@ function BillingBlock({
   const unitCurrentStage = project.stages?.find((s) => termNumber >= s.startTermNumber && termNumber <= s.endTermNumber);
   const unitStageStartDate = unitCurrentStage?.stageStartDate ?? project.stageStartDate ?? project.startDate;
   const unitStageEndDate = unitCurrentStage?.stageEndDate ?? project.stageEndDate ?? project.endDate;
+  const unitAutoTermRange = resolveTermDateRange(project, termNumber);
+  const unitTermStart = unitTermFees.find((f) => f.termStartDate)?.termStartDate ?? unitAutoTermRange.start;
+  const unitTermEnd = unitTermFees.find((f) => f.termEndDate)?.termEndDate ?? unitAutoTermRange.end;
   const unitNoticeStatusRows: NoticeStatusRow[] = [
     { label: "과제번호", value: projectNumber },
     { label: "과제명", value: project.projectName },
     { label: "단계연구개발기간", value: `${fmtDate(unitStageStartDate)} ~ ${fmtDate(unitStageEndDate)}` },
-    { label: "대상기간", value: `${fmtDate(project.firstStartDate ?? project.startDate)} ~ ${fmtDate(project.finalEndDate ?? project.endDate)}` },
+    { label: "대상기간", value: `${fmtDate(unitTermStart)} ~ ${fmtDate(unitTermEnd)}` },
     { label: "정산구분", value: isSettlementTerm(project, termNumber) ? "정산" : "연차상시" },
     { label: "연구개발기관", value: `${unit.billingLabel}${recipientMember ? ` (${MEMBER_ROLE_LABEL[recipientMember.role]})` : ""}` },
     { label: "책임자", value: resolvedLead.name || "—" },
@@ -4906,11 +4909,15 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const currentStage = project.stages?.find((s) => project.currentTerm >= s.startTermNumber && project.currentTerm <= s.endTermNumber);
   const currentStageStartDate = currentStage?.stageStartDate ?? project.stageStartDate ?? project.startDate;
   const currentStageEndDate = currentStage?.stageEndDate ?? project.stageEndDate ?? project.endDate;
+  const currentTermFees = termFees.filter((tf) => tf.projectNumber === project.projectNumber && tf.termNumber === project.currentTerm);
+  const currentAutoTermRange = resolveTermDateRange(project, project.currentTerm);
+  const currentTermStart = currentTermFees.find((f) => f.termStartDate)?.termStartDate ?? currentAutoTermRange.start;
+  const currentTermEnd = currentTermFees.find((f) => f.termEndDate)?.termEndDate ?? currentAutoTermRange.end;
   const noticeStatusRows: NoticeStatusRow[] = [
     { label: "과제번호", value: project.projectNumber },
     { label: "과제명", value: project.projectName },
     { label: "단계연구개발기간", value: `${fmtDate(currentStageStartDate)} ~ ${fmtDate(currentStageEndDate)}` },
-    { label: "대상기간", value: `${fmtDate(project.firstStartDate ?? project.startDate)} ~ ${fmtDate(project.finalEndDate ?? project.endDate)}` },
+    { label: "대상기간", value: `${fmtDate(currentTermStart)} ~ ${fmtDate(currentTermEnd)}` },
     { label: "정산구분", value: isSettlementTerm(project, project.currentTerm) ? "정산" : "연차상시" },
     { label: "주관연구개발기관", value: project.leadInstitutionName },
     { label: "연구책임자", value: resolveResearchLeadForTerm(project, project.currentTerm).name || "—" },

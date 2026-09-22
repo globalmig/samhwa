@@ -2999,7 +2999,7 @@ export default function FeesPage() {
         { label: "과제번호", value: project.projectNumber },
         { label: "과제명", value: project.projectName },
         { label: "단계연구개발기간", value: `${fmtDate(currentStageStartDate)} ~ ${fmtDate(currentStageEndDate)}` },
-        { label: "대상기간", value: `${fmtDate(project.firstStartDate ?? project.startDate)} ~ ${fmtDate(project.finalEndDate ?? project.endDate)}` },
+        { label: "대상기간", value: `${fmtDate(row.startDate)} ~ ${fmtDate(row.endDate)}` },
         { label: "정산구분", value: isSettlementTerm(project, project.currentTerm) ? "정산" : "연차상시" },
         { label: "주관연구개발기관", value: project.leadInstitutionName },
         { label: "연구책임자", value: resolveResearchLeadForTerm(project, project.currentTerm).name || "—" },
