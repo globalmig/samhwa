@@ -31,7 +31,7 @@ export async function PATCH(request: Request, { params }: Params) {
   const prevExtra = before.extraData ? (JSON.parse(before.extraData) as Record<string, unknown>) : {};
   const extraKeys = [
     "firstStartDate", "finalEndDate", "stageStartDate", "stageEndDate", "annualFinancials", "usageReportDeadline",
-    "agencyAssignedAt", "internalAssignedAt", "projectCategory", "researchLead", "researchLeadEmail",
+    "agencyAssignedAt", "agencyAssignedAtHistory", "internalAssignedAt", "internalAssignedAtHistory", "projectCategory", "researchLead", "researchLeadEmail",
     "researchLeadOverrides", "projectCode", "termCodes", "projectDivision", "billingType", "agreementType",
     "stages", "autonomySettlementType", "programType", "assignedManagerPrimary", "assignedManagerPrimaryHistory",
     "assignedManagerPrimaryUserId", "assignedManager", "assignedManagerHistory", "assignedManagerUserId",
