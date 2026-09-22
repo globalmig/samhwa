@@ -314,16 +314,29 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   const [editingPastFinancials, setEditingPastFinancials] = useState(false);
   const [pastFinancialsDraft, setPastFinancialsDraft] = useState({ govGrant: 0, privateCash: 0, privateInKind: 0 });
   useEffect(() => { setEditingPastFinancials(false); }, [viewTerm]);
-  // 책임자(연구책임자)명·이메일은 연차 탭(viewTerm)을 바꿀 때마다 그 연차에 실제로 적용되는 값으로
-  // draft를 다시 채운다 — 이 필드들은 사업비·담당자와 달리 draft가 마운트 시점에 한 번만 초기화돼서,
-  // 연차 탭을 눌러도 항상 진행 연차 값만 보이고 그 연차 값으로 바뀌지 않는 문제가 있었다(URL의
-  // ?term=으로 진행 연차가 아닌 연차를 바로 열었을 때도 마찬가지). 다른 연차를 보다가 진행 연차
-  // 탭으로 돌아오면 다시 진행 연차의(수정 중이던 값이 아니라 저장된) 값으로 리셋된다 — 사업비 구분
-  // 카드가 연차 탭을 바꾸면 미저장 변경을 잃는 것과 동일한 전제.
+  // 책임자(연구책임자)명·이메일, 전담기관/내부 배정일, 과제담당자(정)/(부)는 연차 탭(viewTerm)을
+  // 바꿀 때마다 그 연차에 실제로 적용되는 값으로 draft를 다시 채운다 — 이 필드들은 사업비와 달리
+  // draft가 마운트 시점에 한 번만 초기화돼서, 연차 탭을 눌러도 항상 진행 연차 값만 보이고 그 연차
+  // 값으로 바뀌지 않는 문제가 있었다(URL의 ?term=으로 진행 연차가 아닌 연차를 바로 열었을 때도
+  // 마찬가지). 다른 연차를 보다가 진행 연차 탭으로 돌아오면 다시 진행 연차의(수정 중이던 값이 아니라
+  // 저장된) 값으로 리셋된다 — 사업비 구분 카드가 연차 탭을 바꾸면 미저장 변경을 잃는 것과 동일한 전제.
+  // 담당자 동명이인 해소용 ...UserId는 연차별 이력이 없는 "현재값" 전용 필드라, 진행 연차가 아니면
+  // 의미가 없어 비워둔다(과거 연차 오버라이드는 이름만 저장·조회한다).
   useEffect(() => {
     if (!project) return;
     const resolved = resolveResearchLeadForTerm(project, viewTerm);
-    setDraft((p) => ({ ...p, researchLead: resolved.name || undefined, researchLeadEmail: resolved.email || undefined }));
+    const isCurrent = viewTerm === project.currentTerm;
+    setDraft((p) => ({
+      ...p,
+      researchLead: resolved.name || undefined,
+      researchLeadEmail: resolved.email || undefined,
+      agencyAssignedAt: resolveAgencyAssignedAtForTerm(project, viewTerm) || undefined,
+      internalAssignedAt: resolveInternalAssignedAtForTerm(project, viewTerm) || undefined,
+      assignedManager: resolveAssignedManagerForTerm(project, viewTerm) || undefined,
+      assignedManagerUserId: isCurrent ? project.assignedManagerUserId : undefined,
+      assignedManagerPrimary: resolveAssignedManagerPrimaryForTerm(project, viewTerm) || undefined,
+      assignedManagerPrimaryUserId: isCurrent ? project.assignedManagerPrimaryUserId : undefined,
+    }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewTerm]);
 
@@ -504,41 +517,104 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
           { termYear: savedTermYear, termNumber: draft.currentTerm, govGrant: draft.govGrant ?? 0, privateCash: draft.privateCash ?? 0, privateInKind: draft.privateInKind ?? 0 },
         ].sort((a, b) => a.termNumber - b.termNumber)
       : draft.annualFinancials;
-    // 당해(draft.currentTerm) 담당자를 직접 수정했을 수 있으니, 연차별 이력(assignedManagerHistory)도
-    // 함께 갱신한다 — 안 그러면 다른 연차를 봤다가 돌아왔을 때 방금 수정한 값과 이력이 어긋난다.
-    // 연락처·이메일은 여기 저장하지 않는다 — 공문 발송 시 이 이름으로 [권한관리]에서 찾아 쓴다.
-    // 위 사업비와 동일하게, 실제로 값이 바뀐 경우에만 이력을 새로 만든다.
-    const assignedManagerChanged = (draft.assignedManager ?? "") !== (project!.assignedManager ?? "");
-    const assignedManagerHistory = draft.assignedManager && assignedManagerChanged
-      ? [
-          ...(draft.assignedManagerHistory ?? []).filter((h) => h.termNumber !== draft.currentTerm),
-          { termNumber: draft.currentTerm, assignedManager: draft.assignedManager },
-        ].sort((a, b) => a.termNumber - b.termNumber)
-      : draft.assignedManagerHistory;
-    // 과제담당자(정)도 (부)와 동일하게 진행 연차 기준으로 이력을 남긴다.
-    const assignedManagerPrimaryChanged = (draft.assignedManagerPrimary ?? "") !== (project!.assignedManagerPrimary ?? "");
-    const assignedManagerPrimaryHistory = draft.assignedManagerPrimary && assignedManagerPrimaryChanged
-      ? [
-          ...(draft.assignedManagerPrimaryHistory ?? []).filter((h) => h.termNumber !== draft.currentTerm),
-          { termNumber: draft.currentTerm, assignedManagerPrimary: draft.assignedManagerPrimary },
-        ].sort((a, b) => a.termNumber - b.termNumber)
-      : draft.assignedManagerPrimaryHistory;
-    // 전담기관/내부 배정일도 담당자와 동일하게, 당해(draft.currentTerm) 값을 직접 수정했을 수 있으니
-    // 연차별 이력(agencyAssignedAtHistory/internalAssignedAtHistory)도 함께 갱신한다.
-    const agencyAssignedAtChanged = (draft.agencyAssignedAt ?? "") !== (project!.agencyAssignedAt ?? "");
-    const agencyAssignedAtHistory = draft.agencyAssignedAt && agencyAssignedAtChanged
-      ? [
-          ...(draft.agencyAssignedAtHistory ?? []).filter((h) => h.termNumber !== draft.currentTerm),
-          { termNumber: draft.currentTerm, agencyAssignedAt: draft.agencyAssignedAt },
-        ].sort((a, b) => a.termNumber - b.termNumber)
-      : draft.agencyAssignedAtHistory;
-    const internalAssignedAtChanged = (draft.internalAssignedAt ?? "") !== (project!.internalAssignedAt ?? "");
-    const internalAssignedAtHistory = draft.internalAssignedAt && internalAssignedAtChanged
-      ? [
-          ...(draft.internalAssignedAtHistory ?? []).filter((h) => h.termNumber !== draft.currentTerm),
-          { termNumber: draft.currentTerm, internalAssignedAt: draft.internalAssignedAt },
-        ].sort((a, b) => a.termNumber - b.termNumber)
-      : draft.internalAssignedAtHistory;
+    // 과제담당자(정)/(부)는 전담기관 배정일과 동일한 이유로 진행 연차에서만 수정 가능한 게 아니라,
+    // 연구책임자와 동일하게 "지금 보고 있는 연차 탭(viewTerm)" 기준으로 저장한다 — 인사이동 등으로
+    // 지난 연차 담당자를 뒤늦게 기록·정정하는 일이 흔하기 때문이다(위 useEffect가 탭을 바꿀 때마다
+    // draft를 그 연차 값으로 다시 채워두므로, 여기서 그대로 그 연차의 값으로 쓴다). 동명이인 해소용
+    // ...UserId는 연차별 이력이 없는 "현재값" 전용 필드라 진행 연차를 고칠 때만 함께 갱신한다 — 공문
+    // 발송은 이름으로 [권한관리]를 찾으므로 과거 연차만의 오버라이드를 저장할 땐 건드리지 않아도 된다.
+    const trueBaseAssignedManager = project!.assignedManager ?? "";
+    const draftAssignedManager = draft.assignedManager ?? "";
+    let nextAssignedManager = project!.assignedManager;
+    let nextAssignedManagerUserId = project!.assignedManagerUserId;
+    let assignedManagerHistory = project!.assignedManagerHistory;
+    if (viewTerm === currentTerm) {
+      nextAssignedManagerUserId = draft.assignedManagerUserId;
+      if (draftAssignedManager !== trueBaseAssignedManager) {
+        assignedManagerHistory = backfillExistingTermOverrides(
+          project!.assignedManagerHistory,
+          termFees.filter((f) => f.projectNumber === project!.projectNumber).map((f) => f.termNumber),
+          viewTerm,
+          (termNumber: number) => ({ termNumber, assignedManager: trueBaseAssignedManager }),
+        );
+        nextAssignedManager = draftAssignedManager || undefined;
+      }
+    } else {
+      const isDefault = draftAssignedManager === trueBaseAssignedManager;
+      const others = (project!.assignedManagerHistory ?? []).filter((h) => h.termNumber !== viewTerm);
+      const next = isDefault ? others : [...others, { termNumber: viewTerm, assignedManager: draftAssignedManager }].sort((a, b) => a.termNumber - b.termNumber);
+      assignedManagerHistory = next.length > 0 ? next : undefined;
+    }
+    // 과제담당자(정)도 (부)와 동일한 방식으로 연차별로 저장한다.
+    const trueBaseAssignedManagerPrimary = project!.assignedManagerPrimary ?? "";
+    const draftAssignedManagerPrimary = draft.assignedManagerPrimary ?? "";
+    let nextAssignedManagerPrimary = project!.assignedManagerPrimary;
+    let nextAssignedManagerPrimaryUserId = project!.assignedManagerPrimaryUserId;
+    let assignedManagerPrimaryHistory = project!.assignedManagerPrimaryHistory;
+    if (viewTerm === currentTerm) {
+      nextAssignedManagerPrimaryUserId = draft.assignedManagerPrimaryUserId;
+      if (draftAssignedManagerPrimary !== trueBaseAssignedManagerPrimary) {
+        assignedManagerPrimaryHistory = backfillExistingTermOverrides(
+          project!.assignedManagerPrimaryHistory,
+          termFees.filter((f) => f.projectNumber === project!.projectNumber).map((f) => f.termNumber),
+          viewTerm,
+          (termNumber: number) => ({ termNumber, assignedManagerPrimary: trueBaseAssignedManagerPrimary }),
+        );
+        nextAssignedManagerPrimary = draftAssignedManagerPrimary || undefined;
+      }
+    } else {
+      const isDefault = draftAssignedManagerPrimary === trueBaseAssignedManagerPrimary;
+      const others = (project!.assignedManagerPrimaryHistory ?? []).filter((h) => h.termNumber !== viewTerm);
+      const next = isDefault ? others : [...others, { termNumber: viewTerm, assignedManagerPrimary: draftAssignedManagerPrimary }].sort((a, b) => a.termNumber - b.termNumber);
+      assignedManagerPrimaryHistory = next.length > 0 ? next : undefined;
+    }
+    // 전담기관/내부 배정일은 담당자(assignedManager)와 달리 진행 연차에서만 수정 가능한 게 아니라,
+    // 연구책임자와 동일하게 "지금 보고 있는 연차 탭(viewTerm)" 기준으로 저장한다 — 전담기관이 매
+    // 연차 새로 통지하는 값이라, 실무자가 지난 연차 배정일을 뒤늦게 기록·정정하는 일이 흔하기
+    // 때문이다(위 useEffect가 탭을 바꿀 때마다 draft를 그 연차 값으로 다시 채워두므로, 여기서 그대로
+    // 그 연차의 값으로 쓴다). researchLeadOverrides와 동일한 원칙 — 진행 연차 탭에서 고치면 "지금부터"
+    // 적용되도록 기본값 자체를 바꾸고 이미 만들어진 다른 연차는 옛 값으로 고정하며(backfillExistingTermOverrides),
+    // 그 외 연차 탭에서 고치면 기본값은 건드리지 않고 그 연차만의 오버라이드로 직접 저장한다.
+    const trueBaseAgencyAssignedAt = project!.agencyAssignedAt ?? "";
+    const draftAgencyAssignedAt = draft.agencyAssignedAt ?? "";
+    let nextAgencyAssignedAt = project!.agencyAssignedAt;
+    let agencyAssignedAtHistory = project!.agencyAssignedAtHistory;
+    if (viewTerm === currentTerm) {
+      if (draftAgencyAssignedAt !== trueBaseAgencyAssignedAt) {
+        agencyAssignedAtHistory = backfillExistingTermOverrides(
+          project!.agencyAssignedAtHistory,
+          termFees.filter((f) => f.projectNumber === project!.projectNumber).map((f) => f.termNumber),
+          viewTerm,
+          (termNumber: number) => ({ termNumber, agencyAssignedAt: trueBaseAgencyAssignedAt }),
+        );
+        nextAgencyAssignedAt = draftAgencyAssignedAt || undefined;
+      }
+    } else {
+      const isDefault = draftAgencyAssignedAt === trueBaseAgencyAssignedAt;
+      const others = (project!.agencyAssignedAtHistory ?? []).filter((h) => h.termNumber !== viewTerm);
+      const next = isDefault ? others : [...others, { termNumber: viewTerm, agencyAssignedAt: draftAgencyAssignedAt }].sort((a, b) => a.termNumber - b.termNumber);
+      agencyAssignedAtHistory = next.length > 0 ? next : undefined;
+    }
+    const trueBaseInternalAssignedAt = project!.internalAssignedAt ?? "";
+    const draftInternalAssignedAt = draft.internalAssignedAt ?? "";
+    let nextInternalAssignedAt = project!.internalAssignedAt;
+    let internalAssignedAtHistory = project!.internalAssignedAtHistory;
+    if (viewTerm === currentTerm) {
+      if (draftInternalAssignedAt !== trueBaseInternalAssignedAt) {
+        internalAssignedAtHistory = backfillExistingTermOverrides(
+          project!.internalAssignedAtHistory,
+          termFees.filter((f) => f.projectNumber === project!.projectNumber).map((f) => f.termNumber),
+          viewTerm,
+          (termNumber: number) => ({ termNumber, internalAssignedAt: trueBaseInternalAssignedAt }),
+        );
+        nextInternalAssignedAt = draftInternalAssignedAt || undefined;
+      }
+    } else {
+      const isDefault = draftInternalAssignedAt === trueBaseInternalAssignedAt;
+      const others = (project!.internalAssignedAtHistory ?? []).filter((h) => h.termNumber !== viewTerm);
+      const next = isDefault ? others : [...others, { termNumber: viewTerm, internalAssignedAt: draftInternalAssignedAt }].sort((a, b) => a.termNumber - b.termNumber);
+      internalAssignedAtHistory = next.length > 0 ? next : undefined;
+    }
     // 책임자(연구책임자) 이름·이메일은 지금 보고 있는 연차 탭(viewTerm) 기준으로 저장한다(위 useEffect가
     // 탭을 바꿀 때마다 draft를 그 연차 값으로 다시 채워두므로, 여기서 그대로 그 연차의 값으로 쓴다).
     // ??로 undefined일 때만 ""로 채운다 — 그대로 두면 resolveResearchLeadForTerm의 override?.email ??
@@ -581,9 +657,15 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       leadInstitutionName,
       totalBudget: annualBudget > 0 ? annualBudget : draft.totalBudget,
       annualFinancials,
-      assignedManagerPrimaryHistory,
+      assignedManager: nextAssignedManager,
+      assignedManagerUserId: nextAssignedManagerUserId,
       assignedManagerHistory,
+      assignedManagerPrimary: nextAssignedManagerPrimary,
+      assignedManagerPrimaryUserId: nextAssignedManagerPrimaryUserId,
+      assignedManagerPrimaryHistory,
+      agencyAssignedAt: nextAgencyAssignedAt,
       agencyAssignedAtHistory,
+      internalAssignedAt: nextInternalAssignedAt,
       internalAssignedAtHistory,
       researchLead: nextResearchLead,
       researchLeadEmail: nextResearchLeadEmail,
@@ -658,25 +740,6 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
     : { govGrant: viewFinancialsRecord?.govGrant ?? 0, privateCash: viewFinancialsRecord?.privateCash ?? 0, privateInKind: viewFinancialsRecord?.privateInKind ?? 0 };
   const viewAnnualBudget = viewFinancials.govGrant + viewFinancials.privateCash + viewFinancials.privateInKind;
   const hasFinancialsForViewTerm = isCurrentTermFinancials || viewFinancialsRecord !== undefined;
-
-  // 담당자도 인사이동 등으로 연차마다 바뀔 수 있어(assignedManagerHistory) 사업비 구분과 동일하게
-  // 연차 탭(viewTerm)에 맞춰 보여준다 — currentTerm이면 지금 수정 중인 draft 값(입력 가능)을,
-  // 다른 연차는 이력에서 찾은 값을 읽기 전용으로 보여준다.
-  const viewAssignedManager = isCurrentTermFinancials
-    ? (draft.assignedManager ?? "")
-    : resolveAssignedManagerForTerm(project, viewTerm);
-  // 과제담당자(정)도 (부)와 동일한 방식으로 연차별 이력을 본다.
-  const viewAssignedManagerPrimary = isCurrentTermFinancials
-    ? (draft.assignedManagerPrimary ?? "")
-    : resolveAssignedManagerPrimaryForTerm(project, viewTerm);
-  // 전담기관/내부 배정일도 담당자와 동일한 규칙 — 전담기관이 매 연차 새로 통지하는 값이라
-  // agencyAssignedAtHistory/internalAssignedAtHistory에 연차별로 쌓인다.
-  const viewAgencyAssignedAt = isCurrentTermFinancials
-    ? (draft.agencyAssignedAt ?? "")
-    : resolveAgencyAssignedAtForTerm(project, viewTerm);
-  const viewInternalAssignedAt = isCurrentTermFinancials
-    ? (draft.internalAssignedAt ?? "")
-    : resolveInternalAssignedAtForTerm(project, viewTerm);
 
   const totalCashBudget = members.reduce((s, m) => s + getMemberBudgetVal(m, "cashBudget"), 0);
   const totalInKindBudget = members.reduce((s, m) => s + getMemberBudgetVal(m, "inKindBudget"), 0);
@@ -1047,18 +1110,12 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">
                   전담기관 배정일자
-                  {!isCurrentTermFinancials && (
-                    <span className="ml-1 text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{viewTerm}연차 기준 · 읽기전용</span>
+                  {viewTerm !== currentTerm && (
+                    <span className="ml-1 text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{viewTerm}연차 값</span>
                   )}
                 </label>
-                {isCurrentTermFinancials ? (
-                  <DateInput className="w-full" value={draft.agencyAssignedAt ?? ""}
-                    onChange={(v) => setDraft((p) => ({ ...p, agencyAssignedAt: v }))} />
-                ) : (
-                  <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500">
-                    {viewAgencyAssignedAt ? fmtDate(viewAgencyAssignedAt) : "기록 없음"}
-                  </div>
-                )}
+                <DateInput className="w-full" value={draft.agencyAssignedAt ?? ""}
+                  onChange={(v) => setDraft((p) => ({ ...p, agencyAssignedAt: v }))} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">당해 현금사업비 (자동계산)</label>
@@ -1069,18 +1126,12 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">
                   내부 배정일
-                  {!isCurrentTermFinancials && (
-                    <span className="ml-1 text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{viewTerm}연차 기준 · 읽기전용</span>
+                  {viewTerm !== currentTerm && (
+                    <span className="ml-1 text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{viewTerm}연차 값</span>
                   )}
                 </label>
-                {isCurrentTermFinancials ? (
-                  <DateInput className="w-full" value={draft.internalAssignedAt ?? ""}
-                    onChange={(v) => setDraft((p) => ({ ...p, internalAssignedAt: v }))} />
-                ) : (
-                  <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500">
-                    {viewInternalAssignedAt ? fmtDate(viewInternalAssignedAt) : "기록 없음"}
-                  </div>
-                )}
+                <DateInput className="w-full" value={draft.internalAssignedAt ?? ""}
+                  onChange={(v) => setDraft((p) => ({ ...p, internalAssignedAt: v }))} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">당해 사업비 (자동계산)</label>
@@ -1093,48 +1144,36 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                   <label className="block text-xs font-medium text-slate-500 mb-1">
                     과제담당자(정)
                     <span className="ml-1 text-slate-400 font-normal">· 연락처·이메일은 [권한관리]에 등록된 동일 이름 계정에서 자동 연동</span>
-                    {!isCurrentTermFinancials && (
-                      <span className="ml-1 text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{viewTerm}연차 기준 · 읽기전용</span>
+                    {viewTerm !== currentTerm && (
+                      <span className="ml-1 text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{viewTerm}연차 값</span>
                     )}
                   </label>
-                  {isCurrentTermFinancials ? (
-                    <button type="button" onClick={() => setManagerPicker("primary")}
-                      className={`${inp} w-full bg-white text-left flex items-center justify-between gap-2`}>
-                      <span className={draft.assignedManagerPrimary ? "text-slate-700" : "text-slate-400"}>
-                        {draft.assignedManagerPrimary || "담당자 선택"}
-                      </span>
-                      <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400 shrink-0">
-                        <path fillRule="evenodd" d="M10 3a1 1 0 01.707.293l5 5a1 1 0 01-1.414 1.414L10 5.414 5.707 9.707a1 1 0 01-1.414-1.414l5-5A1 1 0 0110 3zm-5.707 9.293a1 1 0 011.414 0L10 16.586l4.293-4.293a1 1 0 011.414 1.414l-5 5a1 1 0 01-1.414 0l-5-5a1 1 0 010-1.414z" clipRule="evenodd" />
-                      </svg>
-                    </button>
-                  ) : (
-                    <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500">
-                      {viewAssignedManagerPrimary || "기록 없음"}
-                    </div>
-                  )}
+                  <button type="button" onClick={() => setManagerPicker("primary")}
+                    className={`${inp} w-full bg-white text-left flex items-center justify-between gap-2`}>
+                    <span className={draft.assignedManagerPrimary ? "text-slate-700" : "text-slate-400"}>
+                      {draft.assignedManagerPrimary || "담당자 선택"}
+                    </span>
+                    <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400 shrink-0">
+                      <path fillRule="evenodd" d="M10 3a1 1 0 01.707.293l5 5a1 1 0 01-1.414 1.414L10 5.414 5.707 9.707a1 1 0 01-1.414-1.414l5-5A1 1 0 0110 3zm-5.707 9.293a1 1 0 011.414 0L10 16.586l4.293-4.293a1 1 0 011.414 1.414l-5 5a1 1 0 01-1.414 0l-5-5a1 1 0 010-1.414z" clipRule="evenodd" />
+                    </svg>
+                  </button>
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-500 mb-1">
                     과제담당자(부)
-                    {!isCurrentTermFinancials && (
-                      <span className="ml-1 text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{viewTerm}연차 기준 · 읽기전용</span>
+                    {viewTerm !== currentTerm && (
+                      <span className="ml-1 text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{viewTerm}연차 값</span>
                     )}
                   </label>
-                  {isCurrentTermFinancials ? (
-                    <button type="button" onClick={() => setManagerPicker("deputy")}
-                      className={`${inp} w-full bg-white text-left flex items-center justify-between gap-2`}>
-                      <span className={draft.assignedManager ? "text-slate-700" : "text-slate-400"}>
-                        {draft.assignedManager || "담당자 선택"}
-                      </span>
-                      <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400 shrink-0">
-                        <path fillRule="evenodd" d="M10 3a1 1 0 01.707.293l5 5a1 1 0 01-1.414 1.414L10 5.414 5.707 9.707a1 1 0 01-1.414-1.414l5-5A1 1 0 0110 3zm-5.707 9.293a1 1 0 011.414 0L10 16.586l4.293-4.293a1 1 0 011.414 1.414l-5 5a1 1 0 01-1.414 0l-5-5a1 1 0 010-1.414z" clipRule="evenodd" />
-                      </svg>
-                    </button>
-                  ) : (
-                    <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500">
-                      {viewAssignedManager || "기록 없음"}
-                    </div>
-                  )}
+                  <button type="button" onClick={() => setManagerPicker("deputy")}
+                    className={`${inp} w-full bg-white text-left flex items-center justify-between gap-2`}>
+                    <span className={draft.assignedManager ? "text-slate-700" : "text-slate-400"}>
+                      {draft.assignedManager || "담당자 선택"}
+                    </span>
+                    <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400 shrink-0">
+                      <path fillRule="evenodd" d="M10 3a1 1 0 01.707.293l5 5a1 1 0 01-1.414 1.414L10 5.414 5.707 9.707a1 1 0 01-1.414-1.414l5-5A1 1 0 0110 3zm-5.707 9.293a1 1 0 011.414 0L10 16.586l4.293-4.293a1 1 0 011.414 1.414l-5 5a1 1 0 01-1.414 0l-5-5a1 1 0 010-1.414z" clipRule="evenodd" />
+                    </svg>
+                  </button>
                 </div>
               </div>
               {managerPicker && (

@@ -2990,8 +2990,8 @@ export default function FeesPage() {
           statusRows,
           feeRows,
           templates,
-          assignedManagerPrimary: project.assignedManagerPrimary ?? "",
-          assignedManager: project.assignedManager ?? "",
+          assignedManagerPrimary: resolveAssignedManagerPrimaryForTerm(project, row.termNumber),
+          assignedManager: resolveAssignedManagerForTerm(project, row.termNumber),
         });
         continue;
       }
@@ -3034,8 +3034,8 @@ export default function FeesPage() {
         statusRows,
         feeRows,
         templates,
-        assignedManagerPrimary: project.assignedManagerPrimary ?? "",
-        assignedManager: project.assignedManager ?? "",
+        assignedManagerPrimary: resolveAssignedManagerPrimaryForTerm(project, project.currentTerm),
+        assignedManager: resolveAssignedManagerForTerm(project, project.currentTerm),
       });
     }
     return targets;
