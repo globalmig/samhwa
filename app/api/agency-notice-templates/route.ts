@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
-import { toAgencyNoticeTemplate } from "@/lib/notice-template-mapper";
+import { toAgencyNoticeTemplate, toAgencyNoticeTemplateListItem } from "@/lib/notice-template-mapper";
 import { writeAuditLog } from "@/lib/audit";
 import type { AgencyNoticeTemplate } from "@/lib/mock";
 
@@ -14,7 +14,7 @@ export async function GET() {
     throw err;
   }
   const rows = await prisma.agencyNoticeTemplate.findMany({ include: { fundingAgency: true }, orderBy: { createdAt: "asc" } });
-  return Response.json({ ok: true, templates: rows.map(toAgencyNoticeTemplate) });
+  return Response.json({ ok: true, templates: rows.map(toAgencyNoticeTemplateListItem) });
 }
 
 export async function POST(request: Request) {

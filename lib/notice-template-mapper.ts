@@ -31,6 +31,12 @@ export function toAgencyNoticeTemplate(t: PrismaAgencyNoticeTemplate & { funding
   };
 }
 
+// content(전담기관 공문 서식 전체)는 건당 수십~수백 KB라, 목록 조회는 이 필드를 뺀 가벼운 버전을
+// 쓴다 — 실제로 열람·편집·발송에 쓰는 시점에만 GET /api/agency-notice-templates/[id]로 따로 받아온다.
+export function toAgencyNoticeTemplateListItem(t: PrismaAgencyNoticeTemplate & { fundingAgency: FundingAgency }): AgencyNoticeTemplateEntry {
+  return { id: t.id, agencyShortName: t.fundingAgency.shortName, name: t.name };
+}
+
 export function toFeeInvoiceTemplate(t: PrismaFeeInvoiceTemplate): FeeInvoiceTemplateEntry {
   return {
     id: t.id,

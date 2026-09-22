@@ -1,9 +1,9 @@
 "use client";
 
-import { use } from "react";
+import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { FiArrowLeft, FiFile } from "react-icons/fi";
-import { useStore } from "@/lib/store";
+import { useStore, ensureEmailDispatchDetail } from "@/lib/store";
 import { type EmailDispatch } from "@/lib/mock";
 import StatusBadge from "@/components/common/StatusBadge";
 import NoticeLetterPreview from "@/components/common/NoticeLetterPreview";
@@ -37,6 +37,17 @@ const STATUS_MAP: Record<EmailDispatch["status"], { label: string; color: "green
 export default function EmailDispatchDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { emailDispatches } = useStore();
+
+  // 목록 조회는 body/noticeSnapshot을 빼고 받아오므로(성능), 이 상세 페이지에서 그 건 하나의 전체
+  // 내용을 따로 받아온다. 아직 못 받아온 상태와 "원래 본문이 없는 발송 건"을 구분해야 아래에서
+  // 잠깐 "본문 내용이 기록되지 않았습니다"가 잘못 보였다가 사라지는 깜빡임이 없다.
+  const [detailLoading, setDetailLoading] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    setDetailLoading(true);
+    ensureEmailDispatchDetail(id).finally(() => { if (!cancelled) setDetailLoading(false); });
+    return () => { cancelled = true; };
+  }, [id]);
 
   const dispatch = emailDispatches.find((e) => e.id === id);
 
@@ -102,6 +113,10 @@ export default function EmailDispatchDetailPage({ params }: { params: Promise<{ 
           <div className="px-5 py-4">
             <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">{dispatch.body}</p>
           </div>
+        </div>
+      ) : detailLoading ? (
+        <div className="bg-white rounded-xl border border-slate-200 px-5 py-6 text-center text-sm text-slate-400">
+          불러오는 중...
         </div>
       ) : (
         <div className="bg-white rounded-xl border border-slate-200 px-5 py-6 text-center text-sm text-slate-400">

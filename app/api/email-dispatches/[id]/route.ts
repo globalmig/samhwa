@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { requireWriteAccess, SessionError } from "@/lib/session";
+import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
 import { toEmailDispatch } from "@/lib/email-dispatch-mapper";
 import { writeAuditLog } from "@/lib/audit";
 import type { EmailDispatch } from "@/lib/mock";
@@ -7,6 +7,21 @@ import type { EmailDispatch } from "@/lib/mock";
 export const runtime = "nodejs";
 
 type Params = { params: Promise<{ id: string }> };
+
+// 목록 조회(GET /api/email-dispatches)는 body/noticeSnapshot을 뺀 가벼운 버전만 내려주므로,
+// 발송이력 상세 페이지(app/emails/[id]/page.tsx)가 열릴 때 이 건 하나의 전체 내용을 따로 받아온다.
+export async function GET(_request: Request, { params }: Params) {
+  const { id } = await params;
+  try {
+    await requireUser();
+  } catch (err) {
+    if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
+    throw err;
+  }
+  const row = await prisma.emailLog.findUnique({ where: { id } });
+  if (!row) return Response.json({ ok: false, error: "발송이력을 찾을 수 없습니다." }, { status: 404 });
+  return Response.json({ ok: true, emailDispatch: toEmailDispatch(row) });
+}
 
 // 발송 시점엔 아직 실제 메일 성공/실패를 모르므로(POST가 status="PENDING"으로 먼저 만들어둔다),
 // 메일 발송(fetch)이 끝난 뒤 이 레코드의 status만 SUCCESS/FAILED로 확정하는 데 쓴다 — PATCH를

@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { FiEdit2, FiFileText, FiPlus, FiTrash2 } from "react-icons/fi";
-import { useStore, addAgencyNoticeTemplate, updateAgencyNoticeTemplate, deleteAgencyNoticeTemplate } from "@/lib/store";
+import { useStore, addAgencyNoticeTemplate, updateAgencyNoticeTemplate, deleteAgencyNoticeTemplate, ensureAgencyNoticeTemplateDetail } from "@/lib/store";
 import { EMPTY_NOTICE_TEMPLATE, type AgencyNoticeTemplate, type AgencyNoticeTemplateEntry } from "@/lib/mock";
 import { useCanWrite } from "@/lib/permissions";
 import NoticeLetterPreview, { type NoticeStatusRow } from "@/components/common/NoticeLetterPreview";
@@ -81,8 +81,8 @@ function TemplatePickerModal({
                 return (
                   <tr key={t.id} className={`border-b border-slate-50 hover:bg-slate-50 ${isSelected ? "bg-blue-50/50" : ""}`}>
                     <td className="px-5 py-3 font-medium text-slate-700">{t.name}</td>
-                    <td className="px-5 py-3 text-slate-500 truncate max-w-xs">{t.content.title || "—"}</td>
-                    <td className="px-5 py-3 text-center text-slate-500">{t.content.attachments.length}개</td>
+                    <td className="px-5 py-3 text-slate-500 truncate max-w-xs">{t.content?.title || "—"}</td>
+                    <td className="px-5 py-3 text-center text-slate-500">{t.content?.attachments.length ?? 0}개</td>
                     <td className="px-5 py-3 text-right">
                       <div className="flex items-center justify-end gap-1.5">
                         {onDelete && (
@@ -132,6 +132,14 @@ export default function NoticeDocumentTemplatesPage() {
   const agency = fundingAgencies.find((a) => a.shortName === activeAgency);
   const selected = agencyTemplates.find((t) => t.id === selectedId) ?? agencyTemplates[0];
 
+  // 목록 조회는 content(공문 서식 전체)를 빼고 받아온다(성능) — 지금 보고 있는 전담기관의 템플릿
+  // 몇 개(보통 소수)만 탭을 열 때 전체 내용을 따로 받아온다. 이미 받아온 건 다시 요청하지 않는다.
+  useEffect(() => {
+    for (const t of agencyNoticeTemplates) {
+      if (t.agencyShortName === activeAgency) ensureAgencyNoticeTemplateDetail(t.id);
+    }
+  }, [activeAgency, agencyNoticeTemplates]);
+
   function selectAgency(shortName: string) {
     setActiveAgency(shortName);
     const first = agencyNoticeTemplates.find((t) => t.agencyShortName === shortName);
@@ -144,7 +152,7 @@ export default function NoticeDocumentTemplatesPage() {
     setIsEditing(false);
   }
   function startEdit() {
-    if (!selected) return;
+    if (!selected?.content) return;
     setDraft(JSON.parse(JSON.stringify(selected.content)));
     setDraftName(selected.name);
     setIsEditing(true);
@@ -327,7 +335,7 @@ export default function NoticeDocumentTemplatesPage() {
 
               <div className="p-8">
                 <NoticeLetterPreview
-                  template={isEditing ? draft : selected.content}
+                  template={isEditing ? draft : (selected?.content ?? EMPTY_NOTICE_TEMPLATE)}
                   statusRows={SAMPLE_PROJECT_STATUS}
                   feeRows={SAMPLE_FEE_ROWS}
                   docNumber="삼화 2026-#### (자동 채번)"

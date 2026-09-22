@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { requireWriteAccess, SessionError } from "@/lib/session";
+import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
 import { toAgencyNoticeTemplate } from "@/lib/notice-template-mapper";
 import { writeAuditLog } from "@/lib/audit";
 import type { AgencyNoticeTemplate } from "@/lib/mock";
@@ -7,6 +7,21 @@ import type { AgencyNoticeTemplate } from "@/lib/mock";
 export const runtime = "nodejs";
 
 type Params = { params: Promise<{ id: string }> };
+
+// 목록 조회(GET /api/agency-notice-templates)는 content를 뺀 가벼운 버전만 내려주므로, 이 템플릿을
+// 실제로 열람·편집·발송에 쓰는 시점에 전체 내용을 따로 받아온다(lib/store.ts ensureAgencyNoticeTemplateDetail).
+export async function GET(_request: Request, { params }: Params) {
+  const { id } = await params;
+  try {
+    await requireUser();
+  } catch (err) {
+    if (err instanceof SessionError) return Response.json({ ok: false, error: err.message }, { status: err.status });
+    throw err;
+  }
+  const row = await prisma.agencyNoticeTemplate.findUnique({ where: { id }, include: { fundingAgency: true } });
+  if (!row) return Response.json({ ok: false, error: "템플릿을 찾을 수 없습니다." }, { status: 404 });
+  return Response.json({ ok: true, template: toAgencyNoticeTemplate(row) });
+}
 
 export async function PATCH(request: Request, { params }: Params) {
   const { id } = await params;

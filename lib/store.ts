@@ -2700,6 +2700,34 @@ function hydrateEmailDispatches(): void {
 }
 if (typeof window !== "undefined") hydrateEmailDispatches();
 
+// hydrateEmailDispatches가 받아오는 목록엔 body/noticeSnapshot이 빠져 있다(2000건씩 매번 실으면
+// 응답이 수십 MB로 불어나서 — GET /api/email-dispatches 참고). 발송이력 상세 페이지가 열릴 때만
+// 이 함수로 그 건 하나의 전체 내용을 따로 받아 배열의 해당 항목에 채워 넣는다. 이미 받아온 적
+// 있으면(_emailDispatchDetailsLoaded) 다시 요청하지 않는다 — 실패 시엔 재시도할 수 있게 빼둔다.
+const _emailDispatchDetailsLoaded = new Set<string>();
+export function ensureEmailDispatchDetail(id: string): Promise<void> {
+  if (_emailDispatchDetailsLoaded.has(id)) return Promise.resolve();
+  _emailDispatchDetailsLoaded.add(id);
+  return fetch(`/api/email-dispatches/${id}`)
+    .then((res) => res.json())
+    .then((res: { ok: boolean; emailDispatch?: EmailDispatch }) => {
+      if (!res.ok || !res.emailDispatch) return;
+      const detail = res.emailDispatch;
+      const exists = _state.emailDispatches.some((e) => e.id === id);
+      _state = {
+        ..._state,
+        emailDispatches: exists
+          ? _state.emailDispatches.map((e) => (e.id === id ? detail : e))
+          : [..._state.emailDispatches, detail],
+      };
+      notify();
+    })
+    .catch((err) => {
+      console.error("발송 상세 내용을 불러오지 못했습니다.", err);
+      _emailDispatchDetailsLoaded.delete(id);
+    });
+}
+
 export function addEmailDispatch(data: Omit<EmailDispatch, "id">): EmailDispatch {
   const tempId = genId("em");
   const item: EmailDispatch = { ...data, id: tempId };
@@ -3261,6 +3289,39 @@ function hydrateAgencyNoticeTemplates(): void {
     .catch((err) => { console.error("전담기관 공문 템플릿을 불러오지 못했습니다.", err); _agencyNoticeTemplatesHydrated = false; });
 }
 if (typeof window !== "undefined") hydrateAgencyNoticeTemplates();
+
+// hydrateAgencyNoticeTemplates가 받아오는 목록엔 content(공문 서식 전체, 건당 수십~수백 KB)가
+// 빠져 있다 — 이 템플릿을 실제로 열람·편집·발송에 쓰는 시점에만 이 함수로 그 건 하나의 전체 내용을
+// 따로 받아와 배열의 해당 항목에 채워 넣는다. ensureEmailDispatchDetail과 동일한 방식.
+// 받아온(또는 이미 캐시된) 상세를 반환값으로도 준다 — 호출부가 발송 직전처럼 "지금 이 값을 바로
+// 써야 하는" 상황에서, useMemo로 다시 흘러들어오길 기다리지 않고 그 자리에서 바로 쓸 수 있게 한다.
+const _agencyNoticeTemplateDetailsLoaded = new Set<string>();
+export function ensureAgencyNoticeTemplateDetail(id: string): Promise<AgencyNoticeTemplateEntry | undefined> {
+  if (_agencyNoticeTemplateDetailsLoaded.has(id)) {
+    return Promise.resolve(_state.agencyNoticeTemplates.find((t) => t.id === id));
+  }
+  _agencyNoticeTemplateDetailsLoaded.add(id);
+  return fetch(`/api/agency-notice-templates/${id}`)
+    .then((res) => res.json())
+    .then((res: { ok: boolean; template?: AgencyNoticeTemplateEntry }) => {
+      if (!res.ok || !res.template) return undefined;
+      const detail = res.template;
+      const exists = _state.agencyNoticeTemplates.some((t) => t.id === id);
+      _state = {
+        ..._state,
+        agencyNoticeTemplates: exists
+          ? _state.agencyNoticeTemplates.map((t) => (t.id === id ? detail : t))
+          : [..._state.agencyNoticeTemplates, detail],
+      };
+      notify();
+      return detail;
+    })
+    .catch((err) => {
+      console.error("공문 템플릿 상세 내용을 불러오지 못했습니다.", err);
+      _agencyNoticeTemplateDetailsLoaded.delete(id);
+      return undefined;
+    });
+}
 
 export function addAgencyNoticeTemplate(
   agencyShortName: string,

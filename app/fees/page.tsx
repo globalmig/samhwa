@@ -26,6 +26,7 @@ import {
   updateFeesFilters,
   resetFeesFilters,
   runBulkSyncBatch,
+  ensureAgencyNoticeTemplateDetail,
   type FeesFilters,
 } from "@/lib/store";
 import {
@@ -2169,6 +2170,15 @@ function BulkSettlementNoticeModal({
     ? []
     : targets.filter((t) => t.templates.length > 0 && t.recipientEmail && hasSenderEmail(t.agencyShortName));
 
+  // 목록 조회는 템플릿 content(공문 서식 전체)를 빼고 받아온다(성능) — 이 모달이 열려 실제로
+  // 미리보기·발송에 쓸 시점에 관련된 템플릿들의 전체 내용을 미리 받아둔다. sendAll에서도 실제로
+  // 쓰기 직전에 한 번 더 확인(await)하므로, 이 prefetch가 늦어도 빈 내용으로 발송되지는 않는다.
+  useEffect(() => {
+    for (const t of targets) {
+      for (const tpl of t.templates) ensureAgencyNoticeTemplateDetail(tpl.id);
+    }
+  }, [targets]);
+
   const agencyGroups = useMemo(() => {
     const map = new Map<string, BulkNoticeTarget[]>();
     eligible.forEach((t) => {
@@ -2212,7 +2222,11 @@ function BulkSettlementNoticeModal({
       const senderAgency = agencyByShortName.get(t.agencyShortName);
       if (!senderAgency?.noticeSenderEmail) continue;
       const templateId = templateChoices[t.agencyShortName] ?? t.templates[0]?.id;
-      const rawTemplate = t.templates.find((x) => x.id === templateId)?.content ?? t.templates[0]?.content ?? EMPTY_NOTICE_TEMPLATE;
+      // 목록 조회엔 content가 빠져 있을 수 있어(성능), 실제로 읽기 직전에 한 번 더 확인한다 — 위
+      // useEffect가 이미 받아둔 경우 이 호출은 즉시 끝난다(캐시). t.templates는 이 함수가 시작될 때
+      // 이미 값이 굳어진 배열이라(클로저), 방금 받아온 content가 반영되지 않는다 — 반환값을 직접 쓴다.
+      const templateDetail = templateId ? await ensureAgencyNoticeTemplateDetail(templateId) : undefined;
+      const rawTemplate = templateDetail?.content ?? EMPTY_NOTICE_TEMPLATE;
       // 문의사항 연락처의 "과제담당(정)/(부)" 행을 이 과제의 실제 담당자로 바꿔치기한다.
       const template = { ...rawTemplate, contactRows: applyManagerContactRows(rawTemplate.contactRows, t, users) };
       const docNumber = `${companyInfo.docNumberPrefix} ${now.getFullYear()}-${String(seq).padStart(4, "0")}`;

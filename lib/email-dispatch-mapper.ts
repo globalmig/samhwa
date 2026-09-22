@@ -37,3 +37,10 @@ export function toEmailDispatch(row: EmailLog): EmailDispatch {
     noticeSnapshot: extra.noticeSnapshot,
   };
 }
+
+// body/noticeSnapshot은 건당 수 KB~수십 KB라 목록 2000건을 한 번에 실으면 응답이 수십 MB로
+// 불어난다 — 목록 조회(GET /api/email-dispatches)는 이 둘을 뺀 가벼운 버전을 쓰고, 상세 페이지가
+// 열릴 때만 GET /api/email-dispatches/[id]로 따로 받아온다(lib/store.ts ensureEmailDispatchDetail).
+export function toEmailDispatchListItem(row: EmailLog): EmailDispatch {
+  return { ...toEmailDispatch(row), body: undefined, noticeSnapshot: undefined };
+}

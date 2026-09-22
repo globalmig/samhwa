@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
-import { toEmailDispatch } from "@/lib/email-dispatch-mapper";
+import { toEmailDispatch, toEmailDispatchListItem } from "@/lib/email-dispatch-mapper";
 import { writeAuditLog } from "@/lib/audit";
 import type { EmailDispatch } from "@/lib/mock";
 
@@ -14,7 +14,7 @@ export async function GET() {
     throw err;
   }
   const rows = await prisma.emailLog.findMany({ orderBy: { createdAt: "desc" }, take: 2000 });
-  return Response.json({ ok: true, emailDispatches: rows.map(toEmailDispatch) });
+  return Response.json({ ok: true, emailDispatches: rows.map(toEmailDispatchListItem) });
 }
 
 export async function POST(request: Request) {

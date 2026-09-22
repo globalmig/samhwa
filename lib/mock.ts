@@ -3290,7 +3290,10 @@ export interface AgencyNoticeTemplateEntry {
   id: string;
   agencyShortName: string; // FundingAgency.shortName (KEIT 등)
   name: string;            // 템플릿 이름 (목록에서 선택할 때 표시)
-  content: AgencyNoticeTemplate;
+  // 건당 수십~수백 KB라 목록 조회(GET /api/agency-notice-templates)는 이 필드를 뺀 채 내려온다 —
+  // 실제로 이 템플릿을 열람·편집·발송에 쓰는 시점에만 GET .../[id]로 따로 받아온다
+  // (lib/store.ts ensureAgencyNoticeTemplateDetail). 그 전까지는 undefined.
+  content?: AgencyNoticeTemplate;
 }
 
 // ─── 수수료 청구서 템플릿 ──────────────────────────────────────

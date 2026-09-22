@@ -13,7 +13,7 @@ import {
   useStore, updateProject, addProjectIssue, updateProjectIssue, deleteProjectIssue, addTaxInvoice, updateTaxInvoice,
   addReceivable, updateReceivable, addEmailDispatch, updateEmailDispatch, updateTermFee, updateUnclaimedFee,
   updateProjectMember, autoGenerateTermFees, addProjectMember, deleteProjectMember, deleteProject, deleteProjectTerms,
-  setTermOtherFirmHandled, setTermBillingType, setTermDates, resolveProjectId,
+  setTermOtherFirmHandled, setTermBillingType, setTermDates, resolveProjectId, ensureAgencyNoticeTemplateDetail,
 } from "@/lib/store";
 import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type EmailDispatch, type FeePolicy, type AnnualFinancials, type FundingAgency, EMPTY_NOTICE_TEMPLATE } from "@/lib/mock";
 import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveMemberLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveAgencyAssignedAtForTerm, resolveInternalAssignedAtForTerm, resolveProjectDivision, resolveProjectCodeForTerm, resolveStageNumberForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, MEMBER_ROLE_LABEL, type CalcMember } from "@/lib/fee-calculator";
@@ -4758,6 +4758,12 @@ function SettlementNoticeModal({
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
   const [sendError, setSendError] = useState("");
+
+  // 목록 조회는 템플릿 content(공문 서식 전체)를 빼고 받아온다(성능) — 이 모달이 열려 실제로
+  // 미리보기·발송에 쓸 시점에 후보 템플릿들의 전체 내용을 미리 받아둔다.
+  useEffect(() => {
+    for (const t of templates) ensureAgencyNoticeTemplateDetail(t.id);
+  }, [templates]);
 
   const selectedTemplate = templates.find((t) => t.id === templateId) ?? templates[0];
   // 문의사항 연락처의 "과제담당(정)/(부)" 행은 템플릿 기본값이 아니라 이 과제에 지정된 담당자
