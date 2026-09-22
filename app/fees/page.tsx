@@ -119,6 +119,9 @@ type FeeRow = {
   assignedManager: string;
   assignedManagerPrimary: string;
   registeredAt: string;
+  // 실제 생성 시각(ISO) — "업로드순" 정렬에서 registeredAt(날짜만, 사용자가 고칠 수 있음)이 같은
+  // 행끼리 실제 업로드 순서로 가르는 데만 쓴다. compareFeeRows 참고.
+  createdAt: string;
   // 매출 발행
   projectId: string;
   leadInstitutionId: string;
@@ -1763,6 +1766,7 @@ function useFeeRows(): FeeRow[] {
           assignedManager:     project ? resolveAssignedManagerForTerm(project, f0.termNumber) : "",
           assignedManagerPrimary: project ? resolveAssignedManagerPrimaryForTerm(project, f0.termNumber) : "",
           registeredAt:        project?.registeredAt ?? "",
+          createdAt:           project?.createdAt ?? "",
           taxInvoiceId:        invoice?.id ?? "",
           taxInvoiceStatus:    invoice?.status ?? "",
           appliedFeeTotal,
@@ -1836,6 +1840,7 @@ function useFeeRows(): FeeRow[] {
         assignedManager: resolveAssignedManagerForTerm(project, project.currentTerm),
         assignedManagerPrimary: resolveAssignedManagerPrimaryForTerm(project, project.currentTerm),
         registeredAt: project.registeredAt ?? "",
+        createdAt: project.createdAt ?? "",
         taxInvoiceId: "",
         taxInvoiceStatus: "",
         appliedFeeTotal: 0,
@@ -1898,6 +1903,10 @@ function compareFeeRows(a: FeeRow, b: FeeRow, sortBy: FeesFilters["sortBy"]): nu
   let primary = 0;
   if (sortBy === "REGISTERED") {
     primary = (b.registeredAt || "").localeCompare(a.registeredAt || "");
+    // registeredAt은 날짜만 있고 사용자가 직접 고칠 수도 있어(등록일/배정일), 같은 날짜끼리는
+    // 과제번호가 아니라 실제 생성 시각(createdAt)으로 갈라야 방금 업로드한 과제가 그날의 다른
+    // 과제들보다 항상 위에 온다.
+    if (primary === 0) primary = (b.createdAt || "").localeCompare(a.createdAt || "");
   } else if (sortBy === "AGENCY_ASSIGNED") {
     primary = (b.agencyAssignedAt || "").localeCompare(a.agencyAssignedAt || "");
   } else {

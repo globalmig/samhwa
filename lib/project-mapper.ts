@@ -1,9 +1,6 @@
 import type { Project as PrismaProject } from "@prisma/client";
 import type { Project } from "./mock";
-
-function toDateStr(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
+import { toKSTDateStr } from "./utils";
 
 export function toProject(p: PrismaProject): Project {
   const extra = p.extraData ? (JSON.parse(p.extraData) as Record<string, unknown>) : {};
@@ -51,6 +48,7 @@ export function toProject(p: PrismaProject): Project {
     assignedManager: (extra.assignedManager as string) ?? undefined,
     assignedManagerHistory: (extra.assignedManagerHistory as Project["assignedManagerHistory"]) ?? undefined,
     assignedManagerUserId: (extra.assignedManagerUserId as string) ?? undefined,
-    registeredAt: toDateStr(p.createdAt),
+    registeredAt: toKSTDateStr(p.createdAt),
+    createdAt: p.createdAt.toISOString(),
   };
 }

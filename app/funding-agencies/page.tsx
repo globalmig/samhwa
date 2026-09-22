@@ -519,13 +519,14 @@ function AgencyForm({
 function DetailModal({ agency, projects, termFees, feePolicies, onClose }: {
   agency: FundingAgency;
   projects: { id: string; projectName: string; projectNumber: string; status: string; currentTerm: number; totalTerms: number }[];
-  termFees: { projectNumber: string; appliedFee: number; status: string }[];
+  termFees: { projectNumber: string; appliedFee: number; status: string; otherFirmHandled?: boolean }[];
   feePolicies: FeePolicy[];
   onClose: () => void;
 }) {
   const agencyProjects = projects.filter((p) => (p as unknown as { agencyId: string }).agencyId === agency.id);
   const agencyProjectNumbers = new Set(agencyProjects.map((p) => p.projectNumber));
-  const agencyFees = termFees.filter((f) => agencyProjectNumbers.has(f.projectNumber));
+  // [수수료청구관리]의 appliedFeeTotal과 동일하게 타회계법인 처리분(otherFirmHandled)은 제외한다.
+  const agencyFees = termFees.filter((f) => agencyProjectNumbers.has(f.projectNumber) && !f.otherFirmHandled);
   const totalFee = agencyFees.reduce((s, f) => s + f.appliedFee, 0);
   const billedFee = agencyFees.filter((f) => f.status === "BILLED").reduce((s, f) => s + f.appliedFee, 0);
   const ownPolicy = feePolicies.find((p) => p.agencyId === agency.id && p.status === "ACTIVE");
@@ -637,7 +638,10 @@ export default function FundingAgenciesPage() {
     return fundingAgencies.map((agency) => {
       const agencyProjects = projects.filter((p) => (p as unknown as { agencyId: string }).agencyId === agency.id);
       const nums = new Set(agencyProjects.map((p) => p.projectNumber));
-      const fees = termFees.filter((f) => nums.has(f.projectNumber));
+      // 타회계법인이 진행한(otherFirmHandled) 연차는 삼화가 청구할 금액이 아니므로 [수수료청구관리]의
+      // appliedFeeTotal 계산과 동일하게 합계·청구완료 모두에서 제외한다 — 안 그러면 이 페이지의
+      // 수수료합계/청구완료가 [수수료청구관리]보다 항상 더 크게 나온다.
+      const fees = termFees.filter((f) => nums.has(f.projectNumber) && !f.otherFirmHandled);
       return {
         id: agency.id,
         projectCount: agencyProjects.length,

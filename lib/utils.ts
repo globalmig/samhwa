@@ -51,7 +51,13 @@ export function formatKST(d: Date, withSeconds = false): string {
 // 날짜만 필요한 자리(등록일·발행일·오늘 날짜 비교 등)도 같은 이유로 자정~오전 9시 사이엔
 // 하루 전 날짜로 밀리는 문제가 있었다 — 위 nowKST()와 같은 기준으로 "YYYY-MM-DD"만 반환.
 export function todayKST(): string {
-  const { y, mo, da } = kstParts(new Date());
+  return toKSTDateStr(new Date());
+}
+
+/** 서버에서 받아온 임의의 Date(예: DB의 createdAt)를 "YYYY-MM-DD"(KST 기준)로 바꾼다.
+ *  toISOString().slice(0,10)은 UTC 날짜라 자정~오전 9시 사이엔 하루 전 날짜로 잘못 나온다. */
+export function toKSTDateStr(d: Date): string {
+  const { y, mo, da } = kstParts(d);
   return `${y}-${mo}-${da}`;
 }
 

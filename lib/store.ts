@@ -996,7 +996,7 @@ export function addProject(data: Omit<Project, "id">): Project {
   const projectCode = data.projectCode ?? nextTermCode();
   const termCodes = data.termCodes ?? [{ termNumber: 1, code: projectCode }];
   const tempId = genId("p");
-  const item: Project = { registeredAt: todayKST(), ...data, projectCode, termCodes, id: tempId };
+  const item: Project = { registeredAt: todayKST(), createdAt: new Date().toISOString(), ...data, projectCode, termCodes, id: tempId };
   _state = { ..._state, projects: [..._state.projects, item] };
   record("project", tempId, item.projectName, "CREATE");
   ensureLeadMember(item);

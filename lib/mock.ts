@@ -601,7 +601,10 @@ export interface Project {
   assignedManager?: string;
   assignedManagerHistory?: { termNumber: number; assignedManager: string }[];
   assignedManagerUserId?: string; // 동명이인 해소용 — assignedManagerPrimaryUserId와 동일한 용도(부담당자)
-  registeredAt?: string;    // 과제 등록일 — 연도별 대시보드 집계 기준(배정일). 과거 데이터는 미입력일 수 있음
+  registeredAt?: string;    // 과제 등록일 — 연도별 대시보드 집계 기준(배정일). 사용자가 직접 고칠 수 있는
+                             // "날짜만" 값이라 실제 업로드/생성 순서를 보장하지 않는다 — 그 용도는 createdAt 참고.
+  createdAt?: string;       // 실제 생성 시각(ISO, 서버가 채움) — 수수료탭 "업로드순" 정렬에서 같은 registeredAt끼리
+                             // 순서를 가르는 데만 쓴다. 화면 표시/수정 대상이 아니다. 과거 데이터는 없을 수 있음.
 }
 
 export const projects: Project[] = [
