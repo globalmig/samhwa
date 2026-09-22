@@ -6,6 +6,53 @@ import { prisma } from "./db";
 const SESSION_COOKIE = "samhwa_session";
 const SESSION_DAYS = 7;
 
+// ============================================================
+// 세션 사용자 짧은 TTL 캐시
+// ============================================================
+// react의 cache()는 같은 서버 요청 안에서만 중복 조회를 막아준다 — 브라우저가 페이지 하나를 열며
+// 쏘는 수십 개의 개별 API fetch(lib/store.ts의 hydrateXxx들)는 각각 별도 요청이라 매번 이 DB
+// 조회가 새로 실행돼, 대시보드처럼 fetch가 몰리는 화면에서 세션 확인만으로 DB 왕복이 수십 번
+// 쌓이는 게 로딩 지연의 큰 원인이었다. userId 기준으로 최근 조회 결과를 프로세스 메모리에 잠깐
+// 들고 있다가 재사용한다 — sessionVersion 비교(정지·비밀번호 변경·권한 변경 시 즉시 로그아웃)는
+// 여전히 매 호출 JWT 클레임과 비교하므로 안전하지만, 그 판단에 쓰는 DB 쪽 user.status/
+// sessionVersion 값 자체가 최대 SESSION_USER_CACHE_TTL_MS만큼 최신이 아닐 수 있다 — 즉 관리자가
+// 계정을 정지하거나 권한을 바꿔도 이 시간만큼은 기존 세션이 유효한 것처럼 보일 수 있다(기존엔
+// 즉시 반영이었음, 위 주석 및 lib/db.ts의 globalForPrisma 패턴과 동일한 이유로 dev HMR에도
+// 캐시가 초기화되지 않도록 globalThis에 보관).
+const SESSION_USER_CACHE_TTL_MS = 5000;
+
+interface CachedSessionUser {
+  id: string;
+  email: string;
+  role: string;
+  status: string;
+  sessionVersion: number;
+}
+
+interface SessionUserCacheEntry {
+  user: CachedSessionUser | null;
+  expiresAt: number;
+}
+
+const globalForSession = globalThis as unknown as { sessionUserCache?: Map<string, SessionUserCacheEntry> };
+const _sessionUserCache: Map<string, SessionUserCacheEntry> = globalForSession.sessionUserCache ?? new Map();
+if (process.env.NODE_ENV !== "production") {
+  globalForSession.sessionUserCache = _sessionUserCache;
+}
+
+async function getCachedSessionUser(userId: string): Promise<CachedSessionUser | null> {
+  const now = Date.now();
+  const cached = _sessionUserCache.get(userId);
+  if (cached && cached.expiresAt > now) return cached.user;
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, email: true, role: true, status: true, sessionVersion: true },
+  });
+  _sessionUserCache.set(userId, { user, expiresAt: now + SESSION_USER_CACHE_TTL_MS });
+  return user;
+}
+
 function secretKey() {
   const secret = process.env.JWT_SECRET;
   if (!secret) throw new Error("JWT_SECRET 환경변수가 설정되지 않았습니다.");
@@ -71,7 +118,7 @@ export const getSessionUser = cache(async (): Promise<SessionPayload | null> => 
   const claims = await verifySessionClaims();
   if (!claims) return null;
 
-  const user = await prisma.user.findUnique({ where: { id: claims.userId } });
+  const user = await getCachedSessionUser(claims.userId);
   if (!user || user.status !== "ACTIVE") return null;
   if (user.sessionVersion !== claims.sessionVersion) return null;
 

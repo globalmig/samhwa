@@ -217,8 +217,63 @@ export function getStoreState(): StoreState {
   return _state;
 }
 
+// 새로고침마다 20개 넘는 API를 처음부터 다시 받아오느라 화면이 한동안 텅 비어 보이는 문제 — 매번
+// _state 전체를 세션스토리지에 스냅샷으로 남겨두고, 다음 로드 때 hydrate*()가 끝나길 기다리지 않고
+// 그 스냅샷으로 즉시 채운 뒤(이번 탭 안에서 새로고침해도 안 사라짐 — 탭을 닫으면 sessionStorage
+// 자체가 사라지므로 오래 묵은 값이 계속 남는 걱정은 없다), 아래 hydrate*() 호출들은 지금까지와
+// 동일하게 그대로 실행되어 서버의 최신 값으로 각자 자기 슬롯을 덮어쓴다(stale-while-revalidate) —
+// 그래서 hydrate 쪽 코드는 단 한 줄도 손댈 필요가 없다. 버전 접미사는 StoreState 모양이 크게
+// 바뀌었을 때 옛 스냅샷을 그냥 무시하게 하려는 용도(신 코드가 구 버전 키를 찾지 못해 빈 상태로
+// 시작 → 정상적으로 hydrate가 채움).
+const STORE_CACHE_KEY = "samhwa-store-cache-v1";
+let _persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+function restoreFromCache(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const raw = sessionStorage.getItem(STORE_CACHE_KEY);
+    if (!raw) return;
+    const cached = JSON.parse(raw) as Partial<StoreState>;
+    _state = { ..._state, ...cached };
+  } catch (err) {
+    console.warn("store 캐시 복원 실패 — 무시하고 서버에서 새로 받아옵니다.", err);
+  }
+}
+restoreFromCache();
+
+// notify()가 워낙 자주 불려서(최초 로딩 중 hydrate*()들이 연달아 끝날 때마다, 이후엔 사용자
+// 조작마다) 매번 그 자리에서 바로 저장하면 큰 배열을 가진 슬롯이 여러 번 연속으로 바뀔 때
+// JSON.stringify를 낭비적으로 반복하게 된다 — 짧게 묶어서(디바운스) 마지막 한 번만 저장한다.
+function schedulePersist(): void {
+  if (typeof window === "undefined") return;
+  if (_persistTimer !== null) clearTimeout(_persistTimer);
+  _persistTimer = setTimeout(() => {
+    _persistTimer = null;
+    try {
+      sessionStorage.setItem(STORE_CACHE_KEY, JSON.stringify(_state));
+    } catch (err) {
+      // 용량 초과(사용자가 세션 중 데이터를 아주 많이 쌓은 경우) 등으로 실패해도 캐싱만 조용히
+      // 포기한다 — 다음 새로고침이 hydrate로 전부 다시 받아오는, 지금까지의 기존 동작으로 돌아갈 뿐
+      // 화면 동작 자체엔 영향 없다.
+      console.warn("store 캐시 저장 실패 — 다음 새로고침에서 서버에서 다시 받아옵니다.", err);
+    }
+  }, 500);
+}
+
+// 로그아웃 시 lib/auth.ts의 logout()이 호출한다 — 공용 컴퓨터에서 로그아웃 후 다른 사람이 로그인해도
+// 방금 사람의 업무 데이터(수수료·미수금 등)가 캐시로 잠깐이라도 남아있지 않게 확실히 지운다.
+export function clearStoreCache(): void {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.removeItem(STORE_CACHE_KEY);
+  } catch {
+    // 무시 — 어차피 이 값은 "있으면 더 빠르게 보여주는" 용도일 뿐 필수 상태가 아니다.
+  }
+}
+
 function notify(): void {
   _listeners.forEach((l) => l());
+  schedulePersist();
 }
 
 let _idSeq = 0;

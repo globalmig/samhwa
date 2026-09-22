@@ -7,7 +7,16 @@ import type { TermFee } from "@/lib/mock";
 
 export const runtime = "nodejs";
 
-const INCLUDE = { projectTermInstitution: { include: { projectTerm: { include: { project: true } }, institution: true } } } as const;
+// project/institution은 toTermFee(lib/term-fee-mapper.ts)가 실제로 쓰는 필드만 select한다 —
+// project 전체(특히 extraData)를 매 행마다 통째로 끌고 오면 연차수수료가 쌓일수록 이 API가 느려진다.
+const INCLUDE = {
+  projectTermInstitution: {
+    include: {
+      projectTerm: { include: { project: { select: { projectNumber: true, projectName: true } } } },
+      institution: { select: { institutionName: true, institutionType: true } },
+    },
+  },
+} as const;
 
 const MOCK_TO_DB_STATUS: Record<string, string> = { SCHEDULED: "DRAFT", DRAFT: "DRAFT", CONFIRMED: "CONFIRMED", BILLED: "BILLED" };
 

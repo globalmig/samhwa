@@ -1,10 +1,13 @@
 import type { Settlement as PrismaSettlement, ProjectTermInstitution, ProjectTerm, Project as PrismaProject, Institution as PrismaInstitution } from "@prisma/client";
 import type { Settlement } from "./mock";
 
+// project/institution은 실제로 쓰는 필드(아래 toSettlement 참고)만 좁혀서 select한다 — project의
+// extraData(NVarChar(Max), 연차별 이력이 쌓인 JSON)까지 매 행마다 통째로 끌고 오면 정산이 쌓일수록
+// 이 API가 느려진다.
 export type SettlementWithRelations = PrismaSettlement & {
   projectTermInstitution: ProjectTermInstitution & {
-    projectTerm: ProjectTerm & { project: PrismaProject };
-    institution: PrismaInstitution;
+    projectTerm: ProjectTerm & { project: Pick<PrismaProject, "projectNumber" | "projectName"> };
+    institution: Pick<PrismaInstitution, "institutionName">;
   };
 };
 

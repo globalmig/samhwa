@@ -6,7 +6,17 @@ import type { Receivable } from "@/lib/mock";
 
 export const runtime = "nodejs";
 
-const INCLUDE = { projectTermInstitution: { include: { projectTerm: { include: { project: true } }, institution: true } }, paymentHistories: true } as const;
+// project/institution은 toReceivable(lib/receivable-mapper.ts)이 실제로 쓰는 필드만 select한다 —
+// project 전체(특히 extraData)를 매 행마다 통째로 끌고 오면 채권이 쌓일수록 이 API가 느려진다.
+const INCLUDE = {
+  projectTermInstitution: {
+    include: {
+      projectTerm: { include: { project: { select: { projectNumber: true, projectName: true } } } },
+      institution: { select: { institutionName: true } },
+    },
+  },
+  paymentHistories: true,
+} as const;
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -30,7 +40,11 @@ export async function PATCH(request: Request, { params }: Params) {
   const before = await prisma.receivable.findUnique({ where: { id }, include: INCLUDE });
   if (!before) return Response.json({ ok: false, error: "미수금을 찾을 수 없습니다." }, { status: 404 });
 
-  const invMap = new Map((await prisma.taxInvoice.findMany({ select: { projectTermInstitutionId: true, invoiceNumber: true } })).map((i) => [i.projectTermInstitutionId, i.invoiceNumber]));
+  // tax_invoices 테이블 전체가 아니라 이 채권과 같은 참여기관(PTI) 것 하나만 조회한다.
+  const invMap = new Map((await prisma.taxInvoice.findMany({
+    where: { projectTermInstitutionId: before.projectTermInstitutionId },
+    select: { projectTermInstitutionId: true, invoiceNumber: true },
+  })).map((i) => [i.projectTermInstitutionId, i.invoiceNumber]));
 
   const updated = await prisma.$transaction(async (tx) => {
     const row = await tx.receivable.update({

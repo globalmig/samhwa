@@ -2,6 +2,7 @@
 
 import { useSyncExternalStore } from "react";
 import { type SystemUser } from "./mock";
+import { clearStoreCache } from "./store";
 
 export interface AuthState {
   user: SystemUser | null;
@@ -56,6 +57,9 @@ export async function logout() {
   } catch {}
   _state = { user: null, isLoading: false };
   notify();
+  // 공용 컴퓨터에서 로그아웃 후 다음 사람이 로그인해도 방금 사람의 업무 데이터(수수료·미수금 등)가
+  // 세션 캐시로 잠깐이라도 남아있지 않게 지운다 — lib/store.ts 참고.
+  clearStoreCache();
 }
 
 export function getCurrentUser(): SystemUser | null {

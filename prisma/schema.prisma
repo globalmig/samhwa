@@ -651,6 +651,7 @@ model Receivable {
 
   @@index([claimId], name: "idx_receivables_claim_id")
   @@index([status], name: "idx_receivables_status")
+  @@index([projectTermInstitutionId], name: "idx_receivables_pti_id")
   @@map("receivables")
 }
 

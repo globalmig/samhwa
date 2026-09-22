@@ -7,10 +7,26 @@ import type { Receivable } from "@/lib/mock";
 
 export const runtime = "nodejs";
 
-const INCLUDE = { projectTermInstitution: { include: { projectTerm: { include: { project: true } }, institution: true } }, paymentHistories: true } as const;
+// project/institution은 toReceivable(lib/receivable-mapper.ts)이 실제로 쓰는 필드만 select한다 —
+// project 전체(특히 extraData)를 매 행마다 통째로 끌고 오면 채권이 쌓일수록 이 API가 느려진다.
+const INCLUDE = {
+  projectTermInstitution: {
+    include: {
+      projectTerm: { include: { project: { select: { projectNumber: true, projectName: true } } } },
+      institution: { select: { institutionName: true } },
+    },
+  },
+  paymentHistories: true,
+} as const;
 
-async function invoiceNumberMap(): Promise<Map<string, string>> {
-  const invoices = await prisma.taxInvoice.findMany({ select: { projectTermInstitutionId: true, invoiceNumber: true } });
+// tax_invoices 테이블 전체를 훑지 않고, 지금 응답에 실제로 필요한 PTI(참여기관 단위) 몇 개만
+// 조회한다 — 세금계산서가 쌓일수록 채권 목록 조회 때마다 전체를 스캔하던 비용이 사라진다.
+async function invoiceNumberMap(ptiIds: string[]): Promise<Map<string, string>> {
+  if (ptiIds.length === 0) return new Map();
+  const invoices = await prisma.taxInvoice.findMany({
+    where: { projectTermInstitutionId: { in: ptiIds } },
+    select: { projectTermInstitutionId: true, invoiceNumber: true },
+  });
   return new Map(invoices.map((i) => [i.projectTermInstitutionId, i.invoiceNumber]));
 }
 
@@ -22,7 +38,7 @@ export async function GET() {
     throw err;
   }
   const rows = await prisma.receivable.findMany({ include: INCLUDE });
-  const invMap = await invoiceNumberMap();
+  const invMap = await invoiceNumberMap(rows.map((r) => r.projectTermInstitutionId));
   return Response.json({ ok: true, receivables: rows.map((r) => toReceivable(r, invMap)) });
 }
 
@@ -56,7 +72,7 @@ export async function POST(request: Request) {
   // "신규 생성" 경로를 다시 타도 중복 채권이 쌓이지 않도록 막는 방어선이다.
   const existing = await prisma.receivable.findFirst({ where: { projectTermInstitutionId: ptiId }, include: INCLUDE });
   if (existing) {
-    const invMap = await invoiceNumberMap();
+    const invMap = await invoiceNumberMap([ptiId]);
     return Response.json({ ok: true, receivable: toReceivable(existing, invMap) });
   }
 
@@ -97,6 +113,6 @@ export async function POST(request: Request) {
     return row;
   });
 
-  const invMap = await invoiceNumberMap();
+  const invMap = await invoiceNumberMap([ptiId]);
   return Response.json({ ok: true, receivable: toReceivable(created, invMap) });
 }

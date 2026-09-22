@@ -6,7 +6,16 @@ import type { TaxInvoice } from "@/lib/mock";
 
 export const runtime = "nodejs";
 
-const INCLUDE = { projectTermInstitution: { include: { projectTerm: { include: { project: true } }, institution: true } } } as const;
+// project/institution은 toTaxInvoice(lib/tax-invoice-mapper.ts)가 실제로 쓰는 필드만 select한다 —
+// project 전체(특히 extraData)를 매 행마다 통째로 끌고 오면 세금계산서가 쌓일수록 이 API가 느려진다.
+const INCLUDE = {
+  projectTermInstitution: {
+    include: {
+      projectTerm: { include: { project: { select: { projectNumber: true, projectName: true } } } },
+      institution: { select: { institutionName: true } },
+    },
+  },
+} as const;
 
 type Params = { params: Promise<{ id: string }> };
 
