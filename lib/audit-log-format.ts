@@ -58,6 +58,8 @@ export const FIELD_LABELS: Record<string, string> = {
   inKindBudget:        "현물사업비",
   assignedManagerHistory: "연차별 담당자(부)",
   assignedManagerPrimaryHistory: "연차별 담당자(정)",
+  agencyAssignedAtHistory: "연차별 전담기관배정일",
+  internalAssignedAtHistory: "연차별 내부배정일",
   assignedManagerUserId: "과제담당자(부) 계정",
   assignedManagerPrimaryUserId: "과제담당자(정) 계정",
   exemptRefGrade:      "참고 면제등급",
@@ -221,6 +223,8 @@ const TERM_OVERRIDE_VALUE_KEY: Record<string, string> = {
   gradeOverrides: "grade",
   settlementTypeOverrides: "settlementType",
   assignedManagerHistory: "assignedManager",
+  agencyAssignedAtHistory: "agencyAssignedAt",
+  internalAssignedAtHistory: "internalAssignedAt",
 };
 
 // subjectLabel(예: 기관명)을 넘기면 "삼화전자(주): 1연차부터 자체정산으로 변경"처럼 문장 앞에 붙여준다 —

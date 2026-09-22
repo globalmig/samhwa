@@ -544,8 +544,13 @@ export interface Project {
   // 원소와 항상 같은 값으로 유지된다(둘 다 업데이트). 다른 연차를 조회할 때만 이 배열을 쓴다.
   annualFinancials?: AnnualFinancials[];
   usageReportDeadline?: string;  // 사용실적 제출기한
-  agencyAssignedAt?: string;     // 전담기관 배정일자
-  internalAssignedAt?: string;   // 내부 배정일
+  agencyAssignedAt?: string;     // 전담기관 배정일자 — 현재 진행연차(currentTerm) 기준값
+  // 연차별 전담기관 배정일 이력 — 전담기관이 매 연차 사업비를 배정할 때마다 새로 통지하는 값이라
+  // assignedManager(과제담당자)처럼 연차마다 서로 다른 게 정상이다. 오버라이드가 없는 연차는
+  // agencyAssignedAt(기본값)을 쓴다 — resolveAgencyAssignedAtForTerm(fee-calculator.ts) 참고.
+  agencyAssignedAtHistory?: { termNumber: number; agencyAssignedAt: string }[];
+  internalAssignedAt?: string;   // 내부 배정일 — 현재 진행연차(currentTerm) 기준값
+  internalAssignedAtHistory?: { termNumber: number; internalAssignedAt: string }[];
   projectCategory?: string;      // 과제 구분
   researchLead?: string;         // 연구책임자
   // 책임자 이메일 — 연구책임자(researchLead)의 연락처. 공문 발송 시 실무자와 구분해서 쓴다:

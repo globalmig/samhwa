@@ -109,6 +109,27 @@ export function resolveAssignedManagerPrimaryForTerm(
   return override?.assignedManagerPrimary ?? project.assignedManagerPrimary ?? "";
 }
 
+// ─── 연차별 전담기관/내부 배정일 조회 ─────────────────────────────────
+// 전담기관 배정일은 전담기관이 연차마다 새로 통지하는 값이라 연차 중간(사실상 매 연차)에 달라질 수
+// 있어, 연차별 이력이 있으면(agencyAssignedAtHistory/internalAssignedAtHistory) 그 연차 값을 쓰고,
+// 없으면 agencyAssignedAt/internalAssignedAt(현재 진행연차 기준값)을 그대로 쓴다 —
+// resolveAssignedManagerForTerm과 동일한 규칙.
+export function resolveAgencyAssignedAtForTerm(
+  project: Pick<Project, "agencyAssignedAt" | "agencyAssignedAtHistory">,
+  termNumber: number,
+): string {
+  const override = project.agencyAssignedAtHistory?.find((h) => h.termNumber === termNumber);
+  return override?.agencyAssignedAt ?? project.agencyAssignedAt ?? "";
+}
+
+export function resolveInternalAssignedAtForTerm(
+  project: Pick<Project, "internalAssignedAt" | "internalAssignedAtHistory">,
+  termNumber: number,
+): string {
+  const override = project.internalAssignedAtHistory?.find((h) => h.termNumber === termNumber);
+  return override?.internalAssignedAt ?? project.internalAssignedAt ?? "";
+}
+
 // ─── 기본값 변경 시 이미 만들어진 연차로 소급 방지 ─────────────────────
 // 실무자·책임자 연락처처럼 "오버라이드가 없는 모든 연차의 기본값" 역할을 겸하는 필드는, 기본값 자체를
 // 새 값으로 바꾸면 그 순간부터 오버라이드 없는 모든 연차가 한꺼번에 새 값으로 바뀌어버린다 — 새

@@ -55,7 +55,7 @@ import { applyManagerContactRows } from "@/lib/notice-contacts";
 import { useCanWrite } from "@/lib/permissions";
 import { getCurrentUser } from "@/lib/auth";
 import { isOverdueByRule } from "@/lib/notifications";
-import { resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveMemberLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, MEMBER_ROLE_LABEL } from "@/lib/fee-calculator";
+import { resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveMemberLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveAgencyAssignedAtForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, MEMBER_ROLE_LABEL } from "@/lib/fee-calculator";
 
 // 여러 이메일 문자열(각각 콤마 구분일 수 있음)을 하나로 합치고 중복을 제거한다 — 정산절차 안내
 // 공문은 책임자(researchLeadEmail)+실무자(recipientEmail) 두 필드를 합쳐서 기본 수신자로 쓴다.
@@ -1760,7 +1760,7 @@ function useFeeRows(): FeeRow[] {
           receivableAmount:    activeRv?.receivableAmount ?? 0,
           unclaimedAmount:     ucRecord?.amount ?? 0,
           projectCode:         project ? (resolveProjectCodeForTerm(project, f0.termNumber) || project.projectCode || "") : "",
-          agencyAssignedAt:    project?.agencyAssignedAt ?? "",
+          agencyAssignedAt:    project ? resolveAgencyAssignedAtForTerm(project, f0.termNumber) : "",
           docFeeId:            docOwner?.id ?? "",
           docRequestDate:      docOwner?.docRequestDate ?? "",
           docReplyDate:        docOwner?.docReplyDate ?? "",
@@ -1834,7 +1834,7 @@ function useFeeRows(): FeeRow[] {
         receivableAmount: 0,
         unclaimedAmount: 0,
         projectCode: resolveProjectCodeForTerm(project, project.currentTerm) || project.projectCode || "",
-        agencyAssignedAt: project.agencyAssignedAt ?? "",
+        agencyAssignedAt: resolveAgencyAssignedAtForTerm(project, project.currentTerm),
         docFeeId: "",
         docRequestDate: "",
         docReplyDate: "",

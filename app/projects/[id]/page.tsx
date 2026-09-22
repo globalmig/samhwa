@@ -16,7 +16,7 @@ import {
   setTermOtherFirmHandled, setTermBillingType, setTermDates, resolveProjectId,
 } from "@/lib/store";
 import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type EmailDispatch, type FeePolicy, type AnnualFinancials, type FundingAgency, EMPTY_NOTICE_TEMPLATE } from "@/lib/mock";
-import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveMemberLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveProjectDivision, resolveProjectCodeForTerm, resolveStageNumberForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, MEMBER_ROLE_LABEL, type CalcMember } from "@/lib/fee-calculator";
+import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveMemberLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveAgencyAssignedAtForTerm, resolveInternalAssignedAtForTerm, resolveProjectDivision, resolveProjectCodeForTerm, resolveStageNumberForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, MEMBER_ROLE_LABEL, type CalcMember } from "@/lib/fee-calculator";
 import { fmtWonFull, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange, nowKST, todayKST, computeOverallDatesFromStages } from "@/lib/utils";
 import { fmtValue, fieldLabel, describeOverrideChange } from "@/lib/audit-log-format";
 import StatusBadge from "@/components/common/StatusBadge";
@@ -523,6 +523,22 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
           { termNumber: draft.currentTerm, assignedManagerPrimary: draft.assignedManagerPrimary },
         ].sort((a, b) => a.termNumber - b.termNumber)
       : draft.assignedManagerPrimaryHistory;
+    // 전담기관/내부 배정일도 담당자와 동일하게, 당해(draft.currentTerm) 값을 직접 수정했을 수 있으니
+    // 연차별 이력(agencyAssignedAtHistory/internalAssignedAtHistory)도 함께 갱신한다.
+    const agencyAssignedAtChanged = (draft.agencyAssignedAt ?? "") !== (project!.agencyAssignedAt ?? "");
+    const agencyAssignedAtHistory = draft.agencyAssignedAt && agencyAssignedAtChanged
+      ? [
+          ...(draft.agencyAssignedAtHistory ?? []).filter((h) => h.termNumber !== draft.currentTerm),
+          { termNumber: draft.currentTerm, agencyAssignedAt: draft.agencyAssignedAt },
+        ].sort((a, b) => a.termNumber - b.termNumber)
+      : draft.agencyAssignedAtHistory;
+    const internalAssignedAtChanged = (draft.internalAssignedAt ?? "") !== (project!.internalAssignedAt ?? "");
+    const internalAssignedAtHistory = draft.internalAssignedAt && internalAssignedAtChanged
+      ? [
+          ...(draft.internalAssignedAtHistory ?? []).filter((h) => h.termNumber !== draft.currentTerm),
+          { termNumber: draft.currentTerm, internalAssignedAt: draft.internalAssignedAt },
+        ].sort((a, b) => a.termNumber - b.termNumber)
+      : draft.internalAssignedAtHistory;
     // 책임자(연구책임자) 이름·이메일은 지금 보고 있는 연차 탭(viewTerm) 기준으로 저장한다(위 useEffect가
     // 탭을 바꿀 때마다 draft를 그 연차 값으로 다시 채워두므로, 여기서 그대로 그 연차의 값으로 쓴다).
     // ??로 undefined일 때만 ""로 채운다 — 그대로 두면 resolveResearchLeadForTerm의 override?.email ??
@@ -567,6 +583,8 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       annualFinancials,
       assignedManagerPrimaryHistory,
       assignedManagerHistory,
+      agencyAssignedAtHistory,
+      internalAssignedAtHistory,
       researchLead: nextResearchLead,
       researchLeadEmail: nextResearchLeadEmail,
       researchLeadOverrides,
@@ -651,6 +669,14 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
   const viewAssignedManagerPrimary = isCurrentTermFinancials
     ? (draft.assignedManagerPrimary ?? "")
     : resolveAssignedManagerPrimaryForTerm(project, viewTerm);
+  // 전담기관/내부 배정일도 담당자와 동일한 규칙 — 전담기관이 매 연차 새로 통지하는 값이라
+  // agencyAssignedAtHistory/internalAssignedAtHistory에 연차별로 쌓인다.
+  const viewAgencyAssignedAt = isCurrentTermFinancials
+    ? (draft.agencyAssignedAt ?? "")
+    : resolveAgencyAssignedAtForTerm(project, viewTerm);
+  const viewInternalAssignedAt = isCurrentTermFinancials
+    ? (draft.internalAssignedAt ?? "")
+    : resolveInternalAssignedAtForTerm(project, viewTerm);
 
   const totalCashBudget = members.reduce((s, m) => s + getMemberBudgetVal(m, "cashBudget"), 0);
   const totalInKindBudget = members.reduce((s, m) => s + getMemberBudgetVal(m, "inKindBudget"), 0);
@@ -1019,9 +1045,20 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 )}
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">전담기관 배정일자</label>
-                <DateInput className="w-full" value={draft.agencyAssignedAt ?? ""}
-                  onChange={(v) => setDraft((p) => ({ ...p, agencyAssignedAt: v }))} />
+                <label className="block text-xs font-medium text-slate-500 mb-1">
+                  전담기관 배정일자
+                  {!isCurrentTermFinancials && (
+                    <span className="ml-1 text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{viewTerm}연차 기준 · 읽기전용</span>
+                  )}
+                </label>
+                {isCurrentTermFinancials ? (
+                  <DateInput className="w-full" value={draft.agencyAssignedAt ?? ""}
+                    onChange={(v) => setDraft((p) => ({ ...p, agencyAssignedAt: v }))} />
+                ) : (
+                  <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500">
+                    {viewAgencyAssignedAt ? fmtDate(viewAgencyAssignedAt) : "기록 없음"}
+                  </div>
+                )}
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">당해 현금사업비 (자동계산)</label>
@@ -1030,9 +1067,20 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">내부 배정일</label>
-                <DateInput className="w-full" value={draft.internalAssignedAt ?? ""}
-                  onChange={(v) => setDraft((p) => ({ ...p, internalAssignedAt: v }))} />
+                <label className="block text-xs font-medium text-slate-500 mb-1">
+                  내부 배정일
+                  {!isCurrentTermFinancials && (
+                    <span className="ml-1 text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">{viewTerm}연차 기준 · 읽기전용</span>
+                  )}
+                </label>
+                {isCurrentTermFinancials ? (
+                  <DateInput className="w-full" value={draft.internalAssignedAt ?? ""}
+                    onChange={(v) => setDraft((p) => ({ ...p, internalAssignedAt: v }))} />
+                ) : (
+                  <div className="w-full text-sm border border-slate-100 rounded-lg px-3 py-1.5 bg-slate-50 text-slate-500">
+                    {viewInternalAssignedAt ? fmtDate(viewInternalAssignedAt) : "기록 없음"}
+                  </div>
+                )}
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">당해 사업비 (자동계산)</label>

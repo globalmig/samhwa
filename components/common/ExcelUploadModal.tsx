@@ -41,6 +41,10 @@ import {
   resolveMemberSettlementTypeForTerm,
   resolveMemberRecipientForTerm,
   resolveResearchLeadForTerm,
+  resolveAssignedManagerForTerm,
+  resolveAssignedManagerPrimaryForTerm,
+  resolveAgencyAssignedAtForTerm,
+  resolveInternalAssignedAtForTerm,
 } from "@/lib/fee-calculator";
 import { resolveTermDateRange, nowKST, todayKST, formatBizNumber, splitVatInclusive, computeOverallDatesFromStages, isValidDateStr, computeCurrentTerm } from "@/lib/utils";
 import ManagerPickerModal from "@/components/common/ManagerPickerModal";
@@ -746,8 +750,13 @@ export interface ProjectScalarInfo {
   researchLeadEmailConflictTerms: Set<number>;
   isAutonomyTrack: boolean;
   projectCategories: Set<string>;    // 과제구분(연차상시/정산)
-  agencyAssignedAts: Set<string>;    // 전문기관배정일
-  internalAssignedAts: Set<string>;  // 내부배정일
+  agencyAssignedAts: Set<string>;    // 전문기관배정일 — 연차 구분 없이 관측된 모든 값(유일값 폴백용)
+  internalAssignedAts: Set<string>;  // 내부배정일 — 위와 동일한 용도의 폴백
+  // 전담기관 배정일도 담당자·연구책임자와 마찬가지로 인사이동이 아니라 "전담기관이 매 연차 새로
+  // 통지"하는 값이라 연차마다 다른 게 오히려 정상이다 — "연차별기관별" 시트의 termYear와 함께
+  // 연차별로 따로 모은다(researchLeadsByTerm과 동일한 방식).
+  agencyAssignedAtsByTerm: Map<number, string>;
+  internalAssignedAtsByTerm: Map<number, string>;
   // 총개발시작일자 — 신규 과제(아직 Project로 등록되지 않아 startDate를 알 수 없는 상태)에서
   // "엑셀 연차 vs 캘린더 계산 연차" 불일치를 미리보기 단계에서 미리 점검하는 데 쓴다. 최초시작일/
   // 최종종료일(Project.firstStartDate/finalEndDate)은 원칙적으로 단계별 실제 날짜(단계기관별 시트)
@@ -771,6 +780,7 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
         researchLeadsByTerm: new Map(), researchLeadEmailsByTerm: new Map(),
         researchLeadConflictTerms: new Set(), researchLeadEmailConflictTerms: new Set(),
         isAutonomyTrack: false, projectCategories: new Set(), agencyAssignedAts: new Set(), internalAssignedAts: new Set(),
+        agencyAssignedAtsByTerm: new Map(), internalAssignedAtsByTerm: new Map(),
         startDates: new Set(), endDates: new Set(),
       };
       map.set(normNum, info);
@@ -848,10 +858,22 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
       if (category) info.projectCategories.add(category.includes("정산") && !category.includes("연차") ? "정산" : "연차상시");
 
       const agencyAssignedAt = toDateStr(get("agencyAssignedAt", row));
-      if (agencyAssignedAt) info.agencyAssignedAts.add(agencyAssignedAt);
+      if (agencyAssignedAt) {
+        info.agencyAssignedAts.add(agencyAssignedAt);
+        if (sheet.def.key === "annual") {
+          const termNumber = parseInt(get("termYear", row), 10) || 0;
+          if (termNumber > 0) info.agencyAssignedAtsByTerm.set(termNumber, agencyAssignedAt);
+        }
+      }
 
       const internalAssignedAt = toDateStr(get("internalAssignedAt", row));
-      if (internalAssignedAt) info.internalAssignedAts.add(internalAssignedAt);
+      if (internalAssignedAt) {
+        info.internalAssignedAts.add(internalAssignedAt);
+        if (sheet.def.key === "annual") {
+          const termNumber = parseInt(get("termYear", row), 10) || 0;
+          if (termNumber > 0) info.internalAssignedAtsByTerm.set(termNumber, internalAssignedAt);
+        }
+      }
     }
   }
 
@@ -948,6 +970,26 @@ function buildAssignedManagerPrimaryHistory(
   if (!scalarInfo) return [];
   return Array.from(scalarInfo.assignedManagersPrimaryByTerm.entries())
     .map(([termNumber, assignedManagerPrimary]) => ({ termNumber, assignedManagerPrimary: applyManagerNameResolution(assignedManagerPrimary, resolutions, users) }))
+    .sort((a, b) => a.termNumber - b.termNumber);
+}
+
+// scalarInfo.agencyAssignedAtsByTerm/internalAssignedAtsByTerm(연차→배정일)을 Project.
+// agencyAssignedAtHistory/internalAssignedAtHistory 배열로 바꾼다 — buildAssignedManagerHistory와
+// 동일한 방식이지만 이름 해소(managerNameResolutions)가 필요 없는 단순 날짜값이라 그대로 옮긴다.
+type AgencyAssignedAtHistoryEntry = { termNumber: number; agencyAssignedAt: string };
+type InternalAssignedAtHistoryEntry = { termNumber: number; internalAssignedAt: string };
+
+function buildAgencyAssignedAtHistory(scalarInfo: ProjectScalarInfo | undefined): AgencyAssignedAtHistoryEntry[] {
+  if (!scalarInfo) return [];
+  return Array.from(scalarInfo.agencyAssignedAtsByTerm.entries())
+    .map(([termNumber, agencyAssignedAt]) => ({ termNumber, agencyAssignedAt }))
+    .sort((a, b) => a.termNumber - b.termNumber);
+}
+
+function buildInternalAssignedAtHistory(scalarInfo: ProjectScalarInfo | undefined): InternalAssignedAtHistoryEntry[] {
+  if (!scalarInfo) return [];
+  return Array.from(scalarInfo.internalAssignedAtsByTerm.entries())
+    .map(([termNumber, internalAssignedAt]) => ({ termNumber, internalAssignedAt }))
     .sort((a, b) => a.termNumber - b.termNumber);
 }
 
@@ -1330,8 +1372,10 @@ function computeProjectUpdates(
       ?? (scalarInfo?.assignedManagers.size === 1 ? [...scalarInfo.assignedManagers][0] : undefined);
     const assignedManagerPrimary = scalarInfo?.assignedManagersPrimaryByTerm.get(excelTerm)
       ?? (scalarInfo?.assignedManagersPrimary.size === 1 ? [...scalarInfo.assignedManagersPrimary][0] : undefined);
-    const agencyAssignedAt = scalarInfo?.agencyAssignedAts.size === 1 ? [...scalarInfo.agencyAssignedAts][0] : undefined;
-    const internalAssignedAt = scalarInfo?.internalAssignedAts.size === 1 ? [...scalarInfo.internalAssignedAts][0] : undefined;
+    const agencyAssignedAt = scalarInfo?.agencyAssignedAtsByTerm.get(excelTerm)
+      ?? (scalarInfo?.agencyAssignedAts.size === 1 ? [...scalarInfo.agencyAssignedAts][0] : undefined);
+    const internalAssignedAt = scalarInfo?.internalAssignedAtsByTerm.get(excelTerm)
+      ?? (scalarInfo?.internalAssignedAts.size === 1 ? [...scalarInfo.internalAssignedAts][0] : undefined);
     // 위 excelTerm 기준 값뿐 아니라, 파일에 담긴 다른 연차에 대한 책임자 정보 변경도 감지한다 —
     // 연차별 오버라이드(researchLeadOverrides)로 반영되는 값이라 currentTerm 하나만 봐서는 놓친다.
     const hasResearchLeadTermChange = [
@@ -2562,8 +2606,8 @@ function buildAnnualSheetRowsFromData(
           agencyName,
           project.projectNumber,
           project.projectName,
-          project.assignedManagerPrimary ?? "",
-          project.assignedManager ?? "",
+          resolveAssignedManagerPrimaryForTerm(project, termNumber),
+          resolveAssignedManagerForTerm(project, termNumber),
           project.projectType === "AUTONOMY_TRACK" ? "자율성트랙" : "",
           overallStartDate,
           overallEndDate,
@@ -2581,8 +2625,8 @@ function buildAnnualSheetRowsFromData(
           lead.email,
           recipient.recipientName,
           recipient.recipientEmail,
-          isLead ? (project.agencyAssignedAt ?? "") : "",
-          isLead ? (project.internalAssignedAt ?? "") : "",
+          isLead ? resolveAgencyAssignedAtForTerm(project, termNumber) : "",
+          isLead ? resolveInternalAssignedAtForTerm(project, termNumber) : "",
           ab.termStartDate ?? termRange.start ?? "",
           ab.termEndDate ?? termRange.end ?? "",
           stageForTerm?.stageStartDate ?? "",
@@ -3494,6 +3538,12 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         // 과제담당자(정)도 (부)와 동일하게 연차별 이력을 우선 채택한다.
         const assignedManagerPrimaryHistory = buildAssignedManagerPrimaryHistory(scalarInfo, managerNameResolutions, users);
         const resolvedAssignedManagerPrimary = scalarInfo?.assignedManagersPrimaryByTerm.get(currentTerm) ?? assignedManagerPrimaryFallback;
+        // 전담기관/내부 배정일도 담당자와 동일한 규칙 — 연차별 이력이 있으면 진행연차 값을 우선
+        // 채택하고, 파일에 담긴 연차 전체 이력은 Project.agencyAssignedAtHistory/internalAssignedAtHistory에 쌓는다.
+        const agencyAssignedAtHistory = buildAgencyAssignedAtHistory(scalarInfo);
+        const resolvedAgencyAssignedAt = scalarInfo?.agencyAssignedAtsByTerm.get(currentTerm) ?? agencyAssignedAt;
+        const internalAssignedAtHistory = buildInternalAssignedAtHistory(scalarInfo);
+        const resolvedInternalAssignedAt = scalarInfo?.internalAssignedAtsByTerm.get(currentTerm) ?? internalAssignedAt;
 
         // 현재 연차가 속한 단계의 실제 날짜 범위(있으면) → 단계시작일/단계종료일
         const currentStage = stages?.find((s) => currentTerm >= s.startTermNumber && currentTerm <= s.endTermNumber);
@@ -3586,8 +3636,10 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
               researchLeadEmail ?? renamedFrom.researchLeadEmail,
               backfilledResearchLeadOverrides,
             ),
-            agencyAssignedAt: agencyAssignedAt ?? renamedFrom.agencyAssignedAt,
-            internalAssignedAt: internalAssignedAt ?? renamedFrom.internalAssignedAt,
+            agencyAssignedAt: resolvedAgencyAssignedAt ?? renamedFrom.agencyAssignedAt,
+            agencyAssignedAtHistory: mergeTermHistory(renamedFrom.agencyAssignedAtHistory, agencyAssignedAtHistory),
+            internalAssignedAt: resolvedInternalAssignedAt ?? renamedFrom.internalAssignedAt,
+            internalAssignedAtHistory: mergeTermHistory(renamedFrom.internalAssignedAtHistory, internalAssignedAtHistory),
           });
           registeredProjects.set(normNum, renamedFrom.id);
           newProjectAgencyId.set(normNum, agencyId || renamedFrom.agencyId);
@@ -3631,8 +3683,10 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             // 신규 과제도 한 파일에 여러 연차를 한 번에 담아 올릴 수 있어(예: 1~5연차 일괄 등록),
             // 그 사이 책임자가 바뀐 연차가 있으면 여기서 바로 연차별 오버라이드로 반영한다.
             researchLeadOverrides: buildResearchLeadOverridesFromExcel(scalarInfo, researchLead, researchLeadEmail, undefined),
-            agencyAssignedAt,
-            internalAssignedAt,
+            agencyAssignedAt: resolvedAgencyAssignedAt,
+            agencyAssignedAtHistory: agencyAssignedAtHistory.length > 0 ? agencyAssignedAtHistory : undefined,
+            internalAssignedAt: resolvedInternalAssignedAt,
+            internalAssignedAtHistory: internalAssignedAtHistory.length > 0 ? internalAssignedAtHistory : undefined,
           });
           registeredProjects.set(normNum, created.id);
           newProjectAgencyId.set(normNum, agencyId);
@@ -3936,6 +3990,12 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       const resolvedAssignedManager = scalarInfo?.assignedManagersByTerm.get(effectiveCurrentTerm) ?? assignedManager;
       const assignedManagerPrimaryHistory = buildAssignedManagerPrimaryHistory(scalarInfo, managerNameResolutions, users);
       const resolvedAssignedManagerPrimary = scalarInfo?.assignedManagersPrimaryByTerm.get(effectiveCurrentTerm) ?? assignedManagerPrimaryFallback;
+      // 전담기관/내부 배정일도 담당자와 동일한 규칙 — 연차별 이력이 있으면 이번에 반영되는 연차
+      // (effectiveCurrentTerm) 값을 우선 채택한다.
+      const agencyAssignedAtHistory = buildAgencyAssignedAtHistory(scalarInfo);
+      const resolvedAgencyAssignedAt = scalarInfo?.agencyAssignedAtsByTerm.get(effectiveCurrentTerm) ?? agencyAssignedAt;
+      const internalAssignedAtHistory = buildInternalAssignedAtHistory(scalarInfo);
+      const resolvedInternalAssignedAt = scalarInfo?.internalAssignedAtsByTerm.get(effectiveCurrentTerm) ?? internalAssignedAt;
 
       // 책임자 이름·이메일이 이번 엑셀 값으로 바뀌는 경우, 그 값이 반영되는 연차(effectiveCurrentTerm)
       // 이전 연차는 옛 값으로 고정해 소급 변경을 막는다(위 신규/이름변경 과제 분기와 동일한 원칙).
@@ -3992,8 +4052,10 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
               )
             : existingProject.researchLeadOverrides,
         ),
-        agencyAssignedAt: agencyAssignedAt ?? existingProject.agencyAssignedAt,
-        internalAssignedAt: internalAssignedAt ?? existingProject.internalAssignedAt,
+        agencyAssignedAt: resolvedAgencyAssignedAt ?? existingProject.agencyAssignedAt,
+        agencyAssignedAtHistory: mergeTermHistory(existingProject.agencyAssignedAtHistory, agencyAssignedAtHistory),
+        internalAssignedAt: resolvedInternalAssignedAt ?? existingProject.internalAssignedAt,
+        internalAssignedAtHistory: mergeTermHistory(existingProject.internalAssignedAtHistory, internalAssignedAtHistory),
       };
       const hasSafeFieldChange = (Object.keys(safeUpdates) as (keyof Project)[]).some(
         (k) => JSON.stringify(safeUpdates[k] ?? null) !== JSON.stringify(existingProject[k] ?? null)

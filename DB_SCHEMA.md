@@ -367,8 +367,8 @@ CREATE TYPE notice_recipient_scope AS ENUM ('LEAD_ONLY', 'LEAD_AND_PARTICIPANTS'
 | private_cash | BIGINT | | 당해 민간현금 |
 | private_in_kind | BIGINT | | 당해 민간현물 |
 | usage_report_deadline | DATE | | 사용실적 제출기한 |
-| agency_assigned_at | DATE | | 전담기관 배정일 |
-| internal_assigned_at | DATE | | 내부 배정일 |
+| agency_assigned_at | DATE | | 전담기관 배정일(현재 진행연차 기준) — 전담기관이 매 연차 새로 통지하는 값이라 연차별 이력은 `project_assigned_at_histories` |
+| internal_assigned_at | DATE | | 내부 배정일(현재 진행연차 기준) — 연차별 이력은 `project_assigned_at_histories` |
 | project_category | VARCHAR(100) | | 과제 구분(자유 텍스트 — 예: "연차상시") |
 | research_lead | VARCHAR(100) | | 연구책임자 |
 | project_code | VARCHAR(100) | | 전담기관 과제코드 (전담기관 약칭-순번, 등록 시 자동 생성) |
@@ -415,6 +415,22 @@ CREATE TYPE notice_recipient_scope AS ENUM ('LEAD_ONLY', 'LEAD_AND_PARTICIPANTS'
 | project_id | UUID | FK projects NOT NULL | |
 | term_number | INTEGER | NOT NULL | 이 담당자로 바뀐 시작 연차 |
 | assigned_manager | VARCHAR(100) | NOT NULL | |
+| — | UNIQUE | (project_id, term_number) | |
+
+#### `project_assigned_at_histories` — 전담기관/내부 배정일 연차별 이력 *(신규)*
+
+> 전담기관 배정일은 인사이동이 아니라 **전담기관이 매 연차 사업비를 배정할 때마다 새로 통지하는
+> 값**이라, 연차마다 다른 게 오히려 정상이다(사실상 매 연차 새로 생긴다는 점에서
+> `project_assigned_manager_histories`보다 갱신 빈도가 높다). `projects.agency_assigned_at`/
+> `internal_assigned_at`은 현재 진행연차 기준값이고, 과거 연차 조회 시엔 이 테이블을 참조한다.
+
+| 컬럼명 | 타입 | 제약 | 설명 |
+|--------|------|------|------|
+| id | UUID | PK | |
+| project_id | UUID | FK projects NOT NULL | |
+| term_number | INTEGER | NOT NULL | |
+| agency_assigned_at | DATE | | |
+| internal_assigned_at | DATE | | |
 | — | UNIQUE | (project_id, term_number) | |
 
 ---
