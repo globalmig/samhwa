@@ -895,10 +895,14 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
       });
     }
     if (target.docFeeId) {
+      // "" || undefined 로 비웠던 예전 코드는 JSON.stringify가 undefined 키를 통째로
+      // 빼버려 PATCH 바디에 그 필드가 아예 안 실리는 문제가 있었다 — 서버는 `key in body`로
+      // "값이 왔는지"를 판단하므로(app/api/term-fees/[id]/route.ts) 필드가 빠지면 기존 값이
+      // 그대로 남아 "삭제가 안 되는" 것처럼 보였다. 빈 문자열 그대로 보내야 삭제가 반영된다.
       updateTermFee(target.docFeeId, {
-        docRequestDate: docRequestDate || undefined,
-        docReplyDate:   docReplyDate || undefined,
-        auditFirm:      auditFirm || undefined,
+        docRequestDate,
+        docReplyDate,
+        auditFirm,
       });
     }
     // 실무자는 과제 단위 기본값(contactName/contactEmail)이 아니라 이 연차(termNumber)에만 적용되는
