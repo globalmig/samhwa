@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useStore, getUnissuedInvoiceGroups } from "@/lib/store";
 import { isOverdueByRule } from "@/lib/notifications";
+import { resolveAgencyAssignedAtForTerm } from "@/lib/fee-calculator";
 
 function fmtFull(n: number) {
   return n.toLocaleString("ko-KR") + "원";
@@ -22,7 +23,7 @@ export default function DashboardPage() {
 
   // 연도별 대시보드 — 전담기관배정일(agencyAssignedAt) 기준. 등록일(registeredAt)은 삼화 내부에
   // 과제를 등록한 날짜일 뿐, 전담기관이 과제를 배정한 시점과는 별개라 연도별 집계 기준으로 쓰면 안 된다.
-  // 전담기관배정일 미입력 과제는 연도별 집계에서 제외한다.
+  // 전담기관배정일 미입력 연차는 연도별 집계에서 제외한다(연차 단위 판정은 termYearMatches 참고).
   // 올해 연도는 배정된 과제가 아직 없어도 항상 선택지에 포함해 — 해가 바뀔 때마다 자동으로 새 연도가
   // 드롭다운에 나타나고, 그 해 첫 과제가 배정되기 전에도 미리 선택할 수 있다. 관측된 연도만 모으면
   // 특정 해에 배정된 과제가 하나도 없을 때 그 해가 통째로 빠져(예: 2024·2026년만 있고 2025년 없음)
@@ -30,8 +31,18 @@ export default function DashboardPage() {
   const availableYears = useMemo(() => {
     const currentYear = new Date().getFullYear();
     let minYear = currentYear;
+    // 날짜 입력은 <input type="date">(DateInput)라 정상적으로는 항상 "YYYY-MM-DD"만 들어오지만,
+    // 과거 엑셀 업로드 등으로 형식이 어긋난 값이 하나라도 섞이면 Number(...)가 NaN이 되어 그 뒤로
+    // minYear가 통째로 NaN으로 오염되고, 그러면 아래 for 루프 조건(currentYear >= minYear)이 항상
+    // false라 드롭다운 자체가 텅 비어버린다 — 숫자로 파싱되는 값만 minYear 후보로 반영한다.
+    const takeYear = (dateStr: string | undefined) => {
+      if (!dateStr) return;
+      const y = Number(dateStr.slice(0, 4));
+      if (Number.isFinite(y)) minYear = Math.min(minYear, y);
+    };
     for (const p of projects) {
-      if (p.agencyAssignedAt) minYear = Math.min(minYear, Number(p.agencyAssignedAt.slice(0, 4)));
+      takeYear(p.agencyAssignedAt);
+      for (const h of p.agencyAssignedAtHistory ?? []) takeYear(h.agencyAssignedAt);
     }
     const years: string[] = [];
     for (let y = currentYear; y >= minYear; y--) years.push(String(y));
@@ -39,23 +50,57 @@ export default function DashboardPage() {
   }, [projects]);
   const [selectedYear, setSelectedYear] = useState<"ALL" | string>("ALL");
 
-  const projects_ = useMemo(
-    () => (selectedYear === "ALL" ? projects : projects.filter((p) => p.agencyAssignedAt?.slice(0, 4) === selectedYear)),
-    [projects, selectedYear]
-  );
-  const unregisteredCount = useMemo(() => projects.filter((p) => !p.agencyAssignedAt).length, [projects]);
-  const projectNumbers = useMemo(() => new Set(projects_.map((p) => p.projectNumber)), [projects_]);
+  const projectByNumber = useMemo(() => new Map(projects.map((p) => [p.projectNumber, p])), [projects]);
+
+  // 배정일 미입력 연차 수 — 연도 필터를 과제 단위가 아니라 연차 단위로 판정하도록 고쳤으므로(바로
+  // 아래 termYearMatches), "몇 건이 연도별 집계에서 빠지는지"도 과제 수가 아니라 같은 연차 단위
+  // 기준으로 세야 앞뒤가 맞는다. 예전엔 project.agencyAssignedAt(현재 진행연차 기준값) 하나만 비어
+  // 있으면 과제 전체를 미배정으로 셌는데, 그러면 과거 연차엔 배정일 이력이 있고 현재 진행연차만
+  // 아직 통지받지 못한 과제까지 "전부 미배정"으로 과대 집계됐다. resolveAgencyAssignedAtForTerm이
+  // 빈 문자열을 돌려주는(그 연차만) 연차 행만 센다 — 카운트 방식은 4구역 배정건수와 동일하게
+  // 참여기관별로 나뉘는 전담기관은 연차당 여러 행, 그 외엔 연차당 1행이다.
+  const unregisteredCount = useMemo(() => {
+    const termGroups = new Map<string, typeof termFees>();
+    for (const f of termFees) {
+      const key = `${f.projectNumber}|${f.termYear}|${f.termNumber}`;
+      const arr = termGroups.get(key);
+      if (arr) arr.push(f); else termGroups.set(key, [f]);
+    }
+    let count = 0;
+    for (const fees of termGroups.values()) {
+      const project = projectByNumber.get(fees[0].projectNumber);
+      if (!project) continue;
+      if (resolveAgencyAssignedAtForTerm(project, fees[0].termNumber)) continue;
+      const splitByInstitution = fundingAgencies.find((a) => a.id === project.agencyId)?.noticeRecipientScope === "LEAD_AND_PARTICIPANTS";
+      count += splitByInstitution ? Math.max(1, fees.length) : 1;
+    }
+    return count;
+  }, [termFees, projectByNumber, fundingAgencies]);
+
+  // 전담기관배정일은 과제 전체가 아니라 연차마다 새로 통지되는 값이다(resolveAgencyAssignedAtForTerm
+  // 참고 — fee-calculator.ts). 그런데 예전엔 project.agencyAssignedAt(현재 진행연차 기준값) 하나로
+  // 과제번호를 연도에 묶고, 그 프로젝트번호에 속한 termFees/receivables/taxInvoices를 연차 구분 없이
+  // 통째로 그 연도에 넣어버렸다 — 다년차 과제는 과거·미래 연차 실적까지 전부 "현재 연차가 배정된
+  // 연도"에 뭉쳐 잡히는 문제가 있었다. 레코드마다 자신이 속한 연차(termNumber)의 실제 배정일로
+  // 연도를 판정해야 한다.
+  const termYearMatches = useCallback((projectNumber: string, termNumber: number): boolean => {
+    if (selectedYear === "ALL") return true;
+    const project = projectByNumber.get(projectNumber);
+    if (!project) return false;
+    return resolveAgencyAssignedAtForTerm(project, termNumber).slice(0, 4) === selectedYear;
+  }, [selectedYear, projectByNumber]);
+
   const receivables_ = useMemo(
-    () => (selectedYear === "ALL" ? receivables : receivables.filter((r) => projectNumbers.has(r.projectNumber))),
-    [receivables, selectedYear, projectNumbers]
+    () => (selectedYear === "ALL" ? receivables : receivables.filter((r) => termYearMatches(r.projectNumber, r.termNumber))),
+    [receivables, selectedYear, termYearMatches]
   );
   const termFees_ = useMemo(
-    () => (selectedYear === "ALL" ? termFees : termFees.filter((f) => projectNumbers.has(f.projectNumber))),
-    [termFees, selectedYear, projectNumbers]
+    () => (selectedYear === "ALL" ? termFees : termFees.filter((f) => termYearMatches(f.projectNumber, f.termNumber))),
+    [termFees, selectedYear, termYearMatches]
   );
   const taxInvoices_ = useMemo(
-    () => (selectedYear === "ALL" ? taxInvoices : taxInvoices.filter((t) => projectNumbers.has(t.projectNumber))),
-    [taxInvoices, selectedYear, projectNumbers]
+    () => (selectedYear === "ALL" ? taxInvoices : taxInvoices.filter((t) => termYearMatches(t.projectNumber, t.termNumber))),
+    [taxInvoices, selectedYear, termYearMatches]
   );
   // 세금계산서가 발행취소(CANCELED)되면 채권 레코드는 재발행 시 재사용하려고 DB에 그대로 남지만
   // (app/fees/page.tsx의 hasReceivable 판단과 동일 기준), 그 행은 더 이상 "실제로 청구된 건"이
@@ -69,22 +114,26 @@ export default function DashboardPage() {
     () => receivables_.filter((r) => !canceledInvoiceNumbers.has(r.invoiceNumber)),
     [receivables_, canceledInvoiceNumbers]
   );
+  // ProjectIssue엔 termYear가 없어 termFees처럼 직접 판정할 수 없다 — 이슈를 남길 당시 보고 있던
+  // 연차(term, 없으면 과제의 진행연차)를 기준으로 같은 규칙을 적용한다.
   const projectIssues_ = useMemo(
-    () => (selectedYear === "ALL" ? projectIssues : projectIssues.filter((i) => projectNumbers.has(i.projectNumber))),
-    [projectIssues, selectedYear, projectNumbers]
+    () => (selectedYear === "ALL" ? projectIssues : projectIssues.filter((i) => {
+      const termNumber = i.term ?? projectByNumber.get(i.projectNumber)?.currentTerm;
+      return termNumber !== undefined && termYearMatches(i.projectNumber, termNumber);
+    })),
+    [projectIssues, selectedYear, projectByNumber, termYearMatches]
   );
 
   // 긴급 처리 집계 임시
   const overdueReceivables = activeReceivables_.filter((r) => isOverdueByRule(r));
   const overdueAmount = overdueReceivables.reduce((s, r) => s + r.receivableAmount, 0);
   const highIssues = projectIssues_.filter((i) => i.priority === "HIGH");
-  const unissuedGroups = getUnissuedInvoiceGroups(projects_, termFees_, taxInvoices_);
+  const unissuedGroups = getUnissuedInvoiceGroups(projects, termFees_, taxInvoices_);
   const unissuedAmount = unissuedGroups.reduce((s, g) => s + g.amount, 0);
 
   // 과제 파이프라인 — 4구역 전담기관별 집계(배정 건수)와 동일하게 연차 단위로 센다. 다년차 과제는
   // 연차마다 한 건으로 잡히므로, 과제 수가 아니라 진행중인 연차 행 수 기준의 진행중/완료/중단 건수다.
   const pipelineCounts = useMemo(() => {
-    const projectByNumber = new Map(projects_.map((p) => [p.projectNumber, p]));
     const termGroups = new Map<string, typeof termFees_>();
     for (const f of termFees_) {
       const key = `${f.projectNumber}|${f.termYear}|${f.termNumber}`;
@@ -100,12 +149,11 @@ export default function DashboardPage() {
       counts[project.status as keyof typeof counts] += rowCount;
     }
     return counts;
-  }, [projects_, termFees_, fundingAgencies]);
+  }, [projectByNumber, termFees_, fundingAgencies]);
   const activeCount = pipelineCounts.ACTIVE;
   const completedCount = pipelineCounts.COMPLETED;
   const suspendedCount = pipelineCounts.SUSPENDED;
   const pipelineTotal = activeCount + completedCount + suspendedCount;
-  const totalProjects = projects_.length;
 
   // 핵심 지표 — termFees·receivables 실집계 (정적 더미 대신 store 기준)
   const totalFee = termFees_.reduce((s, f) => s + f.appliedFee, 0);
@@ -116,7 +164,6 @@ export default function DashboardPage() {
 
   // 전담기관별 수금 현황 — 과제(배정)·연차수수료·receivables(청구/수금)를 과제번호로 전담기관에 연결해 집계
   const agencyRows = useMemo(() => {
-    const projectByNumber = new Map(projects_.map((p) => [p.projectNumber, p]));
     type AgencyRow = {
       id: string; name: string; shortName: string;
       projectCount: number; totalFee: number;
@@ -177,7 +224,7 @@ export default function DashboardPage() {
     }
 
     return Array.from(map.values()).sort((a, b) => b.issuedAmount - a.issuedAmount);
-  }, [projects_, termFees_, activeReceivables_, fundingAgencies]);
+  }, [projectByNumber, termFees_, activeReceivables_, fundingAgencies]);
 
   const totalProjectCount = agencyRows.reduce((s, r) => s + r.projectCount, 0);
   const totalFeeSum = agencyRows.reduce((s, r) => s + r.totalFee, 0);
@@ -192,7 +239,7 @@ export default function DashboardPage() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <p className="text-xs text-slate-500">
-            {selectedYear === "ALL" ? "전체" : `${selectedYear}년`} 과제 {totalProjects}건 기준
+            {selectedYear === "ALL" ? "전체" : `${selectedYear}년`} 연차 {pipelineTotal}건 기준
           </p>
           <select
             value={selectedYear}
@@ -212,7 +259,7 @@ export default function DashboardPage() {
       </div>
       {selectedYear !== "ALL" && unregisteredCount > 0 && (
         <p className="text-[11px] text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
-          전담기관배정일 미입력 과제 {unregisteredCount}건은 연도별 집계에서 제외됩니다. 정확한 통계를 위해 과제 상세에서 전담기관배정일을 입력해 주세요.
+          전담기관배정일 미입력 연차 {unregisteredCount}건은 연도별 집계에서 제외됩니다. 정확한 통계를 위해 과제 상세에서 전담기관배정일을 입력해 주세요.
         </p>
       )}
 
