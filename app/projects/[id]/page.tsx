@@ -3176,6 +3176,9 @@ function BillingBlock({
       recipientEmail: recipient?.recipientEmail ?? "",
       totalAmount: unit.invoice?.totalAmount ?? unit.amount,
       invoiceIssuedAt: unit.invoice?.issuedAt ?? "",
+      // 서류요청일을 들고 있는 TermFee — billedFees[0]이 이 청구단위의 대표(주관기관 또는 분리행
+      // 자신의) TermFee다(app/fees/page.tsx의 docOwner와 동일 기준).
+      docFeeId: unit.billedFees[0]?.id,
     });
   }
 

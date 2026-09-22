@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 import Modal from "./Modal";
-import { useStore, addEmailDispatch } from "@/lib/store";
+import { useStore, addEmailDispatch, updateTermFee } from "@/lib/store";
 import { getCurrentUser } from "@/lib/auth";
-import { nowKST } from "@/lib/utils";
+import { nowKST, todayKST } from "@/lib/utils";
 
 // 세금계산서 공문(첨부파일·서식 있음)과 달리 "메일 본문 하나만" 보내면 되는 간단한 안내 메일 —
 // 계산서발행 서류 요청(세금계산서를 발행하기 전에 사업자등록증 등을 요청)과 입금 확인 요청
@@ -29,6 +29,9 @@ export interface SimpleNoticeTarget {
   // PAYMENT_REMINDER 전용
   totalAmount?: number;
   invoiceIssuedAt?: string;
+  // DOC_REQUEST 전용 — 발송 성공 시 이 TermFee의 서류요청일을 발송일로 자동 채운다(app/fees/page.tsx의
+  // docOwner/docFeeId와 동일한 기준으로 호출부에서 골라 넘겨준다).
+  docFeeId?: string;
 }
 
 export const SIMPLE_NOTICE_LABEL: Record<SimpleNoticeKind, string> = {
@@ -129,6 +132,12 @@ export default function SimpleNoticeModal({ target, onClose }: { target: SimpleN
       status,
       body,
     });
+
+    // 계산서발행 서류 요청 공문을 성공적으로 보내면, 그 발송일을 서류요청일로 자동 입력한다 —
+    // 지금까지는 fees 화면에서 수기로 입력해야 했다.
+    if (status === "SUCCESS" && target.kind === "DOC_REQUEST" && target.docFeeId) {
+      updateTermFee(target.docFeeId, { docRequestDate: todayKST() });
+    }
 
     setSending(false);
     if (status === "SUCCESS") setSent(true);

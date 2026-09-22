@@ -2519,6 +2519,11 @@ function BulkSimpleNoticeModal({
         status,
         body,
       });
+      // 계산서발행 서류 요청 일괄발송도 개별발송(SimpleNoticeModal)과 동일하게, 성공 건의 발송일을
+      // 그 TermFee의 서류요청일로 자동 입력한다.
+      if (status === "SUCCESS" && kind === "DOC_REQUEST" && t.docFeeId) {
+        updateTermFee(t.docFeeId, { docRequestDate: todayKST() });
+      }
       newResults.push({ projectName: t.projectName, email: t.recipientEmail, status, error: errMsg });
     }
 
@@ -3061,6 +3066,7 @@ export default function FeesPage() {
           recipientEmail: row.recipientEmail,
           totalAmount: row.totalInvoiceAmount,
           invoiceIssuedAt: row.invoiceIssuedAt,
+          docFeeId: row.docFeeId,
         };
       });
   }, [showBulkSimpleNotice, filtered, selectedKeys, projects, fundingAgencies, projectMembers]);
@@ -3863,6 +3869,7 @@ export default function FeesPage() {
                                     recipientEmail:      row.recipientEmail,
                                     totalAmount:         row.totalInvoiceAmount,
                                     invoiceIssuedAt:     row.invoiceIssuedAt,
+                                    docFeeId:            row.docFeeId,
                                   },
                                 });
                                 return;
