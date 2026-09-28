@@ -164,10 +164,18 @@ export function backfillExistingTermOverrides<O extends { termNumber: number }>(
 }
 
 // ─── 기관구분 기본값 조회 ────────────────────────────────────────────
-// projectDivision을 명시적으로 지정하지 않은 과제는 전담기관 기준 기본값을 쓴다 — RDA2(fa-006)는
+// projectDivision을 명시적으로 지정하지 않은 과제는 전담기관 기준 기본값을 쓴다 — RDA2는
 // 참여기관 여러 곳이 공동으로 진행하는 구조가 기본이라 "공동", 그 외 전담기관은 "주관"이 기본이다.
-export function resolveProjectDivision(project: Pick<Project, "projectDivision" | "agencyId">): "주관" | "위탁" | "공동" {
-  return project.projectDivision ?? (project.agencyId === "fa-006" ? "공동" : "주관");
+// 전담기관 ID는 DB에서 UUID로 발급되므로("fa-006"는 목업 ID라 운영에선 절대 일치하지 않는다) 사람이
+// 보고 부르는 약칭(shortName — DB 유니크 키)으로 판별한다.
+export const JOINT_DIVISION_DEFAULT_AGENCY_SHORT_NAMES = ["RDA2"];
+export function resolveProjectDivision(
+  project: Pick<Project, "projectDivision" | "agencyId">,
+  agencies: Pick<FundingAgency, "id" | "shortName">[],
+): "주관" | "위탁" | "공동" {
+  if (project.projectDivision) return project.projectDivision;
+  const shortName = agencies.find((a) => a.id === project.agencyId)?.shortName;
+  return shortName && JOINT_DIVISION_DEFAULT_AGENCY_SHORT_NAMES.includes(shortName) ? "공동" : "주관";
 }
 
 // ─── 참여기관 역할(ProjectMember.role) 한글 라벨 ───────────────────────
@@ -763,11 +771,48 @@ export function applyOverrides(calc: TermFeeCalc): TermFeeCalc {
 // ─── 과제에 적용할 정책 조회 헬퍼 ───────────────────────────────
 // programType: 동일 전담기관이 사업 유형별로 별도 정책을 둘 수 있음 (예: IITP 일반 R&D vs ICT기금사업).
 // 정책의 programType이 지정되지 않은 경우 "GENERAL"로 취급한다.
-export function resolvePolicy(agencyId: string, policies: FeePolicy[], programType: "GENERAL" | "ICT_FUND" = "GENERAL"): FeePolicy | undefined {
-  const matchesType = (p: FeePolicy) => (p.programType ?? "GENERAL") === programType;
+// 서버(app/api/projects)는 정책 전체(구간표 등) 대신 필요한 필드만 조회해 쓰므로, 정책 조회에 필요한
+// 필드만 요구하는 제네릭으로 둔다 — FeePolicy[]를 넘기면 그대로 FeePolicy가 돌아온다.
+export function resolvePolicy<P extends Pick<FeePolicy, "agencyId" | "status" | "programType">>(agencyId: string, policies: P[], programType: "GENERAL" | "ICT_FUND" = "GENERAL"): P | undefined {
+  const matchesType = (p: P) => (p.programType ?? "GENERAL") === programType;
   // 1. 전담기관 자체 정책 (ACTIVE)
   const agencyPolicy = policies.find((p) => p.agencyId === agencyId && p.status === "ACTIVE" && matchesType(p));
   if (agencyPolicy) return agencyPolicy;
   // 2. 공통 정책 (ACTIVE)
   return policies.find((p) => p.agencyId === null && p.status === "ACTIVE" && matchesType(p));
+}
+
+// ─── 전담기관 정책 기반 "과제 유형" 판별 헬퍼 ────────────────────────
+// 전담기관 ID는 DB에서 UUID로 발급되므로 "fa-003" 같은 목업 ID로 IITP를 하드코딩해 구분하면 안 된다 —
+// 대신 그 전담기관에 ICT_FUND 정책이 실제로 등록돼 있는지(정책 데이터)로 판별한다.
+export type ProgramPolicyLike = Pick<FeePolicy, "agencyId" | "status" | "programType" | "hasAutonomyTrack">;
+
+export function agencyHasIctFundPolicy(agencyId: string | undefined, policies: ProgramPolicyLike[]): boolean {
+  if (!agencyId) return false;
+  return policies.some((p) => p.agencyId === agencyId && p.status === "ACTIVE" && p.programType === "ICT_FUND");
+}
+
+// 이 과제(전담기관+사업 유형)에 적용될 정책이 자율성트랙을 두는지 — IITP처럼 hasAutonomyTrack=false인
+// 정책이면 자율성트랙 과제는 존재할 수 없다. 정책을 아직 못 찾은 경우(정책 로딩 전, 신규 전담기관)는
+// 막지 않는다(true) — 근거 없이 사용자의 입력을 막는 것보다 계산부의 hasAutonomyTrack 가드에 맡긴다.
+export function supportsAutonomyTrack(agencyId: string | undefined, policies: ProgramPolicyLike[], programType: "GENERAL" | "ICT_FUND" = "GENERAL"): boolean {
+  if (!agencyId) return true;
+  const policy = resolvePolicy(agencyId, policies, programType);
+  return policy ? policy.hasAutonomyTrack : true;
+}
+
+// 과제의 projectType(자율성트랙)/programType(ICT 기금사업)이 그 전담기관 정책과 모순되면 일반과제/일반 R&D로
+// 바로잡은 사본을 돌려준다(모순이 없으면 같은 객체를 그대로 돌려줘 불필요한 변경 감지를 만들지 않는다).
+//  - programType "ICT_FUND": 그 전담기관에 ICT_FUND 정책이 없으면 "GENERAL" (전담기관을 IITP에서 다른 곳으로
+//    바꿨는데 사업 유형만 ICT_FUND로 남으면 resolvePolicy가 정책을 못 찾아 수수료 계산이 통째로 실패한다)
+//  - projectType "AUTONOMY_TRACK": 적용 정책이 자율성트랙을 두지 않으면 "GENERAL"
+// 정책이 하나도 로딩되지 않은 상태(policies가 빈 배열)에서는 판단 근거가 없으므로 아무것도 바꾸지 않는다.
+export function sanitizeProjectProgramFields<T extends Pick<Project, "agencyId" | "projectType" | "programType">>(project: T, policies: ProgramPolicyLike[]): T {
+  if (policies.length === 0) return project;
+  let programType = project.programType;
+  if (programType === "ICT_FUND" && !agencyHasIctFundPolicy(project.agencyId, policies)) programType = "GENERAL";
+  let projectType = project.projectType;
+  if (projectType === "AUTONOMY_TRACK" && !supportsAutonomyTrack(project.agencyId, policies, programType ?? "GENERAL")) projectType = "GENERAL";
+  if (programType === project.programType && projectType === project.projectType) return project;
+  return { ...project, programType, projectType };
 }

@@ -573,7 +573,7 @@ export interface Project {
   // 재사용되지 않는다.
   termCodes?: { termNumber: number; code: string }[];
   // 기관구분(화면엔 과제 상세에서 "기관구분", 과제목록에서 "구분"으로 표시) — 값이 없으면 전담기관
-  // 기준 기본값을 쓴다: RDA2(fa-006)는 "공동", 그 외는 "주관"(resolveProjectDivision, fee-calculator.ts).
+  // 기준 기본값을 쓴다: RDA2는 "공동", 그 외는 "주관"(resolveProjectDivision, fee-calculator.ts — 전담기관 shortName 기준).
   projectDivision?: "주관" | "위탁" | "공동";
   billingType?: "정발행" | "역발행요청" | "역발행" | "대상아님" | "면제"; // 발행구분 (없으면 계산서 유무로 자동 판별)
   // 협약 구조

@@ -61,7 +61,15 @@ const annualColumns: ColumnDef[] = [
     label: "자율성트랙",
     aliases: ["자율성트랙"],
     required: false,
-    description: "\"자율성트랙\" 값이면 과제유형을 자율성트랙과제로 등록",
+    description: "\"자율성트랙\" 값이면 과제유형을 자율성트랙과제로 등록 — 정책상 자율성트랙이 없는 전담기관(IITP 등)은 일반과제로 처리",
+  },
+  {
+    field: "programType",
+    label: "사업유형",
+    aliases: ["사업유형"],
+    required: false,
+    description: "\"ICT기금사업\"(\"ICT\" 또는 \"기금\" 포함)이면 ICT 기금사업으로, \"일반\"이면 일반 R&D로 등록 — " +
+      "ICT 기금사업 정책이 있는 전담기관(IITP)에서만 반영하고, 비어 있으면 기존 값을 그대로 둔다",
   },
   {
     field: "startDate",
@@ -277,6 +285,14 @@ const stageColumns: ColumnDef[] = [
     label: "RCMS사업명",
     aliases: ["RCMS사업명", "사업명", "연구사업명"],
     required: false,
+    description: "참고용 — 등록·수수료 계산 어디에도 사용되지 않는다(ICT 기금사업 여부는 \"사업유형\" 컬럼으로만 지정)",
+  },
+  {
+    field: "programType",
+    label: "사업유형",
+    aliases: ["사업유형"],
+    required: false,
+    description: "\"연차별기관별\" 시트의 같은 이름 컬럼과 동일 — 어느 시트에 있어도 된다",
   },
   {
     field: "projectNumber",
@@ -424,6 +440,18 @@ export const SHEET_DEFS: SheetDef[] = [
     columns: stageColumns,
   },
 ];
+
+// ── 유틸: "사업유형" 셀 값 해석 ────────────────────────────────
+// "ICT기금사업"/"ICT 기금"/"정보통신진흥기금" 등 "ICT" 또는 "기금"이 들어 있으면 ICT 기금사업, "일반"/"R&D"/
+// "국가연구개발"이 들어 있으면 일반 R&D. 비어 있거나 어느 쪽도 아니면 undefined — 호출하는 쪽이 "지정하지
+// 않음"으로 보고 기존 값을 건드리지 않게 한다(수수료 계산 방식이 통째로 바뀌는 값이라 추측으로 정하지 않는다).
+export function parseProgramTypeCell(raw: string | undefined | null): "GENERAL" | "ICT_FUND" | undefined {
+  const v = (raw ?? "").trim();
+  if (!v) return undefined;
+  if (/ICT|기금/i.test(v)) return "ICT_FUND";
+  if (/일반|R\s*&\s*D|국가\s*연구\s*개발/i.test(v)) return "GENERAL";
+  return undefined;
+}
 
 // ── 유틸: 레벤슈타인 거리 ────────────────────────────────────────
 

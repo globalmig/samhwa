@@ -56,7 +56,7 @@ import { applyManagerContactRows } from "@/lib/notice-contacts";
 import { useCanWrite } from "@/lib/permissions";
 import { getCurrentUser } from "@/lib/auth";
 import { isOverdueByRule } from "@/lib/notifications";
-import { resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveMemberLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveAgencyAssignedAtForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, MEMBER_ROLE_LABEL } from "@/lib/fee-calculator";
+import { agencyHasIctFundPolicy, supportsAutonomyTrack, sanitizeProjectProgramFields, resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveMemberLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveAgencyAssignedAtForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, MEMBER_ROLE_LABEL } from "@/lib/fee-calculator";
 
 // 여러 이메일 문자열(각각 콤마 구분일 수 있음)을 하나로 합치고 중복을 제거한다 — 정산절차 안내
 // 공문은 책임자(researchLeadEmail)+실무자(recipientEmail) 두 필드를 합쳐서 기본 수신자로 쓴다.
@@ -1152,7 +1152,7 @@ const EMPTY_NEW_PROJECT: NewProjectDraft = {
 };
 
 function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) {
-  const { fundingAgencies, institutions, projects, users } = useStore();
+  const { fundingAgencies, institutions, projects, users, feePolicies } = useStore();
   const [form, setForm] = useState<NewProjectDraft>(EMPTY_NEW_PROJECT);
   const [error, setError] = useState("");
   const [managerPicker, setManagerPicker] = useState<"primary" | "deputy" | null>(null);
@@ -1160,6 +1160,9 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
   const s = <K extends keyof NewProjectDraft>(k: K, v: NewProjectDraft[K]) => setForm((p) => ({ ...p, [k]: v }));
 
   const totalBudget = form.govGrant + form.privateCash + form.privateInKind;
+  // 전담기관 ID는 DB에서 UUID라 "fa-003"처럼 ID로 IITP를 하드코딩할 수 없다 — 정책 데이터로 판별한다.
+  const showProgramTypeToggle = agencyHasIctFundPolicy(form.agencyId, feePolicies);
+  const autonomyTrackAllowed = supportsAutonomyTrack(form.agencyId, feePolicies, form.programType);
 
   function handleSubmit() {
     if (!form.projectNumber.trim() || !form.projectName.trim() || !form.agencyId || !form.leadInstitutionId || !form.startDate || !form.endDate) {
@@ -1191,8 +1194,10 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
       govGrant: form.govGrant || undefined,
       privateCash: form.privateCash || undefined,
       privateInKind: form.privateInKind || undefined,
-      projectType: form.projectType,
-      programType: resolvedAgencyId === "fa-003" ? form.programType : undefined,
+      // 주관기관명으로 전담기관이 자동 교정됐을 수 있으니(resolvedAgencyId) 폼이 아니라 최종 전담기관 기준으로
+      // 다시 판별한다 — 정책과 모순되는 값은 addProject가 한 번 더 바로잡는다.
+      projectType: supportsAutonomyTrack(resolvedAgencyId, feePolicies, form.programType) ? form.projectType : "GENERAL",
+      programType: agencyHasIctFundPolicy(resolvedAgencyId, feePolicies) ? form.programType : undefined,
       researchLead: form.researchLead || undefined,
       assignedManager: form.assignedManager || undefined,
       assignedManagerUserId: form.assignedManagerUserId || undefined,
@@ -1303,12 +1308,14 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
               // 기관구분을 아직 직접 고르지 않았으면(이전 전담기관 기준 기본값 그대로면) 새로 고른
               // 전담기관의 기본값(RDA2는 공동, 그 외는 주관)으로 다시 맞춘다 — 사람이 이미 손대서
               // 기본값과 달라져 있으면 그 선택은 그대로 둔다.
-              const wasDefault = p.projectDivision === resolveProjectDivision({ agencyId: p.agencyId, projectDivision: undefined });
-              return {
+              const wasDefault = p.projectDivision === resolveProjectDivision({ agencyId: p.agencyId, projectDivision: undefined }, fundingAgencies);
+              // 자율성트랙/사업 유형도 새 전담기관 정책과 모순되면(예: IITP로 바꿨는데 자율성트랙이 선택돼 있음,
+              // IITP에서 다른 곳으로 바꿨는데 사업 유형이 ICT 기금사업으로 남음) 그 자리에서 일반으로 되돌린다.
+              return sanitizeProjectProgramFields({
                 ...p,
                 agencyId: nextAgencyId,
-                projectDivision: wasDefault ? resolveProjectDivision({ agencyId: nextAgencyId, projectDivision: undefined }) : p.projectDivision,
-              };
+                projectDivision: wasDefault ? resolveProjectDivision({ agencyId: nextAgencyId, projectDivision: undefined }, fundingAgencies) : p.projectDivision,
+              }, feePolicies);
             });
           }}>
             <option value="">선택하세요</option>
@@ -1453,16 +1460,24 @@ function ProjectAddForm({ onClose }: { onClose: (createdId?: string) => void }) 
             <button type="button" onClick={() => s("projectType", "GENERAL")}
               className={`flex-1 px-2 py-1.5 transition-colors ${form.projectType === "GENERAL" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"}`}>일반과제</button>
             <button type="button" onClick={() => s("projectType", "AUTONOMY_TRACK")}
-              className={`flex-1 px-2 py-1.5 border-l border-slate-200 transition-colors ${form.projectType === "AUTONOMY_TRACK" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"}`}>자율성트랙</button>
+              disabled={!autonomyTrackAllowed}
+              title={autonomyTrackAllowed ? undefined : "이 전담기관 정책에는 자율성트랙이 없습니다"}
+              className={`flex-1 px-2 py-1.5 border-l border-slate-200 transition-colors ${
+                !autonomyTrackAllowed ? "bg-slate-50 text-slate-300 cursor-not-allowed"
+                  : form.projectType === "AUTONOMY_TRACK" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"
+              }`}>자율성트랙</button>
           </div>
+          {!autonomyTrackAllowed && (
+            <p className="mt-1 text-[10px] text-slate-400">선택한 전담기관 정책상 자율성트랙이 없어 일반과제로만 등록됩니다.</p>
+          )}
         </div>
-        {form.agencyId === "fa-003" && (
+        {showProgramTypeToggle && (
           <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">사업 유형 <span className="text-slate-400 font-normal">· IITP 전용</span></label>
+            <label className="block text-xs font-medium text-slate-600 mb-1">사업 유형 <span className="text-slate-400 font-normal">· ICT 기금사업 정책이 있는 전담기관</span></label>
             <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-medium">
-              <button type="button" onClick={() => s("programType", "GENERAL")}
+              <button type="button" onClick={() => setForm((p) => sanitizeProjectProgramFields({ ...p, programType: "GENERAL" }, feePolicies))}
                 className={`flex-1 px-2 py-1.5 transition-colors ${form.programType === "GENERAL" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"}`}>일반 R&D</button>
-              <button type="button" onClick={() => s("programType", "ICT_FUND")}
+              <button type="button" onClick={() => setForm((p) => sanitizeProjectProgramFields({ ...p, programType: "ICT_FUND" }, feePolicies))}
                 className={`flex-1 px-2 py-1.5 border-l border-slate-200 transition-colors ${form.programType === "ICT_FUND" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"}`}>ICT 기금사업</button>
             </div>
           </div>
@@ -1696,8 +1711,8 @@ function useFeeRows(): FeeRow[] {
         // 쓴다 — 참여(공동)기관 행에도 과제 전체의 projectDivision(주로 "주관")이 그대로 붙어 있어서
         // "공동기관인데 주관으로 나온다"는 혼동이 있었다.
         const rowDivision = isSplit
-          ? (recipientMember ? MEMBER_ROLE_LABEL[recipientMember.role] : (project ? resolveProjectDivision(project) : ""))
-          : (project ? resolveProjectDivision(project) : "");
+          ? (recipientMember ? MEMBER_ROLE_LABEL[recipientMember.role] : (project ? resolveProjectDivision(project, fundingAgencies) : ""))
+          : (project ? resolveProjectDivision(project, fundingAgencies) : "");
 
         // 연구책임자·책임자이메일도 연차별로 다를 수 있어(과제 상세 페이지에서 연차별로 수정) researchLeadOverrides를
         // 먼저 본다. 분리행(RDA2 등)이면 그 참여기관 자신의 책임자(ProjectMember.leadOverrides/leadName/leadEmail)를
@@ -1841,7 +1856,7 @@ function useFeeRows(): FeeRow[] {
         docReplyDate: "",
         recipientName: leadMember ? resolveMemberRecipientForTerm(leadMember, project.currentTerm).recipientName : "",
         recipientEmail: leadMember ? resolveMemberRecipientForTerm(leadMember, project.currentTerm).recipientEmail : "",
-        projectDivision: resolveProjectDivision(project),
+        projectDivision: resolveProjectDivision(project, fundingAgencies),
         assignedManager: resolveAssignedManagerForTerm(project, project.currentTerm),
         assignedManagerPrimary: resolveAssignedManagerPrimaryForTerm(project, project.currentTerm),
         registeredAt: project.registeredAt ?? "",

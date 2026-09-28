@@ -3,6 +3,7 @@ import { prisma, withDbWriteSlot, withDeadlockRetry, describeDbWriteError } from
 import { requireUser, requireWriteAccess, SessionError } from "@/lib/session";
 import { toProject } from "@/lib/project-mapper";
 import { writeAuditLog } from "@/lib/audit";
+import { sanitizeProjectProgramFieldsFromDb } from "@/lib/project-program-guard";
 import type { Project } from "@/lib/mock";
 
 export const runtime = "nodejs";
@@ -39,6 +40,15 @@ export async function POST(request: Request) {
 
   const startYear = body.startDate ? new Date(body.startDate).getUTCFullYear() : new Date().getUTCFullYear();
   const endYear = body.endDate ? new Date(body.endDate).getUTCFullYear() : startYear;
+
+  // 전담기관 정책과 모순되는 자율성트랙/사업 유형은 일반으로 바로잡아 저장한다(lib/project-program-guard.ts).
+  try {
+    const guarded = await sanitizeProjectProgramFieldsFromDb({ agencyId: body.agencyId || "", projectType: body.projectType, programType: body.programType });
+    body = { ...body, projectType: guarded.projectType, programType: guarded.programType };
+  } catch (err) {
+    console.error("과제 유형 검증 실패:", err);
+    return Response.json({ ok: false, error: describeDbWriteError(err, "과제를 생성하지 못했습니다.") }, { status: 500 });
+  }
 
   let created;
   try {

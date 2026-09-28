@@ -16,7 +16,7 @@ import {
   setTermOtherFirmHandled, setTermBillingType, setTermDates, resolveProjectId, ensureAgencyNoticeTemplateDetail,
 } from "@/lib/store";
 import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type EmailDispatch, type FeePolicy, type AnnualFinancials, type FundingAgency, EMPTY_NOTICE_TEMPLATE } from "@/lib/mock";
-import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveMemberLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveAgencyAssignedAtForTerm, resolveInternalAssignedAtForTerm, resolveProjectDivision, resolveProjectCodeForTerm, resolveStageNumberForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, MEMBER_ROLE_LABEL, type CalcMember } from "@/lib/fee-calculator";
+import { calcTermFee, resolvePolicy, agencyHasIctFundPolicy, supportsAutonomyTrack, sanitizeProjectProgramFields, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveMemberLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveAgencyAssignedAtForTerm, resolveInternalAssignedAtForTerm, resolveProjectDivision, resolveProjectCodeForTerm, resolveStageNumberForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, MEMBER_ROLE_LABEL, type CalcMember } from "@/lib/fee-calculator";
 import { fmtWonFull, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange, nowKST, todayKST, computeOverallDatesFromStages } from "@/lib/utils";
 import { fmtValue, fieldLabel, describeOverrideChange } from "@/lib/audit-log-format";
 import StatusBadge from "@/components/common/StatusBadge";
@@ -411,6 +411,13 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
 
   const policy = resolvePolicy(project.agencyId, feePolicies, project.programType ?? "GENERAL");
   const defaultSettlementType = policy?.defaultSettlementType ?? "자체정산";
+  // 수정 폼 표시용 — 위 policy는 저장된 값 기준이고, 폼에서 전담기관/사업 유형을 바꾸는 중일 수 있으니 draft 기준으로 따로 본다.
+  // 전담기관 ID는 DB에서 UUID라 "fa-003"처럼 특정 전담기관을 ID로 하드코딩할 수 없다 — 정책 데이터로 판별한다.
+  const draftProgramType = draft.programType ?? "GENERAL";
+  const showProgramTypeToggle = agencyHasIctFundPolicy(draft.agencyId, feePolicies);
+  const autonomyTrackAllowed = supportsAutonomyTrack(draft.agencyId, feePolicies, draftProgramType);
+  const autonomyTrackSelected = autonomyTrackAllowed && draft.projectType === "AUTONOMY_TRACK";
+  const draftPolicyName = resolvePolicy(draft.agencyId, feePolicies, draftProgramType)?.name;
   // 아래(calcMembers~feeResult)는 참여기관 목록 탭에서 "지금 보고 있는 연차"(viewTerm) 기준으로 계산한다.
   // 다른 화면 요소(당해 사업비 자동계산 등)는 여전히 getMemberBudgetVal/currentTerm을 직접 쓰므로 영향 없다.
   const calcMembers: CalcMember[] = policy ? members.flatMap((m) => {
@@ -943,7 +950,7 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">기관구분</label>
-                <select className={`${sel} w-full`} value={resolveProjectDivision(draft)}
+                <select className={`${sel} w-full`} value={resolveProjectDivision(draft, fundingAgencies)}
                   onChange={(e) => setDraft((p) => ({ ...p, projectDivision: e.target.value as Project["projectDivision"] }))}>
                   <option value="주관">주관</option>
                   <option value="공동">공동</option>
@@ -964,7 +971,9 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                 <select className={`${sel} w-full`} value={draft.agencyId ?? ""}
                   onChange={(e) => {
                     const a = fundingAgencies.find((fa) => fa.id === e.target.value);
-                    setDraft((p) => ({ ...p, agencyId: e.target.value, agency: a?.name ?? "" }));
+                    // 전담기관을 바꾸면 새 전담기관 정책과 모순되는 자율성트랙/사업 유형(예: IITP에서 KEIT로
+                    // 바꿨는데 사업 유형이 ICT 기금사업으로 남는 경우)은 그 자리에서 일반으로 되돌린다.
+                    setDraft((p) => sanitizeProjectProgramFields({ ...p, agencyId: e.target.value, agency: a?.name ?? "" }, feePolicies));
                   }}>
                   <option value="">선택하세요</option>
                   {fundingAgencies.map((a) => (
@@ -1274,16 +1283,23 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                   <button type="button"
                     onClick={() => setDraft((p) => ({ ...p, projectType: "GENERAL" }))}
                     className={`flex-1 px-2 py-1.5 transition-colors ${
-                      (draft.projectType ?? "GENERAL") === "GENERAL" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"
+                      !autonomyTrackSelected ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"
                     }`}>일반과제</button>
                   <button type="button"
+                    disabled={!autonomyTrackAllowed}
+                    title={autonomyTrackAllowed ? undefined : "이 전담기관 정책에는 자율성트랙이 없습니다"}
                     onClick={() => setDraft((p) => ({ ...p, projectType: "AUTONOMY_TRACK" }))}
                     className={`flex-1 px-2 py-1.5 border-l border-slate-200 transition-colors ${
-                      draft.projectType === "AUTONOMY_TRACK" ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"
+                      !autonomyTrackAllowed
+                        ? "bg-slate-50 text-slate-300 cursor-not-allowed"
+                        : autonomyTrackSelected ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-50"
                     }`}>자율성트랙</button>
                 </div>
+                {!autonomyTrackAllowed && (
+                  <p className="mt-1 text-[10px] text-slate-400">{draftPolicyName ?? "선택한 전담기관"} 정책상 자율성트랙이 없어 일반과제로만 관리됩니다.</p>
+                )}
               </div>
-              {draft.projectType === "AUTONOMY_TRACK" && (
+              {autonomyTrackSelected && (
                 <div>
                   <label className="block text-xs font-medium text-slate-500 mb-1"
                     title="참여기관별 정산구분과 별개로, 과제 전체에 일괄 적용됩니다">
@@ -1303,10 +1319,10 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
                   </div>
                 </div>
               )}
-              {draft.agencyId === "fa-003" && (
+              {showProgramTypeToggle && (
                 <div>
                   <label className="block text-xs font-medium text-slate-500 mb-1">
-                    사업 유형 <span className="text-slate-400 font-normal">· IITP 전용</span>
+                    사업 유형 <span className="text-slate-400 font-normal">· ICT 기금사업 정책이 있는 전담기관</span>
                   </label>
                   <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-medium bg-white">
                     <button type="button"

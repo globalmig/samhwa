@@ -2,6 +2,7 @@ import { prisma, withDbWriteSlot, withDeadlockRetry, describeDbWriteError } from
 import { requireWriteAccess, SessionError } from "@/lib/session";
 import { toProject } from "@/lib/project-mapper";
 import { writeAuditLog } from "@/lib/audit";
+import { sanitizeProjectProgramFieldsFromDb } from "@/lib/project-program-guard";
 import type { Project } from "@/lib/mock";
 
 export const runtime = "nodejs";
@@ -29,6 +30,26 @@ export async function PATCH(request: Request, { params }: Params) {
   if (!before) return Response.json({ ok: false, error: "과제를 찾을 수 없습니다." }, { status: 404 });
 
   const prevExtra = before.extraData ? (JSON.parse(before.extraData) as Record<string, unknown>) : {};
+
+  // 전담기관/자율성트랙/사업 유형 중 하나라도 이번 수정 대상이면, 수정 후 조합(저장된 값 + 이번 요청)이 전담기관
+  // 정책과 모순되는지 서버에서도 확인해 일반과제/일반 R&D로 바로잡는다(lib/project-program-guard.ts).
+  // 관련 없는 수정(과제명만 고치는 등)에서는 기존 값을 건드리지 않는다.
+  if ("agencyId" in body || "projectType" in body || "programType" in body) {
+    try {
+      const merged = {
+        agencyId: "agencyId" in body ? body.agencyId || "" : before.fundingAgencyId ?? "",
+        projectType: (body.projectType ?? before.projectType) as Project["projectType"],
+        programType: ("programType" in body ? body.programType : prevExtra.programType) as Project["programType"],
+      };
+      const guarded = await sanitizeProjectProgramFieldsFromDb(merged);
+      if (guarded.projectType !== merged.projectType) body = { ...body, projectType: guarded.projectType };
+      if (guarded.programType !== merged.programType) body = { ...body, programType: guarded.programType };
+    } catch (err) {
+      console.error("과제 유형 검증 실패:", err);
+      return Response.json({ ok: false, error: describeDbWriteError(err, "과제를 수정하지 못했습니다.") }, { status: 500 });
+    }
+  }
+
   const extraKeys = [
     "firstStartDate", "finalEndDate", "stageStartDate", "stageEndDate", "annualFinancials", "usageReportDeadline",
     "agencyAssignedAt", "agencyAssignedAtHistory", "internalAssignedAt", "internalAssignedAtHistory", "projectCategory", "researchLead", "researchLeadEmail",

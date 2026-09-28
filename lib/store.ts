@@ -3,7 +3,7 @@ import { getCurrentUser } from "./auth";
 import { nowKST, todayKST, resolveTermDateRange, findRepresentativeTermStartDate } from "./utils";
 import { diffForAudit } from "./audit-diff";
 import { ADMIN_ONLY_LOCKED_PAGES } from "./permission-constants";
-import { calcTermFee, resolvePolicy, normalizeGrade, getMemberAmount, isSettlementTerm, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveProjectCodeForTerm, type CalcMember } from "./fee-calculator";
+import { calcTermFee, resolvePolicy, sanitizeProjectProgramFields, normalizeGrade, getMemberAmount, isSettlementTerm, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveProjectCodeForTerm, type CalcMember } from "./fee-calculator";
 import {
   COMPANY_INFO as initialCompanyInfo,
   initialPageAccess,
@@ -1051,7 +1051,13 @@ export function addProject(data: Omit<Project, "id">): Project {
   const projectCode = data.projectCode ?? nextTermCode();
   const termCodes = data.termCodes ?? [{ termNumber: 1, code: projectCode }];
   const tempId = genId("p");
-  const item: Project = { registeredAt: todayKST(), createdAt: new Date().toISOString(), ...data, projectCode, termCodes, id: tempId };
+  // 화면 폼이든 엑셀 업로드든 모든 등록 경로가 이 함수를 거치므로, 전담기관 정책과 모순되는
+  // 자율성트랙(IITP 등 hasAutonomyTrack=false)/사업 유형(ICT 기금사업 정책이 없는 전담기관)은 여기서
+  // 한 번에 일반과제/일반 R&D로 바로잡는다.
+  const item: Project = sanitizeProjectProgramFields(
+    { registeredAt: todayKST(), createdAt: new Date().toISOString(), ...data, projectCode, termCodes, id: tempId },
+    _state.feePolicies,
+  );
   _state = { ..._state, projects: [..._state.projects, item] };
   record("project", tempId, item.projectName, "CREATE");
   ensureLeadMember(item);
@@ -1118,7 +1124,16 @@ const PROJECT_FEE_AFFECTING_FIELDS = ["agencyId", "startDate", "totalTerms", "ag
 export function updateProject(id: string, data: Partial<Project>): void {
   const before = _state.projects.find((p) => p.id === id);
   if (!before) return;
-  const after = { ...before, ...data };
+  let after = { ...before, ...data };
+  // 전담기관/자율성트랙/사업 유형 중 하나라도 이번 수정 대상이면, 정책과 모순되는 조합을 바로잡는다 —
+  // 특히 전담기관을 IITP에서 다른 곳으로 바꿀 때 사업 유형(ICT_FUND)이 그대로 남아 정책 조회가
+  // 실패하는 것을 막는다. 바로잡은 값은 서버로 나가는 PATCH 바디(data)에도 함께 실어야 DB에 반영된다.
+  if ("agencyId" in data || "projectType" in data || "programType" in data) {
+    const sanitized = sanitizeProjectProgramFields(after, _state.feePolicies);
+    if (sanitized.projectType !== after.projectType) data = { ...data, projectType: sanitized.projectType };
+    if (sanitized.programType !== after.programType) data = { ...data, programType: sanitized.programType };
+    after = sanitized;
+  }
   _state = { ..._state, projects: _state.projects.map((p) => (p.id === id ? after : p)) };
   // 과제번호는 참여기관·연차수수료·미청구·미수금·세금계산서·이슈에 참조키(projectNumber)로
   // 그대로 복사돼 있으므로, 확정 전 오타 등을 바로잡아 과제번호를 바꾸는 경우 함께 갱신하지

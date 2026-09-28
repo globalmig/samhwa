@@ -9,6 +9,7 @@
     "lint": "eslint",
     "test:excel-upload": "node --test tests/excel-upload.test.cjs",
     "test:date-utils": "node --test tests/date-utils.test.cjs",
+    "test:project-program": "node --test tests/project-program.test.cjs",
     "postinstall": "prisma generate",
     "db:seed": "tsx prisma/seed.ts"
   },

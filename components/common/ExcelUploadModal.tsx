@@ -10,6 +10,7 @@ import {
   SHEET_DEFS,
   matchSheet,
   buildColumnMapping,
+  parseProgramTypeCell,
   type SheetDef,
   type ColMappingResult,
   type UnknownColumn,
@@ -45,6 +46,9 @@ import {
   resolveAssignedManagerPrimaryForTerm,
   resolveAgencyAssignedAtForTerm,
   resolveInternalAssignedAtForTerm,
+  supportsAutonomyTrack,
+  agencyHasIctFundPolicy,
+  type ProgramPolicyLike,
 } from "@/lib/fee-calculator";
 import { resolveTermDateRange, nowKST, todayKST, formatBizNumber, splitVatInclusive, computeOverallDatesFromStages, isValidDateStr, computeCurrentTerm } from "@/lib/utils";
 import ManagerPickerModal from "@/components/common/ManagerPickerModal";
@@ -749,6 +753,9 @@ export interface ProjectScalarInfo {
   researchLeadConflictTerms: Set<number>;
   researchLeadEmailConflictTerms: Set<number>;
   isAutonomyTrack: boolean;
+  // 엑셀 "사업유형" 컬럼에서 읽은 값(일반 R&D / ICT 기금사업) — 비어 있거나 해석할 수 없는 값은 담지 않는다.
+  // 행마다 값이 갈리면(둘 다 담김) 어느 쪽인지 특정할 수 없으니 아무것도 반영하지 않는다.
+  programTypes: Set<"GENERAL" | "ICT_FUND">;
   projectCategories: Set<string>;    // 과제구분(연차상시/정산)
   agencyAssignedAts: Set<string>;    // 전문기관배정일 — 연차 구분 없이 관측된 모든 값(유일값 폴백용)
   internalAssignedAts: Set<string>;  // 내부배정일 — 위와 동일한 용도의 폴백
@@ -779,7 +786,7 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
         researchLeadEmails: new Set(),
         researchLeadsByTerm: new Map(), researchLeadEmailsByTerm: new Map(),
         researchLeadConflictTerms: new Set(), researchLeadEmailConflictTerms: new Set(),
-        isAutonomyTrack: false, projectCategories: new Set(), agencyAssignedAts: new Set(), internalAssignedAts: new Set(),
+        isAutonomyTrack: false, programTypes: new Set(), projectCategories: new Set(), agencyAssignedAts: new Set(), internalAssignedAts: new Set(),
         agencyAssignedAtsByTerm: new Map(), internalAssignedAtsByTerm: new Map(),
         startDates: new Set(), endDates: new Set(),
       };
@@ -826,6 +833,8 @@ function buildProjectScalarAggregates(sheets: ParsedSheet[]): Map<string, Projec
       }
 
       if (get("autonomyTrack", row) === "자율성트랙") info.isAutonomyTrack = true;
+      const rowProgramType = parseProgramTypeCell(get("programType", row));
+      if (rowProgramType) info.programTypes.add(rowProgramType);
 
       // 연구책임자는 "주관"기관 행의 기관책임자만 채택 — 공동기관 책임자는 과제 전체의
       // 연구책임자가 아니므로 섞이면 안 된다.
@@ -1307,6 +1316,38 @@ function resolveStageStructure(
 // 행만 포함), 그 값을 그대로 믿으면 여러 단계짜리 과제의 전체 기간이 단계 하나의 기간으로 줄어드는
 // 문제가 있었다. 단계 정보가 아예 없는 일괄협약 과제는 호출부에서 총개발시작일자/총개발종료일자로 폴백한다.
 
+// 엑셀 "사업유형" 값을 이 과제의 전담기관에 실제로 반영할 수 있는 값으로 확정한다. 값이 없거나(빈칸·해석
+// 불가) 일반 R&D를 다시 지정한 경우(이미 일반 R&D)는 기존 값을 그대로 돌려줘 건드리지 않는다 — 수수료
+// 계산 방식이 통째로 바뀌는 값이라 추측으로 정하지 않는다. 반영하지 못했거나(정책 없음·행마다 값이 다름)
+// 실제로 바뀌는 경우에만 note를 붙여 호출부가 이슈로 남기게 한다.
+// 미리보기 단계(computeProjectUpdates — "반영할 변경이 있는지")와 등록 단계(doRegister)가 같은 판정을
+// 써야 하므로 모듈 수준에 둔다 — 두 곳이 따로 판단하면 미리보기는 "변경 없음"인데 등록은 바꾸는(또는 그
+// 반대인) 불일치가 생기고, 특히 이 값만 바뀐 재업로드는 등록 버튼이 아예 비활성화된다.
+function resolveExcelProgramType(
+  info: ProjectScalarInfo | undefined,
+  agencyId: string,
+  agencyLabel: string,
+  current: Project["programType"],
+  policies: ProgramPolicyLike[],
+  isNew = false,
+): { next: Project["programType"]; note?: string } {
+  const types = info?.programTypes;
+  if (!types || types.size === 0) return { next: current };
+  if (types.size > 1) return { next: current, note: `엑셀의 "사업유형" 값이 행마다 달라(일반/ICT기금사업 혼재) 어느 쪽인지 특정할 수 없어 반영하지 않았습니다.` };
+  const excelValue = [...types][0];
+  if (excelValue === "ICT_FUND" && !agencyHasIctFundPolicy(agencyId, policies)) {
+    return { next: current, note: `엑셀에는 "ICT기금사업"으로 표시돼 있었지만 ${agencyLabel || "해당 전담기관"}에는 ICT 기금사업 정책이 없어 반영하지 않았습니다(일반 R&D로 처리).` };
+  }
+  // 일반 R&D로 지정한 경우도 "값 없음(일반 R&D)"과 동일하므로, 기존이 미지정이면 그대로 미지정으로 둔다.
+  if (excelValue === (current ?? "GENERAL")) return { next: current };
+  // 새로 등록하는 과제는 "바뀐" 게 아니라 처음부터 그 유형으로 만드는 것이라 알릴 변경이 없다.
+  if (isNew) return { next: excelValue };
+  return {
+    next: excelValue,
+    note: `엑셀의 "사업유형"에 따라 사업 유형을 ${current === "ICT_FUND" ? "ICT 기금사업" : "일반 R&D"} → ${excelValue === "ICT_FUND" ? "ICT 기금사업" : "일반 R&D"}(으)로 바꿨습니다. 아직 확정되지 않은 연차의 수수료가 새 정책으로 재산정됩니다.`,
+  };
+}
+
 // 엑셀에 담긴 과제 중 이미 등록된 과제를, 진행중인 연차(currentTerm)와 비교해
 // 신규/다음연차/동일연차/과거연차로 분류한다 (신규 과제는 여기서 다루지 않는다).
 function computeProjectUpdates(
@@ -1316,7 +1357,8 @@ function computeProjectUpdates(
   institutions: readonly Pick<Institution, "id" | "bizNumber">[],
   projectMaxTerm: Map<string, number>,
   stageAggregates: Map<string, ProjectStageInfo>,
-  scalarAggregates: Map<string, ProjectScalarInfo>
+  scalarAggregates: Map<string, ProjectScalarInfo>,
+  feePolicies: ProgramPolicyLike[],
 ): ProjectUpdateInfo[] {
   // 아래 루프는 파일에 등장한 고유 과제 수(U)만큼 도는데, 그 안에서 projects/institutions/
   // projectMembers 전체를 매번 .find()/.some()으로 훑으면 비용이 "U × 기존 누적 데이터 규모"로
@@ -1395,7 +1437,10 @@ function computeProjectUpdates(
       (assignedManager !== undefined && assignedManager !== existing.assignedManager) ||
       (assignedManagerPrimary !== undefined && assignedManagerPrimary !== existing.assignedManagerPrimary) ||
       (agencyAssignedAt !== undefined && agencyAssignedAt !== existing.agencyAssignedAt) ||
-      (internalAssignedAt !== undefined && internalAssignedAt !== existing.internalAssignedAt);
+      (internalAssignedAt !== undefined && internalAssignedAt !== existing.internalAssignedAt) ||
+      // 사업 유형(일반 R&D ↔ ICT 기금사업)도 승인 여부와 무관하게 반영되는 정정 값이다 — 여기서 감지하지
+      // 않으면 이 값만 바뀐 재업로드는 "반영할 변경 없음"으로 보여 등록 버튼이 비활성화돼 영영 반영되지 않는다.
+      resolveExcelProgramType(scalarInfo, existing.agencyId, existing.agency, existing.programType, feePolicies).next !== existing.programType;
 
     const hasMemberContactChange = (memberAggregatesByNormNum.get(normNum) ?? []).some((agg) => {
       const institutionId = institutionIdByNormBiz.get(normBiz(agg.bizNumber));
@@ -2403,7 +2448,8 @@ function DoneStep({ result, onClose }: { result: DoneResult; onClose: () => void
 // 필드가 하나 추가/변경될 때 한쪽만 고치고 잊어버려서 두 파일의 컬럼이 어긋나는 사고가 나기 쉽다.
 const ANNUAL_SHEET_NOTES = [
   "※필수", "※필수", "※필수",
-  "선택", "선택", "선택 (\"자율성트랙\"만 인식)",
+  "선택", "선택", "선택 (\"자율성트랙\"만 인식 — 자율성트랙이 없는 전담기관(IITP 등)은 무시됨)",
+  "선택 (\"ICT기금사업\" 또는 \"일반\" — ICT 기금사업 정책이 있는 전담기관(IITP)에서만 반영, 빈칸이면 기존 값 유지)",
   "※필수 (YYYY-MM-DD)", "※필수 (YYYY-MM-DD)",
   "선택", "※필수 (이 행의 사업비가 몇 연차 것인지 — 비면 1연차로 잘못 등록됨)", "선택",
   "※필수", "※필수 (하이픈 없이 숫자만 입력해도 등록 시 000-00-00000 형식으로 자동 변환됨)",
@@ -2427,7 +2473,7 @@ const ANNUAL_SHEET_NOTES = [
 ];
 const ANNUAL_SHEET_HEADERS = [
   "전문기관명", "과제번호", "과제명",
-  "과제담당자(정)", "과제담당자(부)", "자율성트랙",
+  "과제담당자(정)", "과제담당자(부)", "자율성트랙", "사업유형",
   "총개발시작일자", "총개발종료일자",
   "단계", "연차", "지원연도",
   "연구개발기관명", "기관사업자등록번호",
@@ -2449,6 +2495,7 @@ function styleAnnualSheet(ws: ExcelJS.Worksheet) {
   styleTemplateHeader(ws, ANNUAL_SHEET_NOTES, 2);
   styleTemplateDataRows(ws, 3, 2 + TEMPLATE_BLANK_ROWS, ANNUAL_SHEET_HEADERS.length);
   applyDropdown(ws, ANNUAL_SHEET_HEADERS.indexOf("자율성트랙") + 1, ["", "자율성트랙"], 3, 2 + TEMPLATE_BLANK_ROWS);
+  applyDropdown(ws, ANNUAL_SHEET_HEADERS.indexOf("사업유형") + 1, ["", "일반", "ICT기금사업"], 3, 2 + TEMPLATE_BLANK_ROWS);
   applyDropdown(ws, ANNUAL_SHEET_HEADERS.indexOf("기관역할구분") + 1, ["주관", "공동", "위탁"], 3, 2 + TEMPLATE_BLANK_ROWS);
   applyDropdown(ws, ANNUAL_SHEET_HEADERS.indexOf("등급") + 1, ["최우수(S)", "우수(A)", "우수(B)", "우수(C)", "일반", ""], 3, 2 + TEMPLATE_BLANK_ROWS);
   applyDropdown(ws, ANNUAL_SHEET_HEADERS.indexOf("정산형태") + 1, ["위탁정산", "자체정산"], 3, 2 + TEMPLATE_BLANK_ROWS);
@@ -2456,7 +2503,7 @@ function styleAnnualSheet(ws: ExcelJS.Worksheet) {
 }
 
 const STAGE_SHEET_NOTES = [
-  "※필수", "선택", "※필수", "※필수",
+  "※필수", "선택 (참고용 — 등록에 사용되지 않음)", "※필수", "※필수",
   "※필수 (YYYY-MM-DD)", "※필수 (YYYY-MM-DD)",
   "※필수 (0=일괄협약, 1 이상=단계협약)", "※필수 (연차 숫자)", "※필수 (시작단계와 동일해야 함)", "※필수 (연차 숫자)",
   "선택 (YYYY-MM-DD, 이 단계의 실제 시작일)", "선택 (YYYY-MM-DD, 이 단계의 실제 종료일)",
@@ -2609,6 +2656,8 @@ function buildAnnualSheetRowsFromData(
           resolveAssignedManagerPrimaryForTerm(project, termNumber),
           resolveAssignedManagerForTerm(project, termNumber),
           project.projectType === "AUTONOMY_TRACK" ? "자율성트랙" : "",
+          // 일반 R&D는 빈칸 — 재업로드해도 "지정 안 함"이라 기존 값을 그대로 둔다.
+          project.programType === "ICT_FUND" ? "ICT기금사업" : "",
           overallStartDate,
           overallEndDate,
           resolveStageNumberForTerm(project, termNumber),
@@ -2781,7 +2830,7 @@ export async function downloadExcelTemplate() {
   const rows = [
     [
       "한국산업기술기획평가원", "RS-2024-00000001", "스마트 제조 AI 시스템 개발",
-      "정담당", "홍길동", "",
+      "정담당", "홍길동", "", "",
       "2024-03-01", "2027-02-28", "1", "1", "2024",
       "삼화기술경영(주)", "123-45-67890",
       "주관", "우수(A)", "위탁정산", "",
@@ -2796,7 +2845,7 @@ export async function downloadExcelTemplate() {
     ],
     [
       "한국산업기술기획평가원", "RS-2024-00000001", "스마트 제조 AI 시스템 개발",
-      "정담당", "홍길동", "",
+      "정담당", "홍길동", "", "",
       "2024-03-01", "2027-02-28", "1", "1", "2024",
       "참여기업(주)", "234-56-78901",
       "공동", "", "위탁정산", "",
@@ -2811,7 +2860,7 @@ export async function downloadExcelTemplate() {
     ],
     [
       "한국에너지기술평가원", "RS-2024-00000002", "신재생에너지 효율화 연구",
-      "박정담", "김담당", "자율성트랙",
+      "박정담", "김담당", "자율성트랙", "",
       "2024-06-01", "2026-05-31", "0", "1", "2024",
       "에너지연구소", "345-67-89012",
       "주관", "최우수(S)", "자체정산", "",
@@ -2884,7 +2933,7 @@ function parseSheetToParsedSheet(wb: XLSX.WorkBook, sheetName: string, def: Shee
 // ============================================================
 
 export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
-  const { fundingAgencies, institutions, projects, projectMembers, users, termFees } = useStore();
+  const { fundingAgencies, institutions, projects, projectMembers, users, termFees, feePolicies } = useStore();
   const [step, setStep] = useState<Step>("upload");
   const [workbook, setWorkbook] = useState<XLSX.WorkBook | null>(null);
   const [allSheetNames, setAllSheetNames] = useState<string[]>([]);
@@ -2955,8 +3004,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
 
   // 이미 등록된 과제 중 이번 엑셀이 다음/동일/과거 연차 중 무엇에 해당하는지 판단
   const projectUpdates = useMemo(
-    () => computeProjectUpdates(projects, memberAggregates, projectMembers, institutions, projectMaxTerm, stageAggregates, scalarAggregates),
-    [projects, memberAggregates, projectMembers, institutions, projectMaxTerm, stageAggregates, scalarAggregates]
+    () => computeProjectUpdates(projects, memberAggregates, projectMembers, institutions, projectMaxTerm, stageAggregates, scalarAggregates, feePolicies),
+    [projects, memberAggregates, projectMembers, institutions, projectMaxTerm, stageAggregates, scalarAggregates, feePolicies]
   );
 
   // 엑셀 연차값과 총개발시작일자 기준 캘린더 계산값이 다른 과제 — 등록 자체는 막지 않고 미리보기에서
@@ -3410,6 +3459,15 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
     // 없이(빈 값으로) 그대로 등록되는데, 지금까진 아무 표시 없이 조용히 넘어가 아무도 눈치채지 못했다.
     const newProjectIdsForLeadCheck = new Map<string, string>(); // projectId → projectNumber
     const leadResolvedProjectIds = new Set<string>();
+    // 엑셀이 "자율성트랙"으로 표시했지만 그 과제의 전담기관 정책에 자율성트랙이 없어(예: IITP,
+    // hasAutonomyTrack=false) 일반과제로 등록한 과제 — 조용히 무시하면 엑셀과 시스템 값이 어긋난 걸
+    // 아무도 모르니 이슈로 남긴다(아래 addProjectIssue). 최종 보정은 addProject/updateProject가 한다.
+    const autonomyIgnoredProjects: { projectId: string; projectNumber: string; agencyName: string }[] = [];
+    // 엑셀 "사업유형"을 반영하지 못했거나(정책 없음·행마다 값이 다름) 기존 과제의 사업 유형이 이번 엑셀로 바뀐
+    // 과제 — 수수료 계산 방식이 통째로 달라지는 값이라 담당자가 알 수 있게 이슈로 남긴다.
+    const programTypeNotices: { projectId: string; projectNumber: string; content: string }[] = [];
+    const resolveProgramType = (info: ProjectScalarInfo | undefined, agencyId: string, agencyLabel: string, current: Project["programType"], isNew = false) =>
+      resolveExcelProgramType(info, agencyId, agencyLabel, current, feePolicies, isNew);
 
     // 기존 전담기관·과제·기관 미리 채워두기 (참여기관 연결에 필요)
     for (const a of fundingAgencies) registeredAgencies.set(a.name, a.id);
@@ -3577,6 +3635,13 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           const leadChanged =
             (researchLead !== undefined && researchLead !== renamedFrom.researchLead) ||
             (researchLeadEmail !== undefined && researchLeadEmail !== renamedFrom.researchLeadEmail);
+          const renamedAgencyId = agencyId || renamedFrom.agencyId;
+          const renamedProgram = resolveProgramType(scalarInfo, renamedAgencyId, row.agencyName || renamedFrom.agency, renamedFrom.programType);
+          if (renamedProgram.note) programTypeNotices.push({ projectId: renamedFrom.id, projectNumber: row.projectNumber, content: renamedProgram.note });
+          const renamedAutonomyAllowed = supportsAutonomyTrack(renamedAgencyId, feePolicies, renamedProgram.next ?? "GENERAL");
+          if (scalarInfo?.isAutonomyTrack && !renamedAutonomyAllowed) {
+            autonomyIgnoredProjects.push({ projectId: renamedFrom.id, projectNumber: row.projectNumber, agencyName: row.agencyName || renamedFrom.agency });
+          }
           // 1) 기본값(researchLead/researchLeadEmail) 변경 시 이미 있는 연차를 옛 값으로 고정(소급 방지) —
           // 2) 그 위에 파일이 실제로 담고 있는 연차별 값을 buildResearchLeadOverridesFromExcel로 정확히 얹는다
           //    (같은 연차 안에서 서로 다른 값이 동시에 관측된 연차는 건너뛰고 이슈로 안내한다).
@@ -3607,7 +3672,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             agreementType: agreementType ?? renamedFrom.agreementType,
             stages: stages ?? renamedFrom.stages,
             projectCategory,
-            projectType: scalarInfo?.isAutonomyTrack ? "AUTONOMY_TRACK" : renamedFrom.projectType,
+            projectType: scalarInfo?.isAutonomyTrack && renamedAutonomyAllowed ? "AUTONOMY_TRACK" : renamedFrom.projectType,
+            programType: renamedProgram.next,
             govGrant: govGrant > 0 ? govGrant : renamedFrom.govGrant,
             privateCash: privateCash > 0 ? privateCash : renamedFrom.privateCash,
             privateInKind: privateInKind > 0 ? privateInKind : renamedFrom.privateInKind,
@@ -3646,6 +3712,10 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           newProjectStartDate.set(normNum, renamedFrom.startDate);
           renamedCount++;
         } else {
+          // 새 과제의 사업 유형은 엑셀 "사업유형" 값(없으면 일반 R&D)으로 정하고, 자율성트랙 가능 여부도
+          // 그 사업 유형의 정책 기준으로 본다.
+          const newProgram = resolveProgramType(scalarInfo, agencyId, row.agencyName, undefined, true);
+          const newAutonomyAllowed = supportsAutonomyTrack(agencyId, feePolicies, newProgram.next ?? "GENERAL");
           const created = addProject({
             projectNumber: row.projectNumber,
             projectName: row.projectName || "미입력",
@@ -3663,7 +3733,8 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
             agreementType,
             stages,
             projectCategory,
-            projectType: scalarInfo?.isAutonomyTrack ? "AUTONOMY_TRACK" : undefined,
+            projectType: scalarInfo?.isAutonomyTrack && newAutonomyAllowed ? "AUTONOMY_TRACK" : undefined,
+            programType: newProgram.next,
             govGrant: govGrant > 0 ? govGrant : undefined,
             privateCash: privateCash > 0 ? privateCash : undefined,
             privateInKind: privateInKind > 0 ? privateInKind : undefined,
@@ -3692,6 +3763,10 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
           newProjectAgencyId.set(normNum, agencyId);
           newProjectStartDate.set(normNum, startDateStr);
           newProjectIdsForLeadCheck.set(created.id, row.projectNumber);
+          if (scalarInfo?.isAutonomyTrack && !newAutonomyAllowed) {
+            autonomyIgnoredProjects.push({ projectId: created.id, projectNumber: row.projectNumber, agencyName: row.agencyName });
+          }
+          if (newProgram.note) programTypeNotices.push({ projectId: created.id, projectNumber: row.projectNumber, content: newProgram.note });
           projectCount++;
 
           // 과제명·총개발시작일자·총개발종료일자가 비어 있어 임시값("미입력"/오늘 날짜)으로 채워진 채
@@ -4012,7 +4087,13 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
       const overallEndDate = stageOverallDates.end
         ?? (scalarInfo && scalarInfo.endDates.size === 1 ? [...scalarInfo.endDates][0] : undefined);
 
+      // 사업 유형(일반 R&D ↔ ICT 기금사업)도 정정 값이라 승인 여부와 무관하게 반영한다 — 엑셀 "사업유형"을
+      // 명시적으로 채운 경우에만 바뀌고(빈칸이면 기존 값 유지), store.updateProject가 확정되지 않은 연차만 재산정한다.
+      const existingProgram = resolveProgramType(scalarInfo, existingProject.agencyId, existingProject.agency, existingProject.programType);
+      if (existingProgram.note) programTypeNotices.push({ projectId: info.projectId, projectNumber: existingProject.projectNumber, content: existingProgram.note });
+
       const safeUpdates: Partial<Project> = {
+        programType: existingProgram.next,
         firstStartDate: overallStartDate ?? existingProject.firstStartDate,
         finalEndDate: overallEndDate ?? existingProject.finalEndDate,
         assignedManager: resolvedAssignedManager ? applyManagerNameResolution(resolvedAssignedManager, managerNameResolutions, users) : existingProject.assignedManager,
@@ -4262,6 +4343,39 @@ export default function ExcelUploadModal({ onClose }: { onClose: () => void }) {
         author: authorName,
         createdAt: now,
         priority: "HIGH",
+        status: "OPEN",
+        recipientGroups: ["MANAGER", "MANAGER_DEPUTY", "ACCOUNTANT"],
+        noInstitution: true,
+      });
+      stageAlertCount++;
+    }
+
+    // 엑셀은 "자율성트랙"으로 표시했지만 전담기관 정책상 자율성트랙이 없어 일반과제로 처리한 과제 —
+    // 엑셀 값과 시스템 값이 다르다는 걸 담당자가 알 수 있게 남긴다(등록 자체는 막지 않는다).
+    for (const info of autonomyIgnoredProjects) {
+      addProjectIssue({
+        projectId: info.projectId,
+        projectNumber: info.projectNumber,
+        content: `RCMS 엑셀 업로드 — 엑셀에는 이 과제가 "자율성트랙"으로 표시돼 있었지만, ${info.agencyName || "해당 전담기관"} 수수료 정책에는 자율성트랙이 없어 일반과제로 처리했습니다.\n엑셀의 과제유형 값이 맞는지 확인해주세요.`,
+        author: authorName,
+        createdAt: now,
+        priority: "MEDIUM",
+        status: "OPEN",
+        recipientGroups: ["MANAGER", "MANAGER_DEPUTY", "ACCOUNTANT"],
+        noInstitution: true,
+      });
+      stageAlertCount++;
+    }
+
+    // 엑셀 "사업유형"을 반영하지 못했거나 기존 과제의 사업 유형이 바뀐 과제 — 계산 방식이 달라지는 값이라 알린다.
+    for (const info of programTypeNotices) {
+      addProjectIssue({
+        projectId: info.projectId,
+        projectNumber: info.projectNumber,
+        content: `RCMS 엑셀 업로드 — ${info.content}`,
+        author: authorName,
+        createdAt: now,
+        priority: "MEDIUM",
         status: "OPEN",
         recipientGroups: ["MANAGER", "MANAGER_DEPUTY", "ACCOUNTANT"],
         noInstitution: true,

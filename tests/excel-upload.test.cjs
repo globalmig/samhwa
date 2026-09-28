@@ -325,3 +325,35 @@ test("concurrent business-number creation restarts the transaction and reuses th
   assert.equal(server.inspect().rows.size, 1);
   assert.equal(server.inspect().audit.length, 0);
 });
+
+test("addProject corrects an autonomy-track project of an agency whose policy has none", (t) => {
+  const requests = controlledNetwork(t);
+  const store = loadStore();
+  const { project } = seed(store);
+  store.inspectForTest({ feePolicies });
+  const created = store.addProject({ ...project, projectNumber: "IITP-P", agencyId: "fa-003", projectType: "AUTONOMY_TRACK" });
+  assert.equal(created.projectType, "GENERAL");
+  assert.equal(requests[0].body.projectType, "GENERAL");
+});
+
+test("changing the agency away from IITP resets ICT_FUND and sends the correction to the server", (t) => {
+  const requests = controlledNetwork(t);
+  const store = loadStore();
+  const { project } = seed(store, { agencyId: "fa-003", programType: "ICT_FUND" });
+  store.inspectForTest({ feePolicies });
+  store.updateProject(project.id, { agencyId: "fa-001" });
+  assert.equal(store.inspectForTest().state.projects[0].programType, "GENERAL");
+  const patch = requests.find((r) => r.method === "PATCH");
+  assert.equal(patch.body.programType, "GENERAL");
+});
+
+test("an unrelated update does not touch the program fields", (t) => {
+  const requests = controlledNetwork(t);
+  const store = loadStore();
+  const { project } = seed(store, { agencyId: "fa-003", projectType: "AUTONOMY_TRACK" });
+  store.inspectForTest({ feePolicies });
+  store.updateProject(project.id, { projectName: "Renamed" });
+  assert.equal(store.inspectForTest().state.projects[0].projectType, "AUTONOMY_TRACK");
+  const patch = requests.find((r) => r.method === "PATCH");
+  assert.equal("projectType" in patch.body, false);
+});
