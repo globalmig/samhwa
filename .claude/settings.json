@@ -21,7 +21,8 @@
       "Bash(\"d:\\\\file_hyebinkim\\\\development\\\\samhwa\\\\node_modules\\\\.bin\\\\tsc\" fee-calculator.ts mock.ts utils.ts --module esnext --target es2020 --moduleResolution bundler --outDir out)",
       "Bash(\"d:\\\\file_hyebinkim\\\\development\\\\samhwa\\\\node_modules\\\\.bin\\\\tsc\" test.mts --module esnext --target es2020 --moduleResolution bundler --outDir out)",
       "Bash(node out/test.mjs)",
-      "Bash(\"d:\\\\file_hyebinkim\\\\development\\\\samhwa\\\\node_modules\\\\.bin\\\\tsc\" fee-calculator.ts mock.ts utils.ts test.mts --module esnext --target es2020 --moduleResolution bundler --outDir out)"
+      "Bash(\"d:\\\\file_hyebinkim\\\\development\\\\samhwa\\\\node_modules\\\\.bin\\\\tsc\" fee-calculator.ts mock.ts utils.ts test.mts --module esnext --target es2020 --moduleResolution bundler --outDir out)",
+      "Bash(ssh -i /c/Users/user/AppData/Local/Temp/claude/d--file-hyebinkim-development-samhwa/5528f7dd-d3ef-41f2-9e45-a75f8b92612a/scratchpad/samhwa_employee * shcpa8f@211.115.107.58 *sqlcmd*)"
     ]
   }
 }

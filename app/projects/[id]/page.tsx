@@ -14,7 +14,7 @@ import {
   addReceivable, updateReceivable, addEmailDispatch, updateEmailDispatch, updateTermFee, updateUnclaimedFee,
   updateProjectMember, autoGenerateTermFees, addProjectMember, deleteProjectMember, deleteProject, deleteProjectTerms,
   setTermOtherFirmHandled, setTermBillingType, setTermDates, resolveProjectId, ensureAgencyNoticeTemplateDetail,
-  isFeeRecalcDataFresh,
+  isFeeRecalcDataFresh, startPollingProjectFees,
 } from "@/lib/store";
 import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type EmailDispatch, type FeePolicy, type AnnualFinancials, type FundingAgency, EMPTY_NOTICE_TEMPLATE } from "@/lib/mock";
 import { calcTermFee, resolvePolicy, agencyHasIctFundPolicy, supportsAutonomyTrack, sanitizeProjectProgramFields, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveMemberLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveAgencyAssignedAtForTerm, resolveInternalAssignedAtForTerm, resolveProjectDivision, resolveProjectCodeForTerm, resolveStageNumberForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, MEMBER_ROLE_LABEL, type CalcMember } from "@/lib/fee-calculator";
@@ -2816,6 +2816,10 @@ function zeroFeeReasons(f: TermFee, role: string | undefined, grade: string, pol
 function AppliedFeeCell({ fee, canEdit, projectId, zeroReasons }: { fee: TermFee; canEdit: boolean; projectId: string; zeroReasons: string[] }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(fee.appliedFee);
+  // 편집을 시작한 시점의 값을 따로 기억해둔다 — fee.appliedFee(스토어 최신값)는 폴링(실시간 반영)으로
+  // 편집 도중에도 바뀔 수 있는데, draft(내가 입력 중인 값)는 그와 무관하게 그대로 둬야 타이핑이 안
+  // 끊긴다. 대신 이 기준값과 달라지면 "다른 사람이 방금 바꿨다"는 걸 알 수 있게 아래에서 비교한다.
+  const [editingBaseline, setEditingBaseline] = useState(fee.appliedFee);
   const [showReason, setShowReason] = useState(false);
   const [reasonPos, setReasonPos] = useState<{ top: number; left: number } | null>(null);
   const reasonBtnRef = useRef<HTMLButtonElement>(null);
@@ -2833,6 +2837,7 @@ function AppliedFeeCell({ fee, canEdit, projectId, zeroReasons }: { fee: TermFee
 
   function startEdit() {
     setDraft(fee.appliedFee);
+    setEditingBaseline(fee.appliedFee);
     setEditing(true);
   }
   function save() {
@@ -2845,15 +2850,24 @@ function AppliedFeeCell({ fee, canEdit, projectId, zeroReasons }: { fee: TermFee
   }
 
   const canEditThis = canEdit && fee.status !== "BILLED";
+  // 입력창을 열어둔 사이 다른 사람이 이 행을 저장해 fee.appliedFee(최신값)가 편집 시작 시점과 달라졌다 —
+  // 내가 지금 입력 중인 draft를 강제로 덮진 않되(타이핑이 끊기면 더 혼란스럽다), 저장하면 방금 그 사람의
+  // 변경을 덮어쓴다는 걸 명확히 알려준다.
+  const externallyChanged = editing && fee.appliedFee !== editingBaseline;
 
   if (editing) {
     return (
       <div className="flex items-center justify-end gap-1">
+        {externallyChanged && (
+          <span title={`다른 사용자가 이 값을 ${fmtWonFull(fee.appliedFee)}으로 방금 바꿨습니다. 저장하면 그 값을 덮어씁니다.`}>
+            <FiAlertTriangle size={12} className="text-red-500 shrink-0" />
+          </span>
+        )}
         <MoneyInput
           value={draft}
           onChange={setDraft}
           autoFocus
-          className="w-28 text-right text-xs border border-blue-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+          className={`w-28 text-right text-xs border rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500/30 ${externallyChanged ? "border-red-400" : "border-blue-300"}`}
         />
         <button type="button" onClick={save} className="text-green-600 hover:text-green-700" title="저장">
           <FiCheck size={13} />
@@ -2921,9 +2935,13 @@ function AppliedFeeCell({ fee, canEdit, projectId, zeroReasons }: { fee: TermFee
 function UnclaimedFeeCell({ fee, canEdit, projectId }: { fee: TermFee; canEdit: boolean; projectId: string }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(fee.unclaimedFee ?? 0);
+  // AppliedFeeCell과 동일한 이유 — 편집 시작 시점 값을 따로 기억해, 그 사이 폴링(실시간 반영)으로
+  // fee.unclaimedFee가 바뀌면(다른 사람이 저장) 알 수 있게 한다.
+  const [editingBaseline, setEditingBaseline] = useState(fee.unclaimedFee ?? 0);
 
   function startEdit() {
     setDraft(fee.unclaimedFee ?? 0);
+    setEditingBaseline(fee.unclaimedFee ?? 0);
     setEditing(true);
   }
   function save() {
@@ -2936,15 +2954,21 @@ function UnclaimedFeeCell({ fee, canEdit, projectId }: { fee: TermFee; canEdit: 
   }
 
   const canEditThis = canEdit && fee.status !== "BILLED";
+  const externallyChanged = editing && (fee.unclaimedFee ?? 0) !== editingBaseline;
 
   if (editing) {
     return (
       <div className="flex items-center justify-end gap-1">
+        {externallyChanged && (
+          <span title={`다른 사용자가 이 값을 ${fmtWonFull(fee.unclaimedFee ?? 0)}으로 방금 바꿨습니다. 저장하면 그 값을 덮어씁니다.`}>
+            <FiAlertTriangle size={12} className="text-red-500 shrink-0" />
+          </span>
+        )}
         <MoneyInput
           value={draft}
           onChange={setDraft}
           autoFocus
-          className="w-28 text-right text-xs border border-blue-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+          className={`w-28 text-right text-xs border rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500/30 ${externallyChanged ? "border-red-400" : "border-blue-300"}`}
         />
         <button type="button" onClick={save} className="text-green-600 hover:text-green-700" title="저장">
           <FiCheck size={13} />
@@ -2987,6 +3011,9 @@ function FeeAggregateSummary({ group, canEdit, projectId }: { group: TermGroup; 
   const [totalDraft, setTotalDraft] = useState(0);
   const [reason, setReason] = useState("");
   const [showHistory, setShowHistory] = useState(false);
+  // AppliedFeeCell/UnclaimedFeeCell과 동일한 이유 — 편집 시작 시점의 합계를 따로 기억해, 그 사이
+  // 폴링(실시간 반영)으로 이 연차의 기관별 금액이 바뀌어 group.totalApplied가 달라지면 알 수 있게 한다.
+  const [editingBaseline, setEditingBaseline] = useState(0);
 
   const { supplyAmount: aggSupply, taxAmount: aggTax } = splitVatInclusive(group.totalApplied);
   const overriddenFee = group.fees.find((f) => f.manualOverride && f.manualOverrideReason);
@@ -3019,6 +3046,7 @@ function FeeAggregateSummary({ group, canEdit, projectId }: { group: TermGroup; 
 
   function startEdit() {
     setTotalDraft(group.totalApplied);
+    setEditingBaseline(group.totalApplied);
     setReason("");
     setEditing(true);
   }
@@ -3045,9 +3073,19 @@ function FeeAggregateSummary({ group, canEdit, projectId }: { group: TermGroup; 
     autoGenerateTermFees(projectId);
   }
 
+  // 이 카드를 열어둔 사이 다른 사람이 이 연차의 기관별 금액을 저장해 group.totalApplied(합계)가 편집
+  // 시작 시점과 달라졌다 — AppliedFeeCell과 동일하게 입력값을 강제로 덮진 않되 알려준다.
+  const externallyChanged = editing && group.totalApplied !== editingBaseline;
+
   if (editing) {
     return (
       <div className="border-t border-slate-200 px-5 py-3 bg-blue-50/40 space-y-3">
+        {externallyChanged && (
+          <div className="flex items-center gap-1.5 text-[11px] text-red-600">
+            <FiAlertTriangle size={12} className="shrink-0" />
+            다른 사용자가 이 연차의 금액을 {fmtWonFull(group.totalApplied)}(으)로 방금 바꿨습니다. 저장하면 그 값을 덮어씁니다.
+          </div>
+        )}
         <div className="flex items-center justify-end gap-6">
           <div className="text-right">
             <p className="text-[10px] text-slate-400 mb-1">공 급 가 액</p>
@@ -3060,7 +3098,7 @@ function FeeAggregateSummary({ group, canEdit, projectId }: { group: TermGroup; 
           <div className="text-right">
             <p className="text-[10px] font-semibold text-slate-500 mb-1 tracking-widest uppercase">합 계</p>
             <MoneyInput value={totalDraft} onChange={changeTotal}
-              className="w-36 text-right text-sm font-bold border border-blue-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/30" />
+              className={`w-36 text-right text-sm font-bold border rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500/30 ${externallyChanged ? "border-red-400" : "border-blue-300"}`} />
           </div>
         </div>
         <div>
@@ -4582,7 +4620,7 @@ function FeeTaintBanner({ status }: { status: "recovering" | "auth" | "permissio
 
 // ─── Tab 2: 수수료 관리 ──────────────────────────────────────
 function FeeManagementTab({ projectId }: { projectId: string }) {
-  const { projects, termFees, termFeeCalcs, taxInvoices, receivables, unclaimedFees, projectMembers, fresh, taintedFeeProjects } = useStore();
+  const { projects, termFees, termFeeCalcs, taxInvoices, receivables, unclaimedFees, projectMembers, fresh, loaded, taintedFeeProjects } = useStore();
   const canRecalc = useCanWrite('fees');
   const feeDataFresh = isFeeRecalcDataFresh(fresh);
   // 연차 삭제 — 확정(청구완료)·수동조정된 연차는 골라도 실제로는 안 지워지도록 store에서도 한 번 더
@@ -4615,6 +4653,16 @@ function FeeManagementTab({ projectId }: { projectId: string }) {
     if (!projectId || !canRecalc || !feeDataFresh) return;
     autoGenerateTermFees(projectId);
   }, [projectId, canRecalc, feeDataFresh]);
+
+  // 이 탭이 열려 있는 동안 다른 사람이 같은 과제의 수수료를 바꿨을 수 있다 — 지금까지는 페이지를 처음 열
+  // 때만 조회해서, 새로고침 전까지 그 변경을 화면에서 볼 수 없었다. 5초 간격으로 이 과제분만 다시 받아
+  // 반영한다(lib/store.ts startPollingProjectFees — 저장 대기 중이거나 복원 대기 중인 값은 건드리지
+  // 않는다). feeDataFresh가 준비되기 전에는 시작하지 않는다 — 아직 서버 응답을 한 번도 못 받은 상태에서
+  // 돌면 sessionStorage 스냅샷을 서버 값으로 착각해 비교하게 된다.
+  useEffect(() => {
+    if (!projectId || !feeDataFresh) return;
+    return startPollingProjectFees(projectId);
+  }, [projectId, feeDataFresh]);
 
   // useMemo must be called before any conditional return
   const termGroups = useMemo<TermGroup[]>(() => {
@@ -4674,6 +4722,25 @@ function FeeManagementTab({ projectId }: { projectId: string }) {
   }, [termGroups, project]);
 
   if (!project) return null;
+
+  // termFees는 빈 배열로 시작해 hydrate가 서버 응답을 받아야 채워진다(lib/store.ts) — loaded.termFees가
+  // 아직 없는 동안엔 termGroups가 "진짜로 0건"인지 "아직 못 받아왔다"인지 구분할 수 없다. 이 구분 없이
+  // 아래 "없습니다" 문구를 그대로 찍으면, 페이지를 열 때마다(그리고 폴링 등으로 재조회가 도는 사이에도)
+  // 실제 데이터가 있는 과제조차 잠깐 "연차별 수수료 내역이 없습니다"가 보였다가 곧 실제 내용으로 바뀌는
+  // 것처럼 보여 오해를 준다.
+  if (!loaded.termFees) {
+    return (
+      <div className="space-y-3">
+        <div className="bg-white rounded-xl border border-slate-200 py-16 flex flex-col items-center justify-center gap-3">
+          <svg className="w-6 h-6 animate-spin text-blue-600" viewBox="0 0 24 24" fill="none">
+            <circle className="opacity-20" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+            <path d="M22 12a10 10 0 0 0-10-10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+          </svg>
+          <p className="text-xs text-slate-400">수수료 내역을 불러오는 중입니다...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (termGroups.length === 0) {
     return (

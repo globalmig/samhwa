@@ -2591,6 +2591,170 @@ function persistTermFee(id: string, data: Partial<TermFee>): void {
   );
 }
 
+// ============================================================
+// 과제별 연차수수료 실시간 반영 (다른 사용자의 변경을 주기적으로 조회)
+// ============================================================
+// 과제 상세의 "수수료 관리" 탭을 열어둔 동안, 다른 컴퓨터/다른 사용자가 같은 과제의 수수료를 바꿨을 수
+// 있다 — 지금까지는 페이지를 처음 열 때만 조회해서, 열어둔 채로 있으면 새로고침 전까지 그 변경을 화면에서
+// 볼 수 없었다. 그 탭이 떠 있는 동안 이 과제분만(app/api/projects/[id]/term-fees — 회사 전체 테이블을
+// 매번 다시 받는 GET /api/term-fees 대신, 이 과제로 좁힌 전용 엔드포인트) 주기적으로 다시 받아 반영한다.
+const FEE_POLL_INTERVAL_MS = 5000;
+// 조회 주기(5초)보다 넉넉하게 잡는다 — 응답이 이 시간 안에도 안 오면 중단한다. 조회가 진행 중인 동안은
+// _feePollInFlight 가드가 그 사이의 5초 틱들을 새 요청 없이 건너뛰게 하므로("진행 중이면 생략"), 이
+// 타임아웃은 "몇 번의 틱을 건너뛸 정도로 느린 요청을 얼마나 오래 붙잡고 있을지"를 정하는 상한이다 —
+// 응답이 하염없이 안 오는 요청 하나가 이후의 모든 조회를 무기한 막지 않게 한다.
+const FEE_POLL_TIMEOUT_MS = 10_000;
+let _feePollTimer: ReturnType<typeof setInterval> | null = null;
+let _feePollProjectId: string | null = null;
+// 과제별로 진행 중인 폴링 조회가 있는지 — 있으면 새 tick은 요청 자체를 만들지 않는다(응답이 느리거나
+// 주기 타이머와 탭 복귀 이벤트가 겹칠 때 불필요한 중복 요청을 막는다).
+const _feePollInFlight = new Set<string>();
+// 과제별로 "가장 최근에 시작한" 폴링 요청의 번호 — 응답이 도착했을 때 자신이 이 번호와 같을 때만(즉
+// 자신이 가장 최근에 보낸 요청일 때만) 반영을 시도한다. _feePollInFlight로 대부분 막히지만, 타임아웃
+// 직후 새 요청이 시작된 바로 그 타이밍처럼 두 요청이 겹치는 드문 경우까지 마저 막는다 — 이게 없으면
+// 나중에 보낸(최신) 요청의 응답이 먼저 반영된 뒤, 더 일찍 보낸(오래된) 요청의 응답이 뒤늦게 도착해
+// 방금 반영된 최신 값을 도로 덮어써 버릴 수 있다(재현된 버그).
+const _feePollRequestSeq = new Map<string, number>();
+// 진행 중인 폴링 요청을 취소하는 데 쓴다 — 탭을 벗어나면(다른 과제로 이동·언마운트) 응답을 기다리며
+// 불필요하게 네트워크를 붙잡고 있지 않도록 그 자리에서 바로 중단한다.
+const _feePollAbortControllers = new Map<string, AbortController>();
+
+function shallowEqualTermFee(a: TermFee, b: TermFee): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]) as Set<keyof TermFee>;
+  for (const k of keys) {
+    if (a[k] !== b[k]) return false;
+  }
+  return true;
+}
+
+// TermFeeCalc는 exemptBreakdown/overrides 같은 배열 필드가 있어 얕은 필드별 비교(shallowEqualTermFee와
+// 같은 방식)로는 내용이 같아도 배열 인스턴스가 다르면 "다르다"고 오판한다 — 둘 다 같은 매퍼를 거쳐 만든
+// 값이라 키 순서가 같으므로 JSON 직렬화 비교로 충분하다.
+function equalTermFeeCalc(a: TermFeeCalc, b: TermFeeCalc): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+// 서버에서 받은 이 과제분 termFees/termFeeCalcs를 반영한다 — 무조건 덮어쓰지 않고, 이 과제에 저장이 진행
+// 중이거나(개별 수정 대기·재계산 동기화 체인이 비어있지 않음) 복원 대기(태인트) 중이거나 최초 로드 자체가
+// 아직 안 끝났으면 이번 틱은 건너뛴다. 그 상태들은 각자 끝나면 스스로 최신값이 되거나 다음 폴링 틱에서
+// 다시 시도된다 — 여기서 끼어들면 방금 낸 수정이나 아직 서버에 못 올라간 값을 외부 값으로 덮어써 버릴 수
+// 있다(지금까지 여러 차례 재현·수정했던 "수정한 값이 사라진다" 부류의 문제를 새 경로로 재도입하지 않기
+// 위함). 다만 이 함수 자체는 "그 사이 조회를 시작한 이후로 상태가 바뀌었는지"는 모른다 — 그건 이 함수를
+// 부르기 전에 fetchPolledProjectFees가 참조 비교로 걸러낸다(응답 지연·요청 순서 역전 대응). export하는
+// 이유는 순수 로직만 node:test로 검증하기 위함이다(브라우저 API에 의존하지 않는다).
+export function applyPolledProjectFees(projectId: string, termFees: TermFee[], termFeeCalcs: TermFeeCalc[]): void {
+  const project = _state.projects.find((p) => p.id === projectId);
+  if (!project) return;
+  const pn = project.projectNumber;
+
+  if (!_state.fresh.termFees || !_state.fresh.termFeeCalcs) return; // 최초 로드가 아직 안 끝났다 — hydrate가 곧 채운다
+  if ((_queuedTermFeeEdits.get(pn)?.size ?? 0) > 0) return; // 저장 대기 중인 개별 수정이 있다
+  if (_feeWriteTails.has(pn)) return; // 재계산 동기화 등 이 과제의 쓰기 체인이 아직 돌고 있다
+  if (isFeeProjectTainted(pn)) return; // 복원 대기 중 — 그쪽이 끝나면 알아서 최신화된다
+  if (_deferredFeeRecalcProjectIds.has(projectId)) return; // 보류된 재계산이 남아있다
+  // 재계산이 막 만든 임시 id 행이 아직 실제 id로 안 바뀐 경우 — 서버 응답(termFees)에는 이 행이 없어
+  // (실제 id로 upsert된 형태로만 존재) 그대로 반영하면 이 행이 통째로 사라져 보인다.
+  if (_state.termFees.some((f) => f.projectNumber === pn && f.id.startsWith("tf-"))) return;
+
+  const localForProject = _state.termFees.filter((f) => f.projectNumber === pn);
+  const feesUnchanged =
+    localForProject.length === termFees.length &&
+    termFees.every((f) => {
+      const local = localForProject.find((lf) => lf.id === f.id);
+      return local && shallowEqualTermFee(local, f);
+    });
+
+  const localCalcsForProject = _state.termFeeCalcs.filter((c) => c.projectId === projectId);
+  const calcsUnchanged =
+    localCalcsForProject.length === termFeeCalcs.length &&
+    termFeeCalcs.every((c) => {
+      const local = localCalcsForProject.find((lc) => lc.id === c.id);
+      return local && equalTermFeeCalc(local, c);
+    });
+
+  // 수수료 행은 그대로인데 산정내역(termFeeCalcs)만 바뀐 경우도 반영해야 한다 — 둘을 하나로 묶어
+  // "전체가 같을 때만 스킵"하면 안 바뀐 쪽 검사 결과에 가려 바뀐 쪽이 무시된다(재현된 버그).
+  if (feesUnchanged && calcsUnchanged) return; // 둘 다 그대로면 상태를 갈아끼우지 않는다(불필요한 리렌더 방지)
+
+  _state = {
+    ..._state,
+    termFees: feesUnchanged ? _state.termFees : [..._state.termFees.filter((f) => f.projectNumber !== pn), ...termFees],
+    termFeeCalcs: calcsUnchanged ? _state.termFeeCalcs : [..._state.termFeeCalcs.filter((c) => c.projectId !== projectId), ...termFeeCalcs],
+  };
+  notify();
+}
+
+function fetchPolledProjectFees(projectId: string): void {
+  if (_feePollInFlight.has(projectId)) return; // 이미 진행 중인 조회가 있다 — 새로 보내지 않는다
+  _feePollInFlight.add(projectId);
+
+  const seq = (_feePollRequestSeq.get(projectId) ?? 0) + 1;
+  _feePollRequestSeq.set(projectId, seq);
+  // 요청을 시작하는 이 시점의 로컬 상태를 기억해둔다 — 응답을 반영하려 할 때 그 사이 바뀌었으면(그
+  // 사이 낸 수정이 저장을 마쳤거나, 다른 경로로 이미 갱신됐거나) 이 응답은 그 변화 "전" 시점의 낡은
+  // 스냅샷이므로 버린다.
+  const termFeesSnapshotAtStart = _state.termFees;
+  const termFeeCalcsSnapshotAtStart = _state.termFeeCalcs;
+
+  const controller = new AbortController();
+  _feePollAbortControllers.set(projectId, controller);
+  const timer = setTimeout(() => controller.abort(), FEE_POLL_TIMEOUT_MS);
+
+  fetch(`/api/projects/${projectId}/term-fees`, { signal: controller.signal })
+    .then((res) => res.json())
+    .then((data: { ok: boolean; termFees?: TermFee[]; termFeeCalcs?: TermFeeCalc[] }) => {
+      if (!data.ok || !data.termFees || !data.termFeeCalcs) return; // 실패해도 조용히 넘어간다 — 다음 틱이 다시 시도한다
+      if (_feePollProjectId !== projectId) return; // 그 사이 이 탭을 벗어났거나 다른 과제로 바뀌었다
+      if (_feePollRequestSeq.get(projectId) !== seq) return; // 이보다 더 최신 요청이 이미 시작됐다 — 오래된 응답이라 버린다
+      if (_state.termFees !== termFeesSnapshotAtStart || _state.termFeeCalcs !== termFeeCalcsSnapshotAtStart) return; // 조회하는 동안 로컬 상태가 이미 바뀌었다
+      applyPolledProjectFees(projectId, data.termFees, data.termFeeCalcs);
+    })
+    .catch(() => {}) // 네트워크 오류·타임아웃 모두 동일 — 폴링이 다음 틱에 다시 시도하므로 사용자에게 알릴 필요는 없다
+    .finally(() => {
+      clearTimeout(timer);
+      // 이 finally는 비동기로(취소·타임아웃이면 특히 더 늦게) 실행되므로, 그 사이 이 과제에 대해 더 최신
+      // 요청이 이미 시작됐을 수 있다 — 그 경우 '진행 중' 표시·컨트롤러 모두 이제 그 최신 요청의 것이지
+      // 이 요청(controller)의 것이 아니다. 신원을 확인해 여전히 내가 "현재" 요청일 때만 정리한다 — 안
+      // 그러면 아직 응답을 기다리는 진짜 최신 요청의 '진행 중' 표시를 지워버려, 그 사이 또 다른 중복
+      // 요청이 허용된다(재현된 경합 — 시퀀스 검사가 있어 반영되는 값이 틀리진 않지만, 중복 요청 방지
+      // 자체가 무의미해진다).
+      if (_feePollAbortControllers.get(projectId) === controller) {
+        _feePollAbortControllers.delete(projectId);
+        _feePollInFlight.delete(projectId);
+      }
+    });
+}
+
+// 과제 상세의 수수료 탭이 마운트된 동안 호출한다(useEffect). 반환된 함수를 언마운트 시(또는 다른 과제로
+// 이동 시) 반드시 불러 타이머·이벤트 리스너를 정리해야 한다. 브라우저 탭이 백그라운드일 때는 쉬고, 다시
+// 포그라운드로 돌아오면(다른 창을 보다가 돌아온 경우 등) 그 자리에서 한 번 더 즉시 조회한다.
+export function startPollingProjectFees(projectId: string): () => void {
+  if (typeof window === "undefined") return () => {};
+  _feePollProjectId = projectId;
+  const tick = () => {
+    if (document.visibilityState !== "visible") return;
+    fetchPolledProjectFees(projectId);
+  };
+  if (_feePollTimer) clearInterval(_feePollTimer);
+  _feePollTimer = setInterval(tick, FEE_POLL_INTERVAL_MS);
+  document.addEventListener("visibilitychange", tick);
+  tick(); // 탭에 들어오자마자 한 번 더 최신 상태를 반영한다
+  return () => {
+    if (_feePollTimer) {
+      clearInterval(_feePollTimer);
+      _feePollTimer = null;
+    }
+    document.removeEventListener("visibilitychange", tick);
+    if (_feePollProjectId === projectId) _feePollProjectId = null;
+    const controller = _feePollAbortControllers.get(projectId);
+    if (controller) {
+      controller.abort();
+      _feePollAbortControllers.delete(projectId);
+    }
+    _feePollInFlight.delete(projectId);
+  };
+}
+
 export function addTermFee(data: Omit<TermFee, "id">): TermFee {
   const tempId = genId("tf");
   const item: TermFee = { ...data, id: tempId };
