@@ -161,6 +161,33 @@ interface StoreState {
   pageAccess: Record<string, Role[]>;
   writeAccess: Record<string, Role[]>;
   feesFilters: FeesFilters;
+  // hydrate*()가 서버 응답을 최초로 받은 적이 있는 컬렉션만 key로 true를 기록한다(성공·실패 모두 —
+  // 실패도 "시도는 끝났다"는 뜻이라 로딩 표시가 영원히 멈추지 않는 걸 막는다). 화면은 이 값이 없는
+  // 동안엔 빈 배열이 "진짜로 0건"인지 "아직 안 받아왔다"인지 구분 못 해 0을 그대로 찍었는데(대시보드
+  // 통계가 한동안 0으로 보이던 원인), 그 구분을 위해 둔다. sessionStorage 캐시(STORE_CACHE_KEY)에도
+  // 함께 저장·복원되므로, 이전 세션에서 이미 로드했던 값이면 새로고침 즉시 로딩 표시 없이 (약간
+  // 오래된) 실제 값부터 보여주고 hydrate가 조용히 최신값으로 덮어쓴다 — 기존 stale-while-revalidate
+  // 동작과 동일한 원칙이다.
+  loaded: Record<string, boolean>;
+  // `loaded`와 달리 sessionStorage에 저장·복원하지 않는다 — "이번 페이지 로드에서 서버 응답을 실제로
+  // 받아 반영한" 컬렉션만 true다. 복원된 스냅샷은 화면을 빨리 채우는 용도일 뿐 서버와 다를 수 있는데,
+  // 수수료 자동 재계산(autoGenerateTermFees)은 그 결과를 서버(sync-fees)에 통째로 덮어쓰는 쓰기
+  // 동작이라 반드시 서버에서 방금 받은 값 위에서만 돌아야 한다(FEE_RECALC_SLOTS 참고).
+  fresh: Record<string, boolean>;
+  // 저장 실패 후 서버 값 복원까지 실패해, 그 과제(projectNumber)의 로컬 termFees가 서버와 맞는지 알 수
+  // 없는 상태 — 복원이 실제로 성공할 때까지 재계산 저장이 전부 보류된다(taintFeeProject 참고). 값은 화면
+  // 배너가 상황별로 다른 문구를 보여주는 데 쓴다: "recovering"(네트워크·서버 일시 오류 — 자동 재시도
+  // 진행 중), "auth"(401 — 재시도를 멈췄고 재로그인해야 함), "permission"(403 — 재시도를 멈췄고 관리자의
+  // 권한 확인이 필요함, 재로그인만으로는 안 풀릴 수 있음). sessionStorage에는 저장하지 않는다(fresh와
+  // 같은 이유 — 이번 로드에서 실제로 겪은 문제만 의미가 있다).
+  taintedFeeProjects: Record<string, "recovering" | "auth" | "permission">;
+}
+
+// autoGenerateTermFees가 _state에서 직접 읽는 컬렉션 — 그 함수가 읽는 슬롯이 바뀌면 여기도 맞춰야 한다.
+export const FEE_RECALC_SLOTS = ["projects", "projectMembers", "feePolicies", "termFees", "termFeeCalcs"] as const;
+
+export function isFeeRecalcDataFresh(fresh: Record<string, boolean>): boolean {
+  return FEE_RECALC_SLOTS.every((slot) => fresh[slot]);
 }
 
 // 각 컬렉션은 lib/mock.ts의 하드코딩된 예전 프로토타입 데이터가 아니라 빈 배열로 시작한다 —
@@ -196,6 +223,9 @@ let _state: StoreState = {
   pageAccess: Object.fromEntries(Object.entries(initialPageAccess).map(([k, v]) => [k, [...v]])),
   writeAccess: Object.fromEntries(Object.entries(initialWriteAccess).map(([k, v]) => [k, [...v]])),
   feesFilters: { ...DEFAULT_FEES_FILTERS },
+  loaded: {},
+  fresh: {},
+  taintedFeeProjects: {},
 };
 
 const _listeners = new Set<() => void>();
@@ -234,7 +264,10 @@ function restoreFromCache(): void {
     const raw = sessionStorage.getItem(STORE_CACHE_KEY);
     if (!raw) return;
     const cached = JSON.parse(raw) as Partial<StoreState>;
-    _state = { ..._state, ...cached };
+    // fresh·taintedFeeProjects는 저장하지 않지만(아래 schedulePersist), 이전 버전 스냅샷 등에 섞여
+    // 있어도 이번 로드의 서버 응답을 기다리도록(fresh) / 아직 겪지 않은 문제로 배너가 뜨지 않도록
+    // (taintedFeeProjects) 항상 비운 채로 시작한다.
+    _state = { ..._state, ...cached, fresh: {}, taintedFeeProjects: {} };
   } catch (err) {
     console.warn("store 캐시 복원 실패 — 무시하고 서버에서 새로 받아옵니다.", err);
   }
@@ -250,7 +283,7 @@ function schedulePersist(): void {
   _persistTimer = setTimeout(() => {
     _persistTimer = null;
     try {
-      sessionStorage.setItem(STORE_CACHE_KEY, JSON.stringify(_state));
+      sessionStorage.setItem(STORE_CACHE_KEY, JSON.stringify({ ..._state, fresh: {}, taintedFeeProjects: {} }));
     } catch (err) {
       // 용량 초과(사용자가 세션 중 데이터를 아주 많이 쌓은 경우) 등으로 실패해도 캐싱만 조용히
       // 포기한다 — 다음 새로고침이 hydrate로 전부 다시 받아오는, 지금까지의 기존 동작으로 돌아갈 뿐
@@ -346,14 +379,14 @@ if (typeof window !== "undefined") hydrateAuditLog();
 // 전부 동시에 서버로 몰려 DB 커넥션 풀에 부담을 줄 수 있다. 동시 in-flight 요청 수를 제한해
 // 나머지는 앞선 요청이 끝나는 대로 순서대로 나가게 한다 — 평소 단건 조작(폼 저장 등)은 동시에
 // 몇 건 안 되니 이 제한에 사실상 걸리지 않는다.
-function createThrottledFetch(maxConcurrent: number): (input: string, init?: RequestInit) => Promise<Response> {
+function createThrottle(maxConcurrent: number): <T>(task: () => Promise<T>) => Promise<T> {
   let active = 0;
   const queue: (() => void)[] = [];
-  return function throttled(input: string, init?: RequestInit): Promise<Response> {
-    return new Promise((resolve, reject) => {
+  return function throttle<T>(task: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
       const run = () => {
         active++;
-        fetch(input, init)
+        task()
           .then(resolve, reject)
           .finally(() => {
             active--;
@@ -366,7 +399,46 @@ function createThrottledFetch(maxConcurrent: number): (input: string, init?: Req
   };
 }
 
-const throttledFetch = createThrottledFetch(6);
+function createThrottledFetch(maxConcurrent: number): (input: string, init?: RequestInit) => Promise<Response> {
+  const throttle = createThrottle(maxConcurrent);
+  return (input, init) => throttle(() => fetch(input, init));
+}
+
+const _throttle = createThrottle(6);
+const throttledFetch = (input: string, init?: RequestInit): Promise<Response> => _throttle(() => fetch(input, init));
+
+// 서버가 돌려준 JSON 본문까지 읽는 요청. 타임아웃은 "대기열을 지나 요청이 실제로 나간 시점"부터 "본문을 다 읽을
+// 때까지"를 모두 덮는다 — 응답 헤더만 오고 본문이 끝나지 않는 경우에도 호출한 쪽(수수료 저장 체인)이 무한정
+// 붙잡히지 않는다(대기열에서 기다린 시간은 포함하지 않아 일괄 업로드 중에도 오탐하지 않는다).
+// 본문이 JSON이 아니면(오류 페이지 등) body는 null이고, 시간 초과는 name이 "AbortError"인 예외로 던진다.
+// status는 호출 측이 401 같은 인증 실패와 일시적 서버 오류를 구분하는 데 쓴다.
+interface JsonResult<T> {
+  status: number;
+  body: T | null;
+}
+function throttledFetchJson<T>(input: string, init: RequestInit | undefined, timeoutMs: number): Promise<JsonResult<T>> {
+  return _throttle(async () => {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        reject(Object.assign(new Error("요청이 제한 시간 안에 끝나지 않았습니다."), { name: "AbortError" }));
+      }, timeoutMs);
+    });
+    timedOut.catch(() => undefined); // 응답이 먼저 오면 이 거부를 기다리는 곳이 없어도 미처리 거부로 남지 않게 한다
+    try {
+      const res = await Promise.race([fetch(input, { ...init, signal: controller.signal }), timedOut]);
+      const body = await Promise.race([res.json() as Promise<T>, timedOut]).catch((err: unknown) => {
+        if ((err as { name?: string } | null)?.name === "AbortError") throw err;
+        return null;
+      });
+      return { status: typeof res.status === "number" ? res.status : 200, body };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  });
+}
 // 과제 삭제는 한 트랜잭션이 여러 테이블을 순차로 deleteMany하는 무거운 작업이라, 동시에 여러
 // 건이 돌면(과제별로 지우는 행 자체는 안 겹쳐도) SQL Server가 같은 테이블의 잠금 경합을 데드락으로
 // 판단해 트랜잭션 하나를 강제 종료시킬 수 있다(P2034) — withDeadlockRetry(서버 쪽)로 재시도는
@@ -496,6 +568,196 @@ function reportSyncFailure(count = 1, label?: string): void {
 }
 
 // ============================================================
+// 저장 실패 안내 (단건 조작)
+// ============================================================
+// 일괄 구간(beginSyncBatch ~ endSyncBatchAndWait)은 실패를 건수로 모아 완료 화면에 보여주지만, 평소
+// 단건 수정(수수료 금액 등)의 저장 실패는 콘솔에만 남았다 — 사용자는 화면의 수정값이 서버에 저장된 줄
+// 알다가, 새로고침하는 순간 수정 전 값이 돌아와 "값이 사라졌다"고 느꼈다. components/layout의
+// SyncNoticeToast가 이 알림을 화면에 띄운다.
+const _syncNoticeListeners = new Set<(message: string) => void>();
+
+export function subscribeSyncNotice(listener: (message: string) => void): () => void {
+  _syncNoticeListeners.add(listener);
+  return () => {
+    _syncNoticeListeners.delete(listener);
+  };
+}
+
+let _lastSyncNotice: { message: string; at: number } | null = null;
+function emitSyncNotice(message: string): void {
+  if (_batchDepth > 0) return; // 일괄 구간은 완료 화면이 건수·목록으로 알려준다
+  // 같은 문구가 연달아 올라오면(예: 권한이 없어 수수료 탭을 열 때마다 자동 저장이 거절되는 경우) 한 번만 보인다.
+  const now = Date.now();
+  if (_lastSyncNotice && _lastSyncNotice.message === message && now - _lastSyncNotice.at < 10_000) return;
+  _lastSyncNotice = { message, at: now };
+  _syncNoticeListeners.forEach((l) => {
+    try {
+      l(message);
+    } catch (err) {
+      console.error("저장 실패 안내를 표시하지 못했습니다.", err);
+    }
+  });
+}
+
+// ============================================================
+// 연차수수료 서버 쓰기 순서 보장
+// ============================================================
+// sync-fees(재계산 결과 통째 반영)와 개별 PATCH(수수료·미청구·발행구분 등 직접 수정)는 같은 term_fees
+// 행을 건드리는데, throttledFetch는 동시 6건까지 그냥 병렬로 내보내서 서버가 어느 쪽을 나중에 반영할지
+// 정해져 있지 않았다 — 사용자가 마지막에 입력한 값이 재계산 결과에 덮이거나(서버까지 유실), 서버엔 남았는데
+// 화면만 이전 값으로 돌아가기도 했다. 그래서 과제 단위로 앞선 쓰기가 끝난 뒤에 다음 쓰기를 내보낸다
+// (사용자가 조작한 순서 == 서버에 반영되는 순서). 서로 다른 과제끼리는 기존처럼 병렬이다.
+const _feeWriteTails = new Map<string, Promise<unknown>>();
+
+// 체인은 앞선 쓰기가 끝나야 다음 쓰기가 나가므로, 응답 없이 멈춘 요청 하나가 그 과제의 이후 저장을 전부
+// 막을 수 있다 — 요청부터 본문 읽기까지(throttledFetchJson)에 상한을 두고 넘으면 다음으로 넘어간다. 서버가
+// 원격 DB 쓰기 슬롯을 기다리며 느려지는 경우(withDbWriteSlot)에 오탐하지 않도록 넉넉하게 잡는다.
+// 시간 초과는 "저장이 안 됐다"가 아니라 "저장됐는지 모른다"다 — 브라우저가 요청을 끊어도 서버는 이미 처리 중일
+// 수 있으므로(서버 쪽에 그 취소를 보장하는 처리가 없다), 실패와 구분해 다룬다(uncertain).
+const FEE_WRITE_TIMEOUT_MS = 120_000;
+
+interface FeeWriteFailure {
+  message: string;
+  uncertain: boolean;
+}
+
+function describeFeeWriteException(err: unknown): FeeWriteFailure {
+  return (err as { name?: string } | null)?.name === "AbortError"
+    ? { message: "서버 응답이 오래 걸렸습니다.", uncertain: true }
+    : { message: "서버에 연결하지 못했습니다.", uncertain: false };
+}
+
+function describeFeeWriteHttpFailure(status: number, error: string | undefined): FeeWriteFailure {
+  if (error) return { message: error, uncertain: false };
+  return {
+    message: status >= 500 ? `서버 오류가 발생했습니다. (HTTP ${status})` : `서버가 올바른 응답을 주지 않았습니다. (HTTP ${status})`,
+    uncertain: false,
+  };
+}
+
+// 과제별 재계산 요청 세대 — 재계산은 요청 시점이 아니라 "서버로 나가는 시점"의 현재 화면 상태를 보낸다.
+// 그래서 대기 중인 동기화는 자기보다 새 재계산이 뒤에 있으면(같은 상태를 그쪽이 보낸다) 건너뛰고, 저장 실패로
+// 서버 값을 복원하지 못한 경우엔 저장되지 않은 값을 올리지 않도록 세대를 올려 대기 중인 동기화를 모두 무효화한다.
+const _feeSyncGeneration = new Map<string, number>();
+function bumpFeeSyncGeneration(projectNumber: string): number {
+  const next = (_feeSyncGeneration.get(projectNumber) ?? 0) + 1;
+  _feeSyncGeneration.set(projectNumber, next);
+  return next;
+}
+
+// 과제별로 아직 서버 저장이 끝나지 않은 개별 수정(대기 중이거나 응답 전). 다른 수정이 실패해 서버 값으로
+// 되돌릴 때 이 수정들은 화면에서 지워지지 않도록 다시 겹쳐 두고(사용자 입력 보존), 여러 번 연달아 수정했을 때
+// 앞선 응답이 뒤에 입력한 값을 잠깐 되돌려 놓지 않도록 마지막 응답만 화면 행에 반영하는 데도 쓴다.
+interface QueuedTermFeeEdit {
+  id: string;
+  data: Partial<TermFee>;
+  generation: number;
+}
+const _queuedTermFeeEdits = new Map<string, Set<QueuedTermFeeEdit>>();
+function queuedTermFeeEdits(projectNumber: string): Set<QueuedTermFeeEdit> {
+  let set = _queuedTermFeeEdits.get(projectNumber);
+  if (!set) {
+    set = new Set();
+    _queuedTermFeeEdits.set(projectNumber, set);
+  }
+  return set;
+}
+
+function chainFeeWrite<T>(projectNumber: string, task: () => Promise<T>): Promise<T> {
+  const previous = _feeWriteTails.get(projectNumber) ?? Promise.resolve();
+  // tail은 성공·실패와 무관하게 항상 fulfilled로 끝나므로, 앞선 쓰기가 실패해도 다음 쓰기는 이어서 실행된다.
+  const run = previous.then(task);
+  const tail = run.then(() => undefined, () => undefined);
+  _feeWriteTails.set(projectNumber, tail);
+  void tail.then(() => {
+    if (_feeWriteTails.get(projectNumber) === tail) _feeWriteTails.delete(projectNumber);
+  });
+  return run;
+}
+
+// 재계산이 새로 만드는 행(이전에 없던 기관×연차)은 서버가 실제 id를 정해주기 전까지 임시 id(tf-…)다. 그
+// 사이에 사용자가 그 행을 수정하면 저장 요청은 앞선 sync-fees가 끝난 뒤(chainFeeWrite) 실제 id로 나가야
+// 하므로, sync-fees 응답이 정해준 "임시 → 실제 id" 대응을 여기에 기록해 둔다.
+const _termFeeIdAlias = new Map<string, string>();
+function resolveTermFeeId(id: string): string {
+  return _termFeeIdAlias.get(id) ?? id;
+}
+
+// ============================================================
+// 재계산 입력 컬렉션의 서버 조회 재시도 / 재계산 보류
+// ============================================================
+// hydrate*()는 "요청이 떠 있는 동안 그 컬렉션을 사용자가 수정했으면 서버 응답을 버린다"(수정 8)는 규칙 때문에,
+// 조회 도중 수정하거나 네트워크가 잠깐 끊기면 그 컬렉션이 이번 페이지 로드에서 끝내 서버 값으로 맞춰지지
+// 않았다 — fresh도 안 열려 재계산이 영영 안 돌고, 캐시 스냅샷이 계속 화면에 남았다. 재계산 입력에 쓰이는
+// 컬렉션(FEE_RECALC_SLOTS)만은 진행 중인 저장이 모두 끝난 뒤 다시 조회해 서버 값으로 수렴시킨다.
+const FEE_SLOT_RETRY_DELAYS_MS = [1500, 5000, 15000];
+const _feeSlotRetryCount: Record<string, number> = {};
+
+// 예약된 재시도 타이머를 핸들로 들고 있는다 — 테스트가 끝난 뒤(모의 fetch가 걷힌 뒤)에도 이 타이머가 남아
+// 있으면, 실제 시간이 지나 뒤늦게 fetch를 다시 호출해 그 시점의 (전혀 무관한 다른 테스트의) 모의 fetch를
+// 건드리거나 실제 네트워크로 나가버릴 수 있다 — resetPendingFeeRetriesForTest()가 이 핸들로 정리한다.
+const _feeSlotRetryTimer: Record<string, ReturnType<typeof setTimeout>> = {};
+
+function scheduleFeeSlotRetry(slot: string, load: () => void): void {
+  const attempt = _feeSlotRetryCount[slot] ?? 0;
+  if (attempt >= FEE_SLOT_RETRY_DELAYS_MS.length) {
+    console.error(`${slot} 목록을 서버에서 다시 받지 못했습니다.`);
+    emitSyncNotice("서버의 최신 데이터를 불러오지 못했습니다. 화면 값이 최신이 아닐 수 있으니 새로고침해 주세요.");
+    return;
+  }
+  _feeSlotRetryCount[slot] = attempt + 1;
+  _feeSlotRetryTimer[slot] = setTimeout(() => {
+    delete _feeSlotRetryTimer[slot];
+    void waitForSyncIdle().then(load);
+  }, FEE_SLOT_RETRY_DELAYS_MS[attempt]);
+}
+
+// 서버가 { ok: false }로 응답했을 때(네트워크 예외가 아니라 정상적으로 도착한 실패 응답)의 처리 — 401은 로그인이
+// 안 됐거나 만료된 상태라 재시도해도 같은 응답이므로 하지 않고(로그인 화면은 비로그인 상태로도 이 조회를 시도한다),
+// 그 밖의 실패는 일시적인 서버 오류일 수 있어 제한된 횟수만 다시 시도한다.
+function handleFeeSlotLoadFailure(slot: string, status: number, load: () => void): void {
+  if (status === 401) {
+    if (getCurrentUser()) emitSyncNotice("로그인이 만료돼 최신 데이터를 불러오지 못했습니다. 다시 로그인해 주세요.");
+    return;
+  }
+  console.error(`${slot} 목록 조회가 실패로 응답했습니다. (HTTP ${status})`);
+  scheduleFeeSlotRetry(slot, load);
+}
+
+// hydrate 응답을 (상태 코드, JSON 본문)으로 읽는다. 일부 모의 응답에는 status가 없어 200으로 본다.
+async function readHydrateResponse<T>(res: Response): Promise<{ status: number; data: T }> {
+  return { status: typeof res.status === "number" ? res.status : 200, data: (await res.json()) as T };
+}
+
+// 재계산 입력이 아직 서버 응답으로 갱신되지 않은 상태(= sessionStorage 스냅샷만 있는 상태)에서 요청된
+// 재계산 — 그 위에서 계산하면 낡은 값으로 서버(sync-fees)를 덮어쓰므로, 입력이 전부 fresh가 될 때까지 보류한다.
+// 탭 진입 효과뿐 아니라 참여기관 수정·정책 변경·"되돌리기"처럼 autoGenerateTermFees를 직접 부르는
+// 모든 경로가 같은 보호를 받도록 autoGenerateTermFees 안에서 걸러낸다.
+const _deferredFeeRecalcProjectIds = new Set<string>();
+
+function flushDeferredFeeRecalcs(): void {
+  if (_deferredFeeRecalcProjectIds.size === 0) return;
+  if (!isFeeRecalcDataFresh(_state.fresh) || _bulkRecalcSuspendDepth > 0) return;
+  const ids = [..._deferredFeeRecalcProjectIds];
+  _deferredFeeRecalcProjectIds.clear();
+  for (const id of ids) {
+    // 호출한 쪽은 서버 응답 처리 체인(.then/.catch) 안이라, 여기서 예외가 새어 나가면 "조회 실패"로 오인돼
+    // 재조회가 반복된다 — 과제별로 실패를 가둔다.
+    try {
+      autoGenerateTermFees(id);
+    } catch (err) {
+      console.error("보류했던 수수료 재계산 실패:", id, err);
+    }
+  }
+}
+
+// hydrate*()가 서버 응답을 반영(_state.fresh 갱신 + notify)한 직후 부른다.
+function onFeeSlotApplied(slot: string): void {
+  _feeSlotRetryCount[slot] = 0;
+  flushDeferredFeeRecalcs();
+}
+
+// ============================================================
 // 참여기관 patch 배치 전송 (RCMS 엑셀 대량 업로드 등)
 // ============================================================
 // updateProjectMember가 beginSyncBatch() 구간 안에서 불리면(엑셀 대량 업로드), 건마다 개별
@@ -575,6 +837,7 @@ function fetchFundingAgencies(): Promise<void> {
           ..._state,
           fundingAgencies: data.agencies,
           agencyGuides: data.agencyGuides ? { ...data.agencyGuides, ..._state.agencyGuides } : _state.agencyGuides,
+          loaded: { ..._state.loaded, fundingAgencies: true },
         };
         notify();
       }
@@ -588,6 +851,8 @@ function hydrateFundingAgencies(): void {
   fetchFundingAgencies().catch((err) => {
     console.error("전담기관 목록을 불러오지 못했습니다.", err);
     _fundingAgenciesHydrated = false;
+    _state = { ..._state, loaded: { ..._state.loaded, fundingAgencies: true } };
+    notify();
   });
 }
 if (typeof window !== "undefined") hydrateFundingAgencies();
@@ -989,17 +1254,32 @@ function nextTermCode(): string {
 function fetchProjects(): Promise<void> {
   const snapshotAtStart = _state.projects;
   return fetch("/api/projects")
-    .then((res) => res.json())
-    .then((data: { ok: boolean; projects?: Project[] }) => {
+    .then((res) => readHydrateResponse<{ ok: boolean; projects?: Project[] }>(res))
+    .then(({ status, data }) => {
+      if (!data.ok || !data.projects) {
+        handleFeeSlotLoadFailure("projects", status, reloadProjects);
+        return;
+      }
       // 이 요청이 떠 있는 동안 사용자가 이미 뭔가 저장했으면(주관기관 지정 등) _state.projects는
       // 그 사이 새 배열로 바뀌어 있다 — 그런데 이 응답은 그 수정 "전" 시점의 스냅샷이라, 그대로
       // 덮어쓰면 방금 한 수정이 몇 초 뒤 조용히 사라져 버린다(수정 8). 그 사이 아무 수정도 없었을
       // 때만(참조가 그대로일 때만) 반영한다 — 있었다면 이미 최신 상태이므로 이 응답은 버린다.
-      if (data.ok && data.projects && _state.projects === snapshotAtStart) {
-        _state = { ..._state, projects: data.projects };
+      if (_state.projects === snapshotAtStart) {
+        _state = { ..._state, projects: data.projects, loaded: { ..._state.loaded, projects: true }, fresh: { ..._state.fresh, projects: true } };
         notify();
+        onFeeSlotApplied("projects");
+      } else {
+        // 조회 도중 수정이 있어 이 응답은 버렸다 — 진행 중인 저장이 끝난 뒤 다시 받아 서버 값으로 맞춘다.
+        scheduleFeeSlotRetry("projects", reloadProjects);
       }
     });
+}
+
+function reloadProjects(): void {
+  fetchProjects().catch((err) => {
+    console.error("과제 목록을 다시 불러오지 못했습니다.", err);
+    scheduleFeeSlotRetry("projects", reloadProjects);
+  });
 }
 
 let _projectsHydrated = false;
@@ -1009,6 +1289,9 @@ function hydrateProjects(): void {
   fetchProjects().catch((err) => {
     console.error("과제 목록을 불러오지 못했습니다.", err);
     _projectsHydrated = false;
+    _state = { ..._state, loaded: { ..._state.loaded, projects: true } };
+    notify();
+    scheduleFeeSlotRetry("projects", reloadProjects);
   });
 }
 if (typeof window !== "undefined") hydrateProjects();
@@ -1340,16 +1623,23 @@ export function deleteProjectTerms(projectId: string, termNumbers: number[]): vo
   });
   notify();
 
-  fetch(`/api/projects/${projectId}/delete-terms`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ termNumbers: Array.from(actuallyDeleted) }),
-  })
-    .then((res) => res.json())
-    .then((res: { ok: boolean; error?: string }) => {
-      if (!res.ok) console.error("연차 삭제 실패(서버):", res.error);
+  // 삭제도 같은 과제의 수수료 쓰기 체인에 태운다 — 삭제 전에 나간 sync-fees(지운 연차의 행이 그대로 든 채)가
+  // 삭제보다 늦게 서버에 반영되면 방금 지운 연차가 서버에서 되살아난다.
+  const deleteBody = JSON.stringify({ termNumbers: Array.from(actuallyDeleted) });
+  trackSync(
+    chainFeeWrite(num, async () => {
+      try {
+        const { body } = await throttledFetchJson<{ ok: boolean; error?: string }>(`/api/projects/${projectId}/delete-terms`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: deleteBody,
+        }, FEE_WRITE_TIMEOUT_MS);
+        if (!body?.ok) console.error("연차 삭제 실패(서버):", body?.error);
+      } catch (err) {
+        console.error("연차 삭제 실패(서버):", err);
+      }
     })
-    .catch((err) => console.error("연차 삭제 실패(서버):", err));
+  );
 }
 
 // ============================================================
@@ -1405,6 +1695,8 @@ export async function endBulkRecalcSuspend(): Promise<void> {
     }
     if ((i + 1) % RECALC_YIELD_CHUNK === 0) await yieldToMain();
   }
+  // 일괄 구간 중에 재계산 입력이 서버 응답으로 갱신돼 flush가 막혀 있던 보류분이 있으면 여기서 이어서 실행한다.
+  flushDeferredFeeRecalcs();
   // 서버가 발급한 수수료 ID까지 반영돼야 후속 PATCH가 임시 ID로 나가지 않는다.
   await waitForSyncIdle();
   if (errors.length > 0) throw new AggregateError(errors, `${errors.length}건의 재계산에 실패했습니다.`);
@@ -1433,24 +1725,35 @@ export function recalcProjectTotalBudget(projectId: string): void {
 // ============================================================
 
 let _projectMembersHydrated = false;
-function hydrateProjectMembers(): void {
-  if (_projectMembersHydrated || typeof window === "undefined") return;
-  _projectMembersHydrated = true;
+function loadProjectMembers(): void {
   const snapshotAtStart = _state.projectMembers;
   fetch("/api/project-members")
-    .then((res) => res.json())
-    .then((data: { ok: boolean; members?: ProjectMember[] }) => {
+    .then((res) => readHydrateResponse<{ ok: boolean; members?: ProjectMember[] }>(res))
+    .then(({ status, data }) => {
+      if (!data.ok || !data.members) {
+        handleFeeSlotLoadFailure("projectMembers", status, loadProjectMembers);
+        return;
+      }
       // hydrateProjects와 동일한 이유(수정 8) — 이 요청이 떠 있는 동안 참여기관을 이미 수정했으면
-      // (주관기관 지정 등) 그 수정 전 시점의 이 응답으로 덮어쓰지 않는다.
-      if (data.ok && data.members && _state.projectMembers === snapshotAtStart) {
-        _state = { ..._state, projectMembers: data.members };
+      // (주관기관 지정 등) 그 수정 전 시점의 이 응답으로 덮어쓰지 않는다. 버린 경우엔 저장이 끝난 뒤 다시 받는다.
+      if (_state.projectMembers === snapshotAtStart) {
+        _state = { ..._state, projectMembers: data.members, fresh: { ..._state.fresh, projectMembers: true } };
         notify();
+        onFeeSlotApplied("projectMembers");
+      } else {
+        scheduleFeeSlotRetry("projectMembers", loadProjectMembers);
       }
     })
     .catch((err) => {
       console.error("참여기관 목록을 불러오지 못했습니다.", err);
       _projectMembersHydrated = false;
+      scheduleFeeSlotRetry("projectMembers", loadProjectMembers);
     });
+}
+function hydrateProjectMembers(): void {
+  if (_projectMembersHydrated || typeof window === "undefined") return;
+  _projectMembersHydrated = true;
+  loadProjectMembers();
 }
 if (typeof window !== "undefined") hydrateProjectMembers();
 
@@ -1755,22 +2058,33 @@ export function deleteProjectMember(id: string): void {
 // ============================================================
 
 let _feePoliciesHydrated = false;
-function hydrateFeePolicies(): void {
-  if (_feePoliciesHydrated || typeof window === "undefined") return;
-  _feePoliciesHydrated = true;
+function loadFeePolicies(): void {
   const snapshotAtStart = _state.feePolicies;
   fetch("/api/fee-policies")
-    .then((res) => res.json())
-    .then((data: { ok: boolean; policies?: FeePolicy[] }) => {
-      if (data.ok && data.policies && _state.feePolicies === snapshotAtStart) {
-        _state = { ..._state, feePolicies: data.policies };
+    .then((res) => readHydrateResponse<{ ok: boolean; policies?: FeePolicy[] }>(res))
+    .then(({ status, data }) => {
+      if (!data.ok || !data.policies) {
+        handleFeeSlotLoadFailure("feePolicies", status, loadFeePolicies);
+        return;
+      }
+      if (_state.feePolicies === snapshotAtStart) {
+        _state = { ..._state, feePolicies: data.policies, fresh: { ..._state.fresh, feePolicies: true } };
         notify();
+        onFeeSlotApplied("feePolicies");
+      } else {
+        scheduleFeeSlotRetry("feePolicies", loadFeePolicies);
       }
     })
     .catch((err) => {
       console.error("수수료 정책 목록을 불러오지 못했습니다.", err);
       _feePoliciesHydrated = false;
+      scheduleFeeSlotRetry("feePolicies", loadFeePolicies);
     });
+}
+function hydrateFeePolicies(): void {
+  if (_feePoliciesHydrated || typeof window === "undefined") return;
+  _feePoliciesHydrated = true;
+  loadFeePolicies();
 }
 if (typeof window !== "undefined") hydrateFeePolicies();
 
@@ -1859,22 +2173,33 @@ function recalcProjectsUsingPolicy(policyId: string): void {
 // ============================================================
 
 let _termFeeCalcsHydrated = false;
-function hydrateTermFeeCalcs(): void {
-  if (_termFeeCalcsHydrated || typeof window === "undefined") return;
-  _termFeeCalcsHydrated = true;
+function loadTermFeeCalcs(): void {
   const snapshotAtStart = _state.termFeeCalcs;
   fetch("/api/term-fee-calcs")
-    .then((res) => res.json())
-    .then((data: { ok: boolean; termFeeCalcs?: TermFeeCalc[] }) => {
-      if (data.ok && data.termFeeCalcs && _state.termFeeCalcs === snapshotAtStart) {
-        _state = { ..._state, termFeeCalcs: data.termFeeCalcs };
+    .then((res) => readHydrateResponse<{ ok: boolean; termFeeCalcs?: TermFeeCalc[] }>(res))
+    .then(({ status, data }) => {
+      if (!data.ok || !data.termFeeCalcs) {
+        handleFeeSlotLoadFailure("termFeeCalcs", status, loadTermFeeCalcs);
+        return;
+      }
+      if (_state.termFeeCalcs === snapshotAtStart) {
+        _state = { ..._state, termFeeCalcs: data.termFeeCalcs, fresh: { ..._state.fresh, termFeeCalcs: true } };
         notify();
+        onFeeSlotApplied("termFeeCalcs");
+      } else {
+        scheduleFeeSlotRetry("termFeeCalcs", loadTermFeeCalcs);
       }
     })
     .catch((err) => {
       console.error("연차수수료 산정 내역을 불러오지 못했습니다.", err);
       _termFeeCalcsHydrated = false;
+      scheduleFeeSlotRetry("termFeeCalcs", loadTermFeeCalcs);
     });
+}
+function hydrateTermFeeCalcs(): void {
+  if (_termFeeCalcsHydrated || typeof window === "undefined") return;
+  _termFeeCalcsHydrated = true;
+  loadTermFeeCalcs();
 }
 if (typeof window !== "undefined") hydrateTermFeeCalcs();
 
@@ -1959,22 +2284,37 @@ export function deleteTermFeeCalc(id: string): void {
 // ============================================================
 
 let _termFeesHydrated = false;
-function hydrateTermFees(): void {
-  if (_termFeesHydrated || typeof window === "undefined") return;
-  _termFeesHydrated = true;
+function loadTermFees(): void {
   const snapshotAtStart = _state.termFees;
   fetch("/api/term-fees")
-    .then((res) => res.json())
-    .then((data: { ok: boolean; termFees?: TermFee[] }) => {
-      if (data.ok && data.termFees && _state.termFees === snapshotAtStart) {
-        _state = { ..._state, termFees: data.termFees };
+    .then((res) => readHydrateResponse<{ ok: boolean; termFees?: TermFee[] }>(res))
+    .then(({ status, data }) => {
+      if (!data.ok || !data.termFees) {
+        handleFeeSlotLoadFailure("termFees", status, loadTermFees);
+        return;
+      }
+      if (_state.termFees === snapshotAtStart) {
+        _state = { ..._state, termFees: data.termFees, loaded: { ..._state.loaded, termFees: true }, fresh: { ..._state.fresh, termFees: true } };
         notify();
+        onFeeSlotApplied("termFees");
+      } else {
+        // 조회 도중 수수료를 수정했거나 재계산이 돌아 이 응답은 버렸다 — 그대로 두면 이 슬롯은 이번 로드에서
+        // 끝내 서버 값으로 맞춰지지 않으므로(fresh도 안 열림), 진행 중인 저장이 끝난 뒤 다시 받는다.
+        scheduleFeeSlotRetry("termFees", loadTermFees);
       }
     })
     .catch((err) => {
       console.error("연차수수료 목록을 불러오지 못했습니다.", err);
       _termFeesHydrated = false;
+      _state = { ..._state, loaded: { ..._state.loaded, termFees: true } };
+      notify();
+      scheduleFeeSlotRetry("termFees", loadTermFees);
     });
+}
+function hydrateTermFees(): void {
+  if (_termFeesHydrated || typeof window === "undefined") return;
+  _termFeesHydrated = true;
+  loadTermFees();
 }
 if (typeof window !== "undefined") hydrateTermFees();
 
@@ -1983,27 +2323,272 @@ function describeTermFee(id: string): string {
   return f ? `연차수수료: ${f.projectNumber} ${f.termYear}년 ${f.termNumber}차` : `연차수수료(${id})`;
 }
 
-function persistTermFee(id: string, data: Partial<TermFee>): void {
-  if (id.startsWith("tf-")) {
-    console.error("연차수수료 수정 실패: 생성 요청의 서버 저장을 먼저 완료해야 합니다.");
-    reportSyncFailure(1, describeTermFee(id));
+// 저장이 거절·실패한 뒤 그 과제의 수수료 행을 서버에 실제로 남아 있는 값으로 되돌린다 — 안 그러면 화면엔
+// 수정값이 보이는데 서버엔 없어서, 새로고침하는 순간 수정 전 값이 돌아온다. 그 과제의 앞선 쓰기가 모두
+// 끝난 뒤(chainFeeWrite 안에서) 실행해야 방금 저장된 다른 수정까지 함께 반영된다.
+// 서버에서 받는 데 실패하면 false를 돌려준다 — 호출한 쪽이 "되돌렸다"고 안내하지 않고, 화면에 남은 저장 안 된
+// 값이 서버로 올라가지 않게 막을 수 있도록. keepEdits는 아직 서버에 나가지 않은 다른 수정으로, 되돌린 행 위에
+// 다시 겹쳐 화면에서 사라지지 않게 한다(그 저장이 성공하면 어차피 같은 값이 된다).
+interface RestoreResult {
+  ok: boolean;
+  // 서버가 명시적으로 돌려준 HTTP 상태 — 로그인 만료(401)·권한 거절(403)처럼 재시도해도 똑같이 실패할
+  // 상황과, 일시적 네트워크·서버 오류처럼 다시 시도해볼 만한 상황을 호출한 쪽(scheduleFeeProjectTaintRetry)이
+  // 구분하는 데 쓴다. 네트워크 예외나 참조 불일치로 실패한 경우엔 상태 코드 자체가 없으므로 비워둔다.
+  status?: number;
+}
+
+// projectNumber의 로컬 termFees를 서버의 실제 값으로 되돌린다. 호출자는 keepEdits를 넘기지 않는다 — 조회가
+// 떠 있는 동안 새로 들어온 수정까지 반영해야 하므로, 보존할 편집 목록은 응답을 반영하는 "지금" 시점 기준으로
+// 이 함수가 직접 다시 구한다(조회 시작 시점의 스냅샷은 그 사이의 수정을 담지 못한다 — 재현된 버그).
+async function restoreProjectTermFeesFromServer(projectNumber: string): Promise<RestoreResult> {
+  // 조회가 끝난 뒤, 그 사이 이 과제의 termFees가 이미 다른 경로(성공한 수정·다른 복원 등)로 바뀌었으면 이
+  // 응답은 버린다 — 응답은 조회를 시작한 "그 시점"의 스냅샷이라, 그대로 적용하면 그 사이 반영된(이미 서버에도
+  // 정상 저장됐을 수 있는) 값을 되돌려 버린다. hydrate*()의 "이 요청이 떠 있는 동안 수정이 있었으면 버린다"
+  // 가드(수정 8)와 같은 원칙을 여기서도 적용한다.
+  const snapshotAtStart = _state.termFees;
+  try {
+    const { status, body } = await throttledFetchJson<{ ok: boolean; termFees?: TermFee[] }>("/api/term-fees", undefined, FEE_WRITE_TIMEOUT_MS);
+    if (!body?.ok || !body.termFees) {
+      console.error("연차수수료를 서버 값으로 되돌리지 못했습니다. (HTTP " + status + ")");
+      return { ok: false, status };
+    }
+    if (_state.termFees !== snapshotAtStart) {
+      console.error("연차수수료 복원 응답을 버렸습니다 — 조회하는 동안 로컬 상태가 이미 바뀌었습니다.");
+      return { ok: false };
+    }
+    let rows = body.termFees.filter((f) => f.projectNumber === projectNumber);
+    for (const edit of queuedTermFeeEdits(projectNumber)) {
+      const realId = resolveTermFeeId(edit.id);
+      rows = rows.map((f) => (f.id === realId || f.id === edit.id ? { ...f, ...edit.data } : f));
+    }
+    _state = { ..._state, termFees: [..._state.termFees.filter((f) => f.projectNumber !== projectNumber), ...rows] };
+    notify();
+    return { ok: true };
+  } catch (err) {
+    console.error("연차수수료를 서버 값으로 되돌리지 못했습니다.", err);
+    return { ok: false };
+  }
+}
+
+// ============================================================
+// 복원 실패로 로컬-서버 상태가 불일치할 수 있는 과제의 쓰기 차단
+// ============================================================
+// 저장이 실패한 뒤 서버 값으로 되돌리는 것(restoreProjectTermFeesFromServer)까지 실패하면, 그 과제의 로컬
+// termFees가 서버와 맞는지 더 이상 알 수 없다. 이 상태에서 재계산이 그대로 sync-fees를 보내면 거절되거나
+// 저장되지 않은 값을 다시 올릴 수 있다 — 그 순간 대기 중이던 재계산만 무효화(bumpFeeSyncGeneration)해서는
+// 복원 실패 "이후"에 탭 재진입·참여기관 수정 등으로 새로 걸리는 재계산까지는 막지 못한다(재현된 버그: 거절된
+// 값이 다음 재계산에 실려 다시 전송됨). 그래서 복원에 실제로 성공할 때까지 그 과제의 재계산 저장 자체를
+// (호출 시점과 무관하게, autoGenerateTermFees 진입점에서) 계속 보류한다.
+const _taintedFeeProjects = new Set<string>();
+const _taintRetryAttempt = new Map<string, number>();
+// 예약된 재시도 타이머 핸들 — resetPendingFeeRetriesForTest()가 테스트 종료 시 이 핸들로 정리한다(이유는
+// _feeSlotRetryTimer 주석 참고. 이쪽은 특히 "복원 성공할 때까지 포기하지 않는" 설계라 방치하면 테스트가
+// 끝난 뒤에도 스스로 계속 재시도를 예약해, 그 타이머가 몇 번이고 다시 다른 테스트의 모의 fetch를 건드릴 수 있다).
+const _taintRetryTimer = new Map<string, ReturnType<typeof setTimeout>>();
+
+function isFeeProjectTainted(projectNumber: string): boolean {
+  return _taintedFeeProjects.has(projectNumber);
+}
+
+// 화면 배너 등에 보여줄 상태만 갱신한다(태인트 자체를 걸거나 풀지 않는다) — scheduleFeeProjectTaintRetry가
+// 재시도를 계속하는 중인지, 401/403으로 멈췄는지에 따라 taintFeeProject 이후에도 값이 바뀐다.
+function setFeeProjectTaintStatus(projectNumber: string, status: "recovering" | "auth" | "permission"): void {
+  if (_state.taintedFeeProjects[projectNumber] === status) return;
+  _state = { ..._state, taintedFeeProjects: { ..._state.taintedFeeProjects, [projectNumber]: status } };
+  notify();
+}
+
+function taintFeeProject(projectNumber: string): void {
+  if (_taintedFeeProjects.has(projectNumber)) return; // 이미 재시도가 진행 중이다
+  _taintedFeeProjects.add(projectNumber);
+  _taintRetryAttempt.set(projectNumber, 0);
+  setFeeProjectTaintStatus(projectNumber, "recovering");
+  scheduleFeeProjectTaintRetry(projectNumber);
+}
+
+function clearFeeProjectTaint(projectNumber: string): void {
+  if (!_taintedFeeProjects.delete(projectNumber)) return;
+  _taintRetryAttempt.delete(projectNumber);
+  const timer = _taintRetryTimer.get(projectNumber);
+  if (timer) {
+    clearTimeout(timer);
+    _taintRetryTimer.delete(projectNumber);
+  }
+  _state = {
+    ..._state,
+    taintedFeeProjects: Object.fromEntries(Object.entries(_state.taintedFeeProjects).filter(([k]) => k !== projectNumber)),
+  };
+  notify();
+  // 태인트 기간에 보류됐던 재계산을, 방금 복원해 이제는 신뢰할 수 있는 서버 값 위에서 다시 시작한다. 그 사이
+  // 큐에 남아있을 수 있는 낡은 세대의 대기 요청도 함께 무효화한다.
+  bumpFeeSyncGeneration(projectNumber);
+  flushDeferredFeeRecalcs();
+}
+
+// 복원이 성공할 때까지 백오프를 두고 계속 재시도한다 — 다만 "포기하지 않는" 것은 일시적 오류(네트워크
+// 문제·서버 오류)에 한정한다. 로그인 만료(401)·권한 거절(403)은 재시도해도 같은 결과이므로, 그 상태를
+// 확인하면 자동 재시도는 멈추고 사용자에게 알린다(과제는 계속 태인트 상태로 남아 배너·재계산 보류는 유지된다
+// — 사용자가 새로고침하거나 다시 로그인하면 hydrate가 처음부터 다시 돌며 자연히 풀린다).
+function scheduleFeeProjectTaintRetry(projectNumber: string): void {
+  const attempt = _taintRetryAttempt.get(projectNumber) ?? 0;
+  _taintRetryAttempt.set(projectNumber, attempt + 1);
+  const delay = FEE_SLOT_RETRY_DELAYS_MS[Math.min(attempt, FEE_SLOT_RETRY_DELAYS_MS.length - 1)];
+  const timer = setTimeout(() => {
+    _taintRetryTimer.delete(projectNumber);
+    if (!_taintedFeeProjects.has(projectNumber)) return; // 그 사이 다른 경로로 이미 풀렸다
+    void waitForSyncIdle().then(async () => {
+      if (!_taintedFeeProjects.has(projectNumber)) return;
+      // 과제별 쓰기 순서(chainFeeWrite)에 태운다 — 이 조회가 떠 있는 동안 새로 걸리는 수정·재계산의
+      // 네트워크 요청이 이 조회보다 먼저 끝나버리는 경합을 줄인다(그래도 남는 경합은
+      // restoreProjectTermFeesFromServer 자체의 참조 비교가 잡아낸다).
+      const result = await trackSync(chainFeeWrite(projectNumber, () => restoreProjectTermFeesFromServer(projectNumber)));
+      if (result.ok) {
+        clearFeeProjectTaint(projectNumber);
+        return;
+      }
+      if (result.status === 401) {
+        setFeeProjectTaintStatus(projectNumber, "auth");
+        emitSyncNotice("로그인이 만료돼 자동 복구를 멈췄습니다. 다시 로그인해 주세요.");
+        return;
+      }
+      if (result.status === 403) {
+        // 403은 재로그인으로 해결되지 않을 수 있다(같은 계정으로 다시 로그인해도 권한 자체가 없으면 그대로
+        // 거절된다) — "새로고침" 대신 관리자에게 권한 확인을 요청하도록 구분해서 안내한다.
+        setFeeProjectTaintStatus(projectNumber, "permission");
+        emitSyncNotice("이 작업을 수행할 권한이 없어 자동 복구를 멈췄습니다. 관리자에게 권한 확인을 요청해 주세요.");
+        return;
+      }
+      scheduleFeeProjectTaintRetry(projectNumber);
+    });
+  }, delay);
+  _taintRetryTimer.set(projectNumber, timer);
+}
+
+// 저장에 실패한 수정의 입력값을 안내 문구에 함께 적는다 — 서버 값으로 되돌리면 화면에서는 사라지므로, 사용자가
+// 무엇을 다시 입력해야 하는지 알 수 있어야 한다.
+const FEE_EDIT_LABELS: Record<string, string> = {
+  appliedFee: "수수료(적용)", unclaimedFee: "미청구수수료", billingType: "발행구분", docRequestDate: "서류요청일",
+  docReplyDate: "서류회신일", termStartDate: "연차 시작일", termEndDate: "연차 종료일", auditFirm: "회계법인",
+  otherFirmHandled: "타회계법인 진행", status: "상태",
+};
+function describeEditedValues(data: Partial<TermFee>): string {
+  const parts = Object.entries(data)
+    .filter(([key]) => key in FEE_EDIT_LABELS)
+    .map(([key, value]) => {
+      const shown = typeof value === "number" ? `${value.toLocaleString("ko-KR")}원` : value === undefined || value === "" ? "(비움)" : String(value);
+      return `${FEE_EDIT_LABELS[key]} ${shown}`;
+    });
+  return parts.join(", ") || "-";
+}
+
+// 개별 수정의 저장이 실패한 뒤 처리 — 되돌릴 수 있으면 서버 값으로 되돌리고, 그 수정이 대기하는 동안 요청된
+// 재계산이 있었다면(그 재계산은 방금 실패한 값을 전제로 계산·전송 예정이었으므로) 되돌린 값 위에서 다시 계산한다.
+async function handleTermFeeEditFailure(projectNumber: string, edit: QueuedTermFeeEdit, label: string, failure: FeeWriteFailure): Promise<void> {
+  if (failure.uncertain) {
+    // 요청이 서버에 도달했는지 모른다. 서버 값으로 되돌리면 뒤늦게 저장되는 값과 어긋날 수 있으므로 화면 값을 그대로
+    // 두고(이어지는 저장이 현재 화면 값을 다시 보내 저장을 이어간다) 사용자에게 확인만 안내한다.
+    emitSyncNotice(`서버 응답이 오래 걸려 저장 여부를 확인하지 못했습니다. 잠시 뒤 새로고침해서 ${label} 값이 저장됐는지 확인해 주세요.`);
     return;
   }
-  trackSync(throttledFetch(`/api/term-fees/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
-    .then((res) => res.json())
-    .then((res: { ok: boolean; termFee?: TermFee; error?: string }) => {
-      if (res.ok && res.termFee) {
-        _state = { ..._state, termFees: _state.termFees.map((f) => (f.id === id ? res.termFee! : f)) };
-        notify();
-      } else {
-        console.error("연차수수료 수정 실패:", res.error);
-        reportSyncFailure(1, describeTermFee(id));
+  const result = await restoreProjectTermFeesFromServer(projectNumber);
+  if (!result.ok) {
+    // 서버 값을 받지 못해 화면엔 저장되지 않은 값이 남아 있을 수 있다 — 복원에 실제로 성공할 때까지(taintFeeProject가
+    // 계속 재시도) 이 과제의 재계산 저장을 전부 막는다. 대기 중이던 것만 무효화해서는 이후 새로 걸리는 재계산까지
+    // 막지 못해, 방금 거절된 값이 그 재계산에 실려 다시 전송될 수 있었다.
+    taintFeeProject(projectNumber);
+    emitSyncNotice(`수정한 내용을 서버에 저장하지 못했고 서버 값으로 되돌리지도 못했습니다. 화면 값이 실제 저장된 값과 다를 수 있으니 새로고침해 주세요. ${label} (${failure.message})`);
+    return;
+  }
+  if ((_feeSyncGeneration.get(projectNumber) ?? 0) !== edit.generation) {
+    const projectId = _state.projects.find((p) => p.projectNumber === projectNumber)?.id;
+    if (projectId) autoGenerateTermFees(projectId);
+  }
+  emitSyncNotice(`수정한 내용을 서버에 저장하지 못해 저장돼 있던 값으로 되돌렸습니다. ${label} — 입력하신 값: ${describeEditedValues(edit.data)}. 다시 입력해 주세요. (${failure.message})`);
+}
+
+// 임시 id로 남은 수정 대상을 실제로 처리해 줄 재계산이 끝내 없었던(드문) 경우를 뒤늦게 잡아낸다 — 이 함수
+// 호출 시점엔 이미 그 편집 태스크가 종료된 뒤(persistTermFee의 trackSync 카운트가 빠진 뒤)라야
+// waitForSyncIdle()이 자기 자신을 기다리는 데드락 없이 "그 밖의 모든 대기 작업"을 정확히 기다린다 —
+// setTimeout으로 현재 실행 중인 태스크 밖으로 나온 뒤에 부르는 이유다.
+function scheduleTempIdResolutionCheck(projectNumber: string, id: string, label: string, data: Partial<TermFee>): void {
+  setTimeout(() => {
+    void waitForSyncIdle().then(async () => {
+      if (!resolveTermFeeId(id).startsWith("tf-")) return; // 정상적으로 실제 id로 바뀌었다 — 어떤 재계산이 이 값을 서버에 올렸다.
+      console.error(`연차수수료 수정 실패: 이 항목을 만든 재계산이 서버에 반영되지 않았습니다. (${label})`);
+      reportSyncFailure(1, label);
+      if (_batchDepth > 0) return;
+      // 이 콜백은 체인 밖(setTimeout)에서 실행되므로, taint 재시도와 같은 이유로 복원 자체를 과제별
+      // 쓰기 순서에 태운다 — 그래야 이 조회가 떠 있는 동안 새로 걸리는 수정의 네트워크 요청이 먼저 끝나
+      // 반영된 값을 이 조회의 (더 오래된) 응답이 덮어쓰는 경합을 줄인다.
+      const result = await trackSync(chainFeeWrite(projectNumber, () => restoreProjectTermFeesFromServer(projectNumber)));
+      if (!result.ok) taintFeeProject(projectNumber);
+      emitSyncNotice(
+        result.ok
+          ? `수정한 내용을 반영할 재계산이 서버에 저장되지 않아, 저장돼 있던 값으로 되돌렸습니다. ${label} — 입력하신 값: ${describeEditedValues(data)}. 다시 입력해 주세요.`
+          : `수정한 내용이 저장됐는지 확인하지 못했습니다. 새로고침해서 확인해 주세요. ${label}`
+      );
+    });
+  }, 0);
+}
+
+function persistTermFee(id: string, data: Partial<TermFee>): void {
+  const projectNumber = _state.termFees.find((f) => f.id === id)?.projectNumber ?? "";
+  const label = describeTermFee(id);
+  const queued = queuedTermFeeEdits(projectNumber);
+  const edit: QueuedTermFeeEdit = { id, data, generation: _feeSyncGeneration.get(projectNumber) ?? 0 };
+  queued.add(edit);
+  trackSync(
+    chainFeeWrite(projectNumber, async () => {
+      let failure: FeeWriteFailure | null = null;
+      try {
+        // 재계산이 만든 임시 id 행이면, 그 행을 만든 재계산의 sync-fees가 체인 순서상 이 태스크 앞에서 실제
+        // id를 정해준다 — 다만 그 재계산이 더 최신 재계산에 밀려 건너뛰어졌을 수 있다(bumpFeeSyncGeneration).
+        // 어느 쪽이든 이 값은 이미 로컬 상태(_state.termFees, 위 updateTermFee의 낙관적 갱신)에 반영돼 있고,
+        // 다음으로 실제 실행되는 재계산의 sync-fees는 "보내는 시점"의 로컬 상태로 본문을 새로 만들며
+        // manualOverride가 켜진 행은 값을 건드리지 않고 그대로 보내므로, 이 값을 그대로 포함해 서버에
+        // 올린다 — 그래서 이 PATCH 자체를 따로 보낼 필요가 없다(여기서 실패로 처리하면, 그 대신 도는 복구
+        // 재계산이 방금 복원한 "수정 전" 서버 값 위에서 새로 계산해 이 입력값을 지워버렸었다). 어떤
+        // 재계산도 끝내 이 id를 실제 id로 못 바꿔주는 드문 경우에 대비해서만, 모든 대기 작업이 끝난 뒤에도
+        // 여전히 임시 id인지 별도로 한 번 더 확인한다(scheduleTempIdResolutionCheck).
+        const realId = resolveTermFeeId(id);
+        if (realId.startsWith("tf-")) {
+          scheduleTempIdResolutionCheck(projectNumber, id, label, data);
+          return;
+        } else {
+          const { status, body } = await throttledFetchJson<{ ok: boolean; termFee?: TermFee; error?: string }>(`/api/term-fees/${realId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(data),
+          }, FEE_WRITE_TIMEOUT_MS);
+          if (body?.ok && body.termFee) {
+            // 서버가 돌려준 값 중 이번에 보낸 필드만 반영한다(행 전체를 갈아끼우면 그 사이 재계산이 바꾼 다른
+            // 필드를 되돌릴 수 있다). 뒤이은 수정이 남아 있으면 그쪽 응답이 최종값이므로 건너뛴다.
+            if (queued.size <= 1) {
+              const echoed = Object.fromEntries(Object.keys(data).map((k) => [k, (body.termFee as unknown as Record<string, unknown>)[k]]));
+              _state = { ..._state, termFees: _state.termFees.map((f) => (f.id === realId ? { ...f, ...echoed } : f)) };
+              notify();
+            }
+          } else {
+            failure = describeFeeWriteHttpFailure(status, body?.error);
+          }
+        }
+      } catch (err) {
+        console.error(err);
+        failure = describeFeeWriteException(err);
       }
+      if (failure === null) return;
+      console.error("연차수수료 수정 실패:", failure.message);
+      reportSyncFailure(1, label);
+      // 복원(restoreProjectTermFeesFromServer)이 "지금 대기 중인 편집"을 보존값으로 다시 반영하기 전에,
+      // 이 실패한 편집 자신을 먼저 큐에서 뺀다 — 안 그러면 거절된 값(edit.data)이 그 목록에 남아 있어,
+      // 복원이 서버 값 위에 이 거절된 값을 다시 덧씌워 복원 자체를 무의미하게 만든다.
+      queued.delete(edit);
+      if (_batchDepth === 0) await handleTermFeeEditFailure(projectNumber, edit, label, failure);
+    }).finally(() => {
+      queued.delete(edit);
+      if (queued.size === 0 && _queuedTermFeeEdits.get(projectNumber) === queued) _queuedTermFeeEdits.delete(projectNumber);
     })
-    .catch((err) => {
-      console.error("연차수수료 수정 실패:", err);
-      reportSyncFailure(1, describeTermFee(id));
-    }));
+  );
 }
 
 export function addTermFee(data: Omit<TermFee, "id">): TermFee {
@@ -2219,13 +2804,15 @@ function hydrateReceivables(): void {
     .then((res) => res.json())
     .then((data: { ok: boolean; receivables?: Receivable[] }) => {
       if (data.ok && data.receivables && _state.receivables === snapshotAtStart) {
-        _state = { ..._state, receivables: data.receivables };
+        _state = { ..._state, receivables: data.receivables, loaded: { ..._state.loaded, receivables: true } };
         notify();
       }
     })
     .catch((err) => {
       console.error("미수금 목록을 불러오지 못했습니다.", err);
       _receivablesHydrated = false;
+      _state = { ..._state, loaded: { ..._state.loaded, receivables: true } };
+      notify();
     });
 }
 if (typeof window !== "undefined") hydrateReceivables();
@@ -2359,13 +2946,15 @@ function hydrateProjectIssues(): void {
     .then((res) => res.json())
     .then((data: { ok: boolean; projectIssues?: ProjectIssue[] }) => {
       if (data.ok && data.projectIssues && _state.projectIssues === snapshotAtStart) {
-        _state = { ..._state, projectIssues: data.projectIssues };
+        _state = { ..._state, projectIssues: data.projectIssues, loaded: { ..._state.loaded, projectIssues: true } };
         notify();
       }
     })
     .catch((err) => {
       console.error("이슈 목록을 불러오지 못했습니다.", err);
       _projectIssuesHydrated = false;
+      _state = { ..._state, loaded: { ..._state.loaded, projectIssues: true } };
+      notify();
     });
 }
 if (typeof window !== "undefined") hydrateProjectIssues();
@@ -2609,13 +3198,15 @@ function hydrateTaxInvoices(): void {
     .then((res) => res.json())
     .then((data: { ok: boolean; taxInvoices?: TaxInvoice[] }) => {
       if (data.ok && data.taxInvoices && _state.taxInvoices === snapshotAtStart) {
-        _state = { ..._state, taxInvoices: data.taxInvoices };
+        _state = { ..._state, taxInvoices: data.taxInvoices, loaded: { ..._state.loaded, taxInvoices: true } };
         notify();
       }
     })
     .catch((err) => {
       console.error("세금계산서 목록을 불러오지 못했습니다.", err);
       _taxInvoicesHydrated = false;
+      _state = { ..._state, loaded: { ..._state.loaded, taxInvoices: true } };
+      notify();
     });
 }
 if (typeof window !== "undefined") hydrateTaxInvoices();
@@ -3682,8 +4273,23 @@ export function autoGenerateTermFees(
     _pendingFeeRecalcProjectIds.add(projectId);
     return [];
   }
+  // 재계산 입력(과제·참여기관·정책·수수료)이 아직 서버 응답으로 갱신되지 않았다면(sessionStorage 스냅샷만
+  // 있는 상태) 그 위에서 계산·저장하지 않고 미뤄둔다 — 서버 응답이 들어오는 순간(onFeeSlotApplied) 실행된다.
+  // 반환값(새로 발급한 과제코드)은 호출자가 자기 PATCH에 실어 보내는 용도인데, 보류된 재계산은 나중에
+  // 스스로 저장까지 마치므로 일괄 구간의 보류(위)와 마찬가지로 빈 배열을 돌려준다.
+  if (!isFeeRecalcDataFresh(_state.fresh)) {
+    _deferredFeeRecalcProjectIds.add(projectId);
+    return [];
+  }
   const project = _state.projects.find((p) => p.id === projectId);
   if (!project) return [];
+  // 이 과제는 저장 실패 후 서버 값 복원까지 실패해, 로컬 상태가 서버와 맞는지 알 수 없는 상태다(taintFeeProject
+  // 참고) — 복원이 실제로 성공할 때까지 재계산 저장을 보류한다. 위 fresh 가드와 마찬가지로 되돌아온 값은
+  // 호출자에게 의미 없으므로 빈 배열을 준다.
+  if (isFeeProjectTainted(project.projectNumber)) {
+    _deferredFeeRecalcProjectIds.add(projectId);
+    return [];
+  }
   // 완료된 과제는 정책·기관정보가 바뀌어도 재산정 대상에서 제외 — 과거 확정 내역을 그대로 보존한다.
   if (project.status === "COMPLETED") return [];
 
@@ -3965,7 +4571,9 @@ export function autoGenerateTermFees(
       }
 
       newFees.push({
-        id: genId("tf"),
+        // 이미 있는 행은 id를 그대로 이어받는다 — 새 임시 id를 달면 서버가 실제 id를 돌려줄 때까지 이 행을
+        // 수정해도 저장 요청을 보낼 수 없고(임시 id), 입력 중이던 셀도 id가 바뀌어 초기화된다.
+        id: prevFee?.id ?? genId("tf"),
         projectNumber: project.projectNumber,
         projectName: project.projectName,
         termYear,
@@ -3982,8 +4590,14 @@ export function autoGenerateTermFees(
         status: preservedStatus,
         isAutoGenerated: true,
         otherFirmHandled: prevFee?.otherFirmHandled,
-        termStartDate: ab?.termStartDate,
-        termEndDate: ab?.termEndDate,
+        // 아래 세 가지는 계산과 무관하게 담당자가 행에 직접 입력하는 값이라, 재계산이 행을 새로 만들 때
+        // 이전 행에서 그대로 이어받아야 한다(안 그러면 수수료 탭을 열 때마다 서버에서도 지워졌다).
+        // 연차 기간은 엑셀 등으로 참여기관에 값이 있으면 그쪽이 우선이고, 없을 때만 직접 지정한 값을 유지한다.
+        docRequestDate: prevFee?.docRequestDate,
+        docReplyDate: prevFee?.docReplyDate,
+        billingType: prevFee?.billingType,
+        termStartDate: ab?.termStartDate ?? prevFee?.termStartDate,
+        termEndDate: ab?.termEndDate ?? prevFee?.termEndDate,
         auditFirm: ab?.auditFirm ?? prevFee?.auditFirm,
       });
     }
@@ -4019,7 +4633,7 @@ export function autoGenerateTermFees(
             tf.termNumber === termNumber && tf.institutionId === instId
         );
         newFees.push({
-          id: genId("tf"),
+          id: prevFee?.id ?? genId("tf"),
           projectNumber: project.projectNumber,
           projectName: project.projectName,
           termYear,
@@ -4036,6 +4650,11 @@ export function autoGenerateTermFees(
           status: feeStatus,
           isAutoGenerated: true,
           otherFirmHandled: prevFee?.otherFirmHandled,
+          docRequestDate: prevFee?.docRequestDate,
+          docReplyDate: prevFee?.docReplyDate,
+          billingType: prevFee?.billingType,
+          termStartDate: prevFee?.termStartDate,
+          termEndDate: prevFee?.termEndDate,
           auditFirm: prevFee?.auditFirm,
         });
         departedCarryoverBilledThisTerm += ownExemptCarried;
@@ -4160,8 +4779,6 @@ export function autoGenerateTermFees(
   // 통째로 서버에 반영만 한다(계산 로직을 서버로 옮기지 않는다). project.id가 아직 addProject의
   // POST가 끝나기 전 임시 id일 수도 있는데, 그 경우 서버가 과제를 못 찾아 이 호출은 조용히 실패하고
   // addProject 쪽에서 실제 id로 다시 이 함수를 호출해 정상 동기화된다.
-  const projectTermFees = _state.termFees.filter((f) => f.projectNumber === project.projectNumber);
-  const projectTermFeeCalcs = _state.termFeeCalcs.filter((c) => c.projectId === project.id);
   if (project.id.startsWith("p-")) return newTermCodes; // 과제 생성 응답에서 실제 ID로 다시 동기화한다.
 
   // 위에서 새로 발급한 연차별 과제코드(termCodes)는 지금까지 _state에만 반영되고 서버로는 한 번도
@@ -4194,42 +4811,81 @@ export function autoGenerateTermFees(
   // throttledFetch/trackSync를 거치지 않고 일반 fetch로 나가면 엑셀 대량 업로드 구간(다른 add*/update*
   // 호출들과 함께 동시 요청 6개 제한을 받아야 함)에서 이 요청만 무제한으로 동시에 쏟아져 나가고,
   // beginSyncBatch()/endSyncBatchAndWait() 집계에도 안 잡혀 실패해도 사용자에게 보이지 않았다.
+  // 같은 과제의 다른 수수료 쓰기(개별 PATCH 등)와 순서가 뒤바뀌지 않도록 과제 단위 체인에 태운다.
+  // 요청 본문은 지금 만들어 두지 않고 "실제로 나가는 시점"의 화면 상태로 만든다 — 앞선 저장이 실패해 서버 값으로
+  // 되돌려졌다면, 미리 만들어 둔 본문에 든 (저장 실패한) 값을 그대로 올려 서버에만 남는 일이 없어야 한다. 그 사이
+  // 더 새로운 재계산이 요청됐다면(같은 상태를 그쪽이 보내므로) 이 동기화는 건너뛴다.
+  const syncLabel = `연차수수료 동기화: ${project.projectNumber} ${project.projectName}`;
+  const generation = bumpFeeSyncGeneration(project.projectNumber);
   trackSync(
-    throttledFetch(`/api/projects/${project.id}/sync-fees`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ termFees: projectTermFees, termFeeCalcs: projectTermFeeCalcs }),
-    })
-      .then((res) => res.json())
-      .then((res: { ok: boolean; termFees?: TermFee[]; error?: string }) => {
-        if (!res.ok) {
-          console.error("연차수수료 동기화 실패(서버):", res.error);
-          reportSyncFailure(1, `연차수수료 동기화: ${project.projectNumber} ${project.projectName}`);
-          return;
+    chainFeeWrite(project.projectNumber, async () => {
+      if (_feeSyncGeneration.get(project.projectNumber) !== generation) return;
+      // 이 태스크가 체인에 이미 들어와 있던 사이 이 과제가 태인트됐을 수 있다(taintFeeProject) — 복원에
+      // 성공할 때까지는 어떤 재계산 결과도 보내지 않는다(clearFeeProjectTaint가 세대를 올려 이런 낡은
+      // 태스크는 어차피 위 세대 검사에서 걸러지지만, 순서상 혹시 먼저 도착하는 경우에 대비한다).
+      if (isFeeProjectTainted(project.projectNumber)) return;
+      if (!_state.projects.some((p) => p.id === project.id)) return; // 그 사이 삭제된 과제
+      const syncBody = JSON.stringify({
+        termFees: _state.termFees.filter((f) => f.projectNumber === project.projectNumber),
+        termFeeCalcs: _state.termFeeCalcs.filter((c) => c.projectId === project.id),
+      });
+      let failure: FeeWriteFailure | null = null;
+      try {
+        const { status, body } = await throttledFetchJson<{ ok: boolean; termFees?: TermFee[]; error?: string }>(`/api/projects/${project.id}/sync-fees`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: syncBody,
+        }, FEE_WRITE_TIMEOUT_MS);
+        if (body?.ok) {
+          if (body.termFees) mapSyncedTermFeeIds(project.projectNumber, body.termFees);
+        } else {
+          failure = describeFeeWriteHttpFailure(status, body?.error);
         }
-        if (!res.termFees) return;
-        // 여기서 만든 termFees는 매번 새 임시 id(genId("tf"))를 달고 있어, 서버가 upsert한 실제 DB id와
-        // 다르다 — sync-fees는 id가 아니라 (기관×연차) 기준으로 upsert하기 때문에 서버는 정상 저장되지만,
-        // 로컬 상태는 계속 이 임시 id를 들고 있게 된다. 그 상태로 이 행에 개별 PATCH를 보내는 다른 동작
-        // (updateTermFee, setTermOtherFirmHandled 등)을 하면 서버가 그 임시 id를 실제 DB에서 못 찾아
-        // 조용히 실패한다(타회계법인 진행 체크가 저장은 되는 것처럼 보이다 사라지던 버그의 원인). 서버가
-        // 돌려준 실제 id로 즉시 교체해 이 문제를 없앤다.
-        const realByKey = new Map(res.termFees.map((f) => [`${f.termYear}|${f.termNumber}|${f.institutionId}`, f]));
-        _state = {
-          ..._state,
-          termFees: _state.termFees.map((f) => {
-            if (f.projectNumber !== project.projectNumber) return f;
-            return realByKey.get(`${f.termYear}|${f.termNumber}|${f.institutionId}`) ?? f;
-          }),
-        };
-        notify();
-      })
-      .catch((err) => {
-        console.error("연차수수료 동기화 실패(서버):", err);
-        reportSyncFailure(1, `연차수수료 동기화: ${project.projectNumber} ${project.projectName}`);
-      })
+      } catch (err) {
+        console.error(err);
+        failure = describeFeeWriteException(err);
+      }
+      if (failure === null) return;
+      console.error("연차수수료 동기화 실패(서버):", failure.message);
+      reportSyncFailure(1, syncLabel);
+      if (_batchDepth > 0) return;
+      if (failure.uncertain) {
+        emitSyncNotice(`${project.projectName} 수수료 자동 계산 결과가 저장됐는지 확인하지 못했습니다. 잠시 뒤 새로고침해서 확인해 주세요.`);
+        return;
+      }
+      // 화면에는 새로 계산한 값이 보이는데 서버에는 저장되지 않은 상태 — 서버 값으로 되돌려 둘이 어긋난 채로
+      // 남지 않게 하고, 사용자에게 알린다. 아직 서버에 나가지 않은 사용자 수정은 화면에 그대로 남긴다.
+      const result = await restoreProjectTermFeesFromServer(project.projectNumber);
+      if (!result.ok) taintFeeProject(project.projectNumber);
+      emitSyncNotice(
+        result.ok
+          ? `${project.projectName} 수수료 자동 계산 결과를 서버에 저장하지 못해 저장돼 있던 값으로 되돌렸습니다. (${failure.message})`
+          : `${project.projectName} 수수료 자동 계산 결과를 서버에 저장하지 못했고 서버 값으로 되돌리지도 못했습니다. 화면 값이 실제와 다를 수 있으니 새로고침해 주세요. (${failure.message})`
+      );
+    })
   );
   return newTermCodes;
+}
+
+// sync-fees 응답으로 임시 id(tf-…)를 서버가 정한 실제 id로 바꾼다 — 화면 값은 건드리지 않고 id만 교체한다.
+// (서버는 (기관×연차) 기준으로 upsert하므로 응답의 id가 실제 DB id다.) 예전엔 응답의 행 전체로 갈아끼워서,
+// 응답을 기다리는 사이 사용자가 입력한 값이 응답 시점의 값으로 되돌아갔다. 매칭 키에 termYear는 넣지 않는다 —
+// 한 과제 안에서 termNumber만으로 이미 유일하고, 서버가 기존 PTI의 termYear를 그대로 쓰면 달라질 수 있다.
+function mapSyncedTermFeeIds(projectNumber: string, serverRows: TermFee[]): void {
+  const realByKey = new Map(serverRows.map((f) => [`${f.termNumber}|${f.institutionId}`, f.id]));
+  let changed = false;
+  const next = _state.termFees.map((f) => {
+    if (f.projectNumber !== projectNumber) return f;
+    const realId = realByKey.get(`${f.termNumber}|${f.institutionId}`);
+    if (!realId || realId === f.id) return f;
+    _termFeeIdAlias.set(f.id, realId);
+    changed = true;
+    return { ...f, id: realId };
+  });
+  if (changed) {
+    _state = { ..._state, termFees: next };
+    notify();
+  }
 }
 
 // ============================================================

@@ -7,13 +7,14 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import {
   FiEdit2, FiCheck, FiX, FiPlus, FiSend, FiChevronDown, FiChevronUp, FiTrash2, FiFileText,
-  FiHash, FiCalendar, FiLayers, FiDollarSign, FiInfo,
+  FiHash, FiCalendar, FiLayers, FiDollarSign, FiInfo, FiRefreshCw, FiAlertTriangle,
 } from "react-icons/fi";
 import {
   useStore, updateProject, addProjectIssue, updateProjectIssue, deleteProjectIssue, addTaxInvoice, updateTaxInvoice,
   addReceivable, updateReceivable, addEmailDispatch, updateEmailDispatch, updateTermFee, updateUnclaimedFee,
   updateProjectMember, autoGenerateTermFees, addProjectMember, deleteProjectMember, deleteProject, deleteProjectTerms,
   setTermOtherFirmHandled, setTermBillingType, setTermDates, resolveProjectId, ensureAgencyNoticeTemplateDetail,
+  isFeeRecalcDataFresh,
 } from "@/lib/store";
 import { type TaxInvoice, type Receivable, type TermFee, type UnclaimedFee, type Project, type ProjectMember, type Institution, type IssueRecipientGroup, type AgencyNoticeTemplateEntry, type EmailDispatch, type FeePolicy, type AnnualFinancials, type FundingAgency, EMPTY_NOTICE_TEMPLATE } from "@/lib/mock";
 import { calcTermFee, resolvePolicy, agencyHasIctFundPolicy, supportsAutonomyTrack, sanitizeProjectProgramFields, normalizeGrade, getMemberAmount, isSettlementTerm, isExcludedMember, resolveAutoDetectedAgencyId, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveMemberLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveAgencyAssignedAtForTerm, resolveInternalAssignedAtForTerm, resolveProjectDivision, resolveProjectCodeForTerm, resolveStageNumberForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, MEMBER_ROLE_LABEL, type CalcMember } from "@/lib/fee-calculator";
@@ -4542,10 +4543,48 @@ function TermSection({ group, allFees, project, projectNumber, agencyId, leadIns
   );
 }
 
+// 상태별로 아이콘·색·문구를 구분한다 — "recovering"만 실제로 재시도가 도는 중이라 회전 아이콘을 쓰고,
+// 401/403은 store.ts(scheduleFeeProjectTaintRetry)가 이미 자동 재시도를 멈춘 상태라 정지 아이콘으로
+// 바꾸고 다음 행동(재로그인/관리자에게 권한 요청)을 구체적으로 안내한다.
+const FEE_TAINT_BANNER: Record<"recovering" | "auth" | "permission", { icon: ReactNode; tone: string; title: string; body: string }> = {
+  recovering: {
+    icon: <FiRefreshCw size={13} className="text-amber-500 shrink-0 animate-spin" />,
+    tone: "bg-amber-50 border-amber-200 text-amber-800",
+    title: "서버 상태 확인 중 · 자동 계산 저장 보류",
+    body: "방금 저장이 실패해 서버 값을 다시 확인하고 있습니다. 확인되기 전까지는 수정한 금액이 자동으로 다시 계산·저장되지 않습니다.",
+  },
+  auth: {
+    icon: <FiAlertTriangle size={13} className="text-red-500 shrink-0" />,
+    tone: "bg-red-50 border-red-200 text-red-800",
+    title: "로그인 만료 · 자동 계산 저장 중단",
+    body: "로그인이 만료돼 자동 복구를 멈췄습니다. 다시 로그인한 뒤 이 탭을 새로고침해 주세요.",
+  },
+  permission: {
+    icon: <FiAlertTriangle size={13} className="text-red-500 shrink-0" />,
+    tone: "bg-red-50 border-red-200 text-red-800",
+    title: "권한 확인 필요 · 자동 계산 저장 중단",
+    body: "이 작업을 수행할 권한이 없어 자동 복구를 멈췄습니다. 재로그인만으로는 해결되지 않을 수 있으니 관리자에게 권한 확인을 요청해 주세요.",
+  },
+};
+
+function FeeTaintBanner({ status }: { status: "recovering" | "auth" | "permission" }) {
+  const { icon, tone, title, body } = FEE_TAINT_BANNER[status];
+  return (
+    <div className={`flex items-center gap-2 px-4 py-2.5 border rounded-xl ${tone}`}>
+      {icon}
+      <p className="text-xs">
+        <span className="font-medium">{title}</span>
+        {` — ${body}`}
+      </p>
+    </div>
+  );
+}
+
 // ─── Tab 2: 수수료 관리 ──────────────────────────────────────
 function FeeManagementTab({ projectId }: { projectId: string }) {
-  const { projects, termFees, termFeeCalcs, taxInvoices, receivables, unclaimedFees, projectMembers } = useStore();
+  const { projects, termFees, termFeeCalcs, taxInvoices, receivables, unclaimedFees, projectMembers, fresh, taintedFeeProjects } = useStore();
   const canRecalc = useCanWrite('fees');
+  const feeDataFresh = isFeeRecalcDataFresh(fresh);
   // 연차 삭제 — 확정(청구완료)·수동조정된 연차는 골라도 실제로는 안 지워지도록 store에서도 한 번 더
   // 막지만, 여기서도 애초에 "초안" 연차만 체크할 수 있게 해서 실수를 줄인다.
   const [selectedTermKeys, setSelectedTermKeys] = useState<Set<string>>(new Set());
@@ -4553,15 +4592,29 @@ function FeeManagementTab({ projectId }: { projectId: string }) {
 
   const project = projects.find((p) => p.id === projectId) ?? null;
   const members = projectMembers.filter((m) => m.projectId === projectId);
+  // 이 과제의 수정 저장이 실패한 뒤 서버 값 복원까지 실패해, 로컬 값이 서버와 맞는지 확실하지 않은 상태 —
+  // 복원에 성공할 때까지 자동 재계산 저장도 함께 보류된다(lib/store.ts taintFeeProject). 조용히 배경에서
+  // 재시도만 하면 사용자는 "돈을 수정했는데 왜 안 바뀌지" 원래 증상과 똑같이 느끼므로, 지속되는 배너로 알린다.
+  // "recovering"은 재시도가 실제로 진행 중이지만, 401/403(auth/permission)은 store.ts가 자동 재시도를
+  // 이미 멈춘 상태다 — 배너도 회전 아이콘을 멈추고 문구를 구분해야, 사용자가 "그냥 기다리면 되나 보다" 하고
+  // 실제로는 멈춰버린 자동 복구를 계속 기다리는 일이 없다.
+  const feeTaintStatus = project ? taintedFeeProjects[project.projectNumber] : undefined;
 
   // 참여기관·정산구분·등급·사업비 등 수수료에 영향을 주는 항목이 바뀌면 updateProjectMember/
   // addProjectMember가 이미 자동으로 autoGenerateTermFees를 호출한다("수수료 재계산" 버튼 없이도
   // 항상 자동 반영됨). 다만 시딩된 데이터처럼 그 경로를 거치지 않은 과제는 탭을 열 때 한 번
   // 맞춰줘야 누락된 연차가 바로 보인다 — 그래서 탭 진입 시에도 한 번 더 실행해둔다.
+  //
+  // 서버에서 방금 받은 값(feeDataFresh)이 준비된 뒤에만 실행한다. ?tab=fees 상태로 새로고침하면 이
+  // 탭이 곧바로 마운트되는데, 그 시점엔 lib/store.ts가 sessionStorage 스냅샷으로 복원한 (서버와 다를 수
+  // 있는) 값만 들고 있다. 그 위에서 재계산하면 ① 담당자가 직접 수정한 금액(manualOverride)이 스냅샷에
+  // 없을 때 계산값으로 덮어쓴 결과가 sync-fees로 서버에 저장되고, ② termFees 참조가 바뀌어 곧 도착하는
+  // 서버 응답이 hydrate의 "그 사이 수정이 있었다" 가드에 걸려 통째로 버려진다 — 수정한 수수료·미청구
+  // 수수료가 새로고침할 때마다 사라졌다 나타나는 증상이 이 경로로 생길 수 있다.
   useEffect(() => {
-    if (!projectId || !canRecalc) return;
+    if (!projectId || !canRecalc || !feeDataFresh) return;
     autoGenerateTermFees(projectId);
-  }, [projectId, canRecalc]);
+  }, [projectId, canRecalc, feeDataFresh]);
 
   // useMemo must be called before any conditional return
   const termGroups = useMemo<TermGroup[]>(() => {
@@ -4649,6 +4702,7 @@ function FeeManagementTab({ projectId }: { projectId: string }) {
 
   return (
     <div className="space-y-3">
+      {feeTaintStatus && <FeeTaintBanner status={feeTaintStatus} />}
       {canRecalc && selectedTermKeys.size > 0 && (
         <div className="flex items-center justify-between px-4 py-2.5 bg-red-50 border border-red-200 rounded-xl">
           <p className="text-xs text-red-700">{selectedTermKeys.size}개 연차 선택됨 — 초안 상태의 연차만 삭제할 수 있습니다</p>

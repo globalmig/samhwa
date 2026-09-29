@@ -28,6 +28,16 @@ function loadStore() {
       if (patch) _state = { ..._state, ...patch };
       return { state: _state, batchDepth: _batchDepth, recalcDepth: _bulkRecalcSuspendDepth, pending: _pendingSyncCount };
     }
+    // 예약된 재시도 타이머(연차수수료 슬롯 재조회 + 태인트 복원 재시도)를 전부 취소한다 — 정리 이유는
+    // tests/fee-write-safety.test.cjs의 같은 이름 함수 주석 참고.
+    export function resetPendingFeeRetriesForTest() {
+      for (const timer of Object.values(_feeSlotRetryTimer)) clearTimeout(timer);
+      for (const key of Object.keys(_feeSlotRetryTimer)) delete _feeSlotRetryTimer[key];
+      for (const timer of _taintRetryTimer.values()) clearTimeout(timer);
+      _taintRetryTimer.clear();
+      _taintedFeeProjects.clear();
+      _taintRetryAttempt.clear();
+    }
   `);
 }
 
@@ -40,13 +50,35 @@ async function until(predicate) {
   assert.fail("Expected request/state did not arrive");
 }
 
+// 매 테스트가 만든 요청은 전부 응답을 받아야 한다 — 응답 없이 테스트가 끝나면 그 요청을 기다리던 저장
+// 체인의 실제 120초 타임아웃 타이머(lib/store.ts FEE_WRITE_TIMEOUT_MS)가 프로세스 종료를 막아, 관련 없는
+// 실패와 뒤섞여 원인을 알아보기 어려운 채로 전체 테스트 실행이 몇 분씩 멈춘다(실제로 겪음 — updateProject가
+// agencyId 변경 시 자동으로 거는 수수료 재계산의 sync-fees 요청을 응답하지 않고 끝나는 테스트가 있었다).
+// t.after에서 남은 요청을 실패 응답으로 드레인해 타이머를 흘려보내고, 그런 요청이 있었다는 사실 자체는
+// 테스트 실패로 드러낸다.
 function controlledNetwork(t) {
   const requests = [];
   t.mock.method(globalThis, "fetch", (url, init) => new Promise((resolve) => {
-    requests.push({ url, method: init?.method, body: init?.body ? JSON.parse(init.body) : undefined,
-      respond: (body) => resolve({ json: async () => body }) });
+    const entry = {
+      url, method: init?.method, body: init?.body ? JSON.parse(init.body) : undefined, responded: false,
+      respond(body) { this.responded = true; resolve({ json: async () => body }); },
+    };
+    requests.push(entry);
   }));
+  t.after(() => {
+    const unresolved = requests.filter((r) => !r.responded);
+    for (const r of unresolved) r.respond({ ok: false, error: "test left this request unanswered" });
+    assert.equal(unresolved.length, 0,
+      `${unresolved.length}건의 요청이 응답 없이 테스트가 끝났습니다: ${unresolved.map((r) => `${r.method ?? "GET"} ${r.url}`).join(", ")}`);
+  });
   return requests;
+}
+
+// controlledNetwork의 드레인과는 별개로, 태인트 재시도 등 "복원 성공할 때까지 포기하지 않는" 예약 타이머
+// 자체를 취소한다 — store 인스턴스를 만든 직후 항상 등록한다.
+function withRetryCleanup(t, store) {
+  t.after(() => store.resetPendingFeeRetriesForTest());
+  return store;
 }
 
 function seed(store, overrides = {}) {
@@ -64,14 +96,17 @@ function seed(store, overrides = {}) {
     cashBudget: 100000000, inKindBudget: 0,
     annualBudgets: [{ termNumber: 1, termYear: 2026, cashBudget: 100000000, inKindBudget: 0, auditFirm: "Other firm" }],
   };
-  store.inspectForTest({ projects: [project], projectMembers: [member], feePolicies: [policy], termFees: [], termFeeCalcs: [] });
+  // seed가 흉내 내는 건 "서버에서 방금 받아온 상태"다 — 수수료 재계산은 입력 컬렉션이 서버 응답으로 갱신된(fresh)
+  // 뒤에만 돌기 때문에, 여기서 그렇게 표시하지 않으면 autoGenerateTermFees가 보류돼 요청이 나가지 않는다.
+  const fresh = Object.fromEntries(store.FEE_RECALC_SLOTS.map((slot) => [slot, true]));
+  store.inspectForTest({ projects: [project], projectMembers: [member], feePolicies: [policy], termFees: [], termFeeCalcs: [], fresh });
   return { project, member };
 }
 
 test("late server failures are counted until the batch finishes", async (t) => {
   t.mock.method(console, "error", () => {});
   const requests = controlledNetwork(t);
-  const store = loadStore();
+  const store = withRetryCleanup(t, loadStore());
   const { project } = seed(store);
   store.beginSyncBatch();
   store.addProject({ ...project, projectNumber: "NEW-P" });
@@ -85,7 +120,7 @@ for (const patchSucceeds of [true, false]) {
   test(`other-firm update waits for the real fee ID and ${patchSucceeds ? "persists" : "reports failure"}`, async (t) => {
     t.mock.method(console, "error", () => {});
     const requests = controlledNetwork(t);
-    const store = loadStore();
+    const store = withRetryCleanup(t, loadStore());
     const { project } = seed(store);
     let finished = false;
     const run = store.runBulkSyncBatch(async () => {
@@ -115,7 +150,7 @@ for (const patchSucceeds of [true, false]) {
 
 test("new projects and their follow-up PATCH finish before recalculation and issue creation", async (t) => {
   const requests = controlledNetwork(t);
-  const store = loadStore();
+  const store = withRetryCleanup(t, loadStore());
   const { project, member } = seed(store);
   store.inspectForTest({ projects: [], projectMembers: [] });
   let tempId;
@@ -154,7 +189,7 @@ test("new projects and their follow-up PATCH finish before recalculation and iss
 
 test("an exception keeps the batch active until remaining fee persistence is finished", async (t) => {
   const requests = controlledNetwork(t);
-  const store = loadStore();
+  const store = withRetryCleanup(t, loadStore());
   const { project } = seed(store);
   const failure = new Error("injected import failure");
   let finished = false;
@@ -175,7 +210,7 @@ test("an exception keeps the batch active until remaining fee persistence is fin
 test("one invalid project does not discard other pending recalculations or leak the batch", async (t) => {
   t.mock.method(console, "error", () => {});
   const requests = controlledNetwork(t);
-  const store = loadStore();
+  const store = withRetryCleanup(t, loadStore());
   const { project, member } = seed(store);
   store.inspectForTest({ projects: [{ ...project, id: "invalid", startDate: "invalid-date" }, project],
     projectMembers: [{ ...member, projectId: "invalid" }, member] });
@@ -326,34 +361,53 @@ test("concurrent business-number creation restarts the transaction and reuses th
   assert.equal(server.inspect().audit.length, 0);
 });
 
-test("addProject corrects an autonomy-track project of an agency whose policy has none", (t) => {
+test("addProject corrects an autonomy-track project of an agency whose policy has none", async (t) => {
   const requests = controlledNetwork(t);
-  const store = loadStore();
+  const store = withRetryCleanup(t, loadStore());
   const { project } = seed(store);
   store.inspectForTest({ feePolicies });
   const created = store.addProject({ ...project, projectNumber: "IITP-P", agencyId: "fa-003", projectType: "AUTONOMY_TRACK" });
   assert.equal(created.projectType, "GENERAL");
   assert.equal(requests[0].body.projectType, "GENERAL");
+  // addProject의 후속 처리(연차수수료 자동 산정 등)는 이 POST 응답을 받아야 시작된다 — 응답하지 않고 테스트를
+  // 끝내면 이 요청이 응답 없이 남는다.
+  requests[0].respond({ ok: true, project: { ...requests[0].body, id: "saved-project" } });
+  await until(() => requests.some((r) => r.url.endsWith("/sync-fees")));
+  const feeRequest = requests.find((r) => r.url.endsWith("/sync-fees"));
+  feeRequest.respond({ ok: true, termFees: feeRequest.body.termFees.map((f) => ({ ...f, id: "saved-fee" })) });
+  await store.waitForSyncIdle();
 });
 
-test("changing the agency away from IITP resets ICT_FUND and sends the correction to the server", (t) => {
+test("changing the agency away from IITP resets ICT_FUND and sends the correction to the server", async (t) => {
   const requests = controlledNetwork(t);
-  const store = loadStore();
+  const store = withRetryCleanup(t, loadStore());
   const { project } = seed(store, { agencyId: "fa-003", programType: "ICT_FUND" });
   store.inspectForTest({ feePolicies });
   store.updateProject(project.id, { agencyId: "fa-001" });
   assert.equal(store.inspectForTest().state.projects[0].programType, "GENERAL");
   const patch = requests.find((r) => r.method === "PATCH");
   assert.equal(patch.body.programType, "GENERAL");
+  patch.respond({ ok: true, project: { ...project, ...patch.body } });
+  // agencyId는 PROJECT_FEE_AFFECTING_FIELDS라 updateProject가 자동으로 연차수수료 재계산(sync-fees)도
+  // 함께 건다 — 이 요청은 위 assert들이 실행되는 시점엔 아직 만들어지지 않았을 수 있다(체인에 올려 보내는
+  // 네트워크 호출이라 마이크로태스크 한 틱 뒤에야 fetch가 실제로 불린다) — 그래서 동기 검증 뒤에 따로
+  // 기다렸다가 응답한다. 응답하지 않고 테스트를 끝내면 이 요청이 실제 120초 타임아웃(FEE_WRITE_TIMEOUT_MS)을
+  // 가진 채 응답 없이 남아, 이 테스트는 빨리 끝난 것처럼 보여도 프로세스 자체는 그만큼 더 떠 있게 된다.
+  await until(() => requests.some((r) => r.url.endsWith("/sync-fees")));
+  const feeRequest = requests.find((r) => r.url.endsWith("/sync-fees"));
+  feeRequest.respond({ ok: true, termFees: feeRequest.body.termFees.map((f) => ({ ...f, id: "saved-fee" })) });
+  await store.waitForSyncIdle();
 });
 
-test("an unrelated update does not touch the program fields", (t) => {
+test("an unrelated update does not touch the program fields", async (t) => {
   const requests = controlledNetwork(t);
-  const store = loadStore();
+  const store = withRetryCleanup(t, loadStore());
   const { project } = seed(store, { agencyId: "fa-003", projectType: "AUTONOMY_TRACK" });
   store.inspectForTest({ feePolicies });
   store.updateProject(project.id, { projectName: "Renamed" });
   assert.equal(store.inspectForTest().state.projects[0].projectType, "AUTONOMY_TRACK");
   const patch = requests.find((r) => r.method === "PATCH");
   assert.equal("projectType" in patch.body, false);
+  patch.respond({ ok: true, project: { ...project, ...patch.body } }); // projectName은 재계산 대상 필드가 아니라 sync-fees는 따로 나가지 않는다
+  await store.waitForSyncIdle();
 });

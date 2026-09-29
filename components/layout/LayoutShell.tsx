@@ -3,6 +3,7 @@
 import { usePathname } from "next/navigation";
 import Sidebar from "./Sidebar";
 import Header from "./Header";
+import SyncNoticeToast from "./SyncNoticeToast";
 import { PUBLIC_AUTH_PATHS } from "@/lib/permissions";
 
 export default function LayoutShell({ children }: { children: React.ReactNode }) {
@@ -21,6 +22,7 @@ export default function LayoutShell({ children }: { children: React.ReactNode })
           {children}
         </main>
       </div>
+      <SyncNoticeToast />
     </div>
   );
 }

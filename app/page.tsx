@@ -19,7 +19,15 @@ const AGENCY_COLORS = ["bg-blue-500", "bg-orange-400", "bg-violet-500", "bg-emer
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { receivables, projectIssues, termFees, taxInvoices, projects, fundingAgencies } = useStore();
+  const { receivables, projectIssues, termFees, taxInvoices, projects, fundingAgencies, loaded } = useStore();
+
+  // 이 화면의 통계가 의존하는 6개 컬렉션이 하나라도 아직 서버 응답을 받은 적 없으면(loaded에 키가
+  // 없으면) 진짜 0건인지 아직 안 받아온 것뿐인지 구분할 수 없다 — 그 상태에서 아래 집계를 그대로
+  // 돌리면 전부 0/없음으로 잠깐 보였다가 데이터가 도착하는 순간 실제 값으로 튀는 문제가 있었다
+  // (배포 직후 콜드스타트처럼 응답이 느릴 때 특히 눈에 띔). 하나라도 미완료면 집계 대신 로딩
+  // 표시를 보여준다.
+  const dashboardLoading =
+    !loaded.fundingAgencies || !loaded.projects || !loaded.termFees || !loaded.receivables || !loaded.taxInvoices || !loaded.projectIssues;
 
   // 연도별 대시보드 — 전담기관배정일(agencyAssignedAt) 기준. 등록일(registeredAt)은 삼화 내부에
   // 과제를 등록한 날짜일 뿐, 전담기관이 과제를 배정한 시점과는 별개라 연도별 집계 기준으로 쓰면 안 된다.
@@ -263,6 +271,16 @@ export default function DashboardPage() {
         </p>
       )}
 
+      {dashboardLoading ? (
+        <div className="bg-white rounded-xl border border-slate-200 py-16 flex flex-col items-center justify-center gap-3">
+          <svg className="w-6 h-6 animate-spin text-blue-600" viewBox="0 0 24 24" fill="none">
+            <circle className="opacity-20" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+            <path d="M22 12a10 10 0 0 0-10-10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+          </svg>
+          <p className="text-xs text-slate-400">데이터를 불러오는 중입니다...</p>
+        </div>
+      ) : (
+      <>
       {/* 1구역 — 긴급 처리 항목 */}
       <section>
         <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">긴급 처리</p>
@@ -451,6 +469,8 @@ export default function DashboardPage() {
           </table>
         </div>
       </section>
+      </>
+      )}
     </div>
   );
 }
