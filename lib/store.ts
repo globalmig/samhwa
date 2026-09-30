@@ -259,21 +259,81 @@ export function getStoreState(): StoreState {
 const STORE_CACHE_KEY = "samhwa-store-cache-v1";
 let _persistTimer: ReturnType<typeof setTimeout> | null = null;
 
+// 스냅샷에 넣지도, 스냅샷에서 복원하지도 않는 슬롯. fresh·taintedFeeProjects는 "이번 로드에서 실제로 겪은
+// 것"만 의미가 있어서(위 StoreState 주석). auditLog는 서버에서 최대 1000건을 건마다 변경 전/후 값
+// (changedFields)째로 받아 스냅샷에서 가장 큰 축에 속하는 데다, record()의 로컬 낙관적 기록("audit-..." id)까지
+// 함께 복원되면 hydrateAuditLog()가 id로 합칠 때 서버 정본과 짝이 맞지 않아 같은 변경이 두 번씩 보였다 —
+// 변경이력은 새로고침마다 서버에서 새로 받는다.
+const STORE_CACHE_EXCLUDED: ReadonlySet<string> = new Set<keyof StoreState>(["fresh", "taintedFeeProjects", "auditLog"]);
+
+function readStoreCache(storage: Pick<Storage, "getItem">): Partial<StoreState> | null {
+  const raw = storage.getItem(STORE_CACHE_KEY);
+  if (!raw) return null;
+  const cached = JSON.parse(raw) as Record<string, unknown>;
+  // 제외 슬롯이 이 규칙 이전에 저장된 스냅샷에 섞여 있어도 무시하고 초기값으로 시작한다.
+  for (const key of STORE_CACHE_EXCLUDED) delete cached[key];
+  return cached as Partial<StoreState>;
+}
+
 function restoreFromCache(): void {
   if (typeof window === "undefined") return;
   try {
-    const raw = sessionStorage.getItem(STORE_CACHE_KEY);
-    if (!raw) return;
-    const cached = JSON.parse(raw) as Partial<StoreState>;
-    // fresh·taintedFeeProjects는 저장하지 않지만(아래 schedulePersist), 이전 버전 스냅샷 등에 섞여
-    // 있어도 이번 로드의 서버 응답을 기다리도록(fresh) / 아직 겪지 않은 문제로 배너가 뜨지 않도록
-    // (taintedFeeProjects) 항상 비운 채로 시작한다.
-    _state = { ..._state, ...cached, fresh: {}, taintedFeeProjects: {} };
+    const cached = readStoreCache(sessionStorage);
+    if (cached) _state = { ..._state, ...cached };
   } catch (err) {
     console.warn("store 캐시 복원 실패 — 무시하고 서버에서 새로 받아옵니다.", err);
   }
 }
 restoreFromCache();
+
+function isQuotaExceeded(err: unknown): boolean {
+  return err instanceof DOMException && (err.name === "QuotaExceededError" || err.name === "NS_ERROR_DOM_QUOTA_REACHED");
+}
+
+// 한 번 용량 초과로 거절당한 스냅샷 길이 — 이 이상이면 setItem을 시도하지 않고 바로 슬롯을 덜어낸다(notify마다
+// 몇 MB짜리 문자열로 실패할 게 뻔한 쓰기를 반복하지 않도록).
+let _cacheRejectedLength = Infinity;
+
+// sessionStorage 용량(브라우저마다 대략 5MB)을 넘으면 가장 큰 슬롯부터 하나씩 빼고 다시 시도한다. 빠진 슬롯은
+// 새로고침 때 hydrate가 받아올 때까지 로딩 상태로 보일 뿐이고(loaded 표시도 함께 빼므로 "0건"으로 오해되지
+// 않는다), 나머지 슬롯의 빠른 첫 화면은 그대로 살린다. 예전처럼 통째로 실패하면 이전에 저장된 (점점 더
+// 오래된) 스냅샷이 그대로 남아 새로고침마다 복원됐다. 빼낸 슬롯 이름을 돌려준다.
+function persistStoreCache(storage: Pick<Storage, "setItem" | "removeItem">, state: StoreState): string[] {
+  const parts = new Map<string, string>();
+  for (const [key, value] of Object.entries(state)) {
+    if (key === "loaded" || STORE_CACHE_EXCLUDED.has(key)) continue;
+    parts.set(key, JSON.stringify(value));
+  }
+  const dropped: string[] = [];
+  for (;;) {
+    const loaded = { ...state.loaded };
+    for (const key of dropped) delete loaded[key];
+    const body = [...parts].map(([key, json]) => `${JSON.stringify(key)}:${json}`);
+    body.push(`"loaded":${JSON.stringify(loaded)}`);
+    const json = `{${body.join(",")}}`;
+    if (json.length < _cacheRejectedLength) {
+      try {
+        storage.setItem(STORE_CACHE_KEY, json);
+        return dropped;
+      } catch (err) {
+        if (!isQuotaExceeded(err)) throw err;
+        _cacheRejectedLength = json.length;
+      }
+    }
+    let largest: string | undefined;
+    for (const [key, part] of parts) if (largest === undefined || part.length > parts.get(largest)!.length) largest = key;
+    if (largest === undefined) {
+      // 다 빼도 안 들어간다(다른 키가 용량을 차지) — 예전 스냅샷을 복원하지 않게 지운다.
+      storage.removeItem(STORE_CACHE_KEY);
+      return dropped;
+    }
+    parts.delete(largest);
+    dropped.push(largest);
+  }
+}
+
+// 같은 경고를 notify마다(디바운스 500ms) 반복해서 찍지 않도록 마지막에 찍은 내용을 기억한다.
+let _lastCacheWarning = "";
 
 // notify()가 워낙 자주 불려서(최초 로딩 중 hydrate*()들이 연달아 끝날 때마다, 이후엔 사용자
 // 조작마다) 매번 그 자리에서 바로 저장하면 큰 배열을 가진 슬롯이 여러 번 연속으로 바뀔 때
@@ -283,14 +343,19 @@ function schedulePersist(): void {
   if (_persistTimer !== null) clearTimeout(_persistTimer);
   _persistTimer = setTimeout(() => {
     _persistTimer = null;
+    let warning = "";
+    let error: unknown;
     try {
-      sessionStorage.setItem(STORE_CACHE_KEY, JSON.stringify({ ..._state, fresh: {}, taintedFeeProjects: {} }));
+      const dropped = persistStoreCache(sessionStorage, _state);
+      if (dropped.length > 0) warning = `store 캐시 용량 초과 — ${dropped.join(", ")} 슬롯은 캐시에서 빼고 저장했습니다(새로고침 시 서버에서 받아옵니다).`;
     } catch (err) {
-      // 용량 초과(사용자가 세션 중 데이터를 아주 많이 쌓은 경우) 등으로 실패해도 캐싱만 조용히
-      // 포기한다 — 다음 새로고침이 hydrate로 전부 다시 받아오는, 지금까지의 기존 동작으로 돌아갈 뿐
+      // 저장소 자체를 못 쓰는 경우 등 — 캐싱만 포기한다. 다음 새로고침이 hydrate로 전부 다시 받아올 뿐
       // 화면 동작 자체엔 영향 없다.
-      console.warn("store 캐시 저장 실패 — 다음 새로고침에서 서버에서 다시 받아옵니다.", err);
+      warning = "store 캐시 저장 실패 — 다음 새로고침에서 서버에서 다시 받아옵니다.";
+      error = err;
     }
+    if (warning && warning !== _lastCacheWarning) console.warn(warning, ...(error === undefined ? [] : [error]));
+    _lastCacheWarning = warning;
   }, 500);
 }
 

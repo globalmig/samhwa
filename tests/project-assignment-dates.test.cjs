@@ -71,6 +71,16 @@ for (const [field, historyField, resolve] of [
     const after = edit(project, 2, "2026-05-01");
     assert.deepEqual(buildAssignmentDateUpdate(after, field, 2, "2026-05-01", [1, 2, 3]), {});
   });
+
+  // TermFee는 연차당 한 행이 아니라 참여기관마다 한 행이라(project_term_institution 기준),
+  // 실제 화면(app/projects/[id]/page.tsx)이 넘기는 existingTermNumbers는 참여기관이 여러 곳인
+  // 과제에서 같은 연차 번호가 여러 번 반복된다 — 백필이 그 중복 횟수만큼 같은 연차 항목을 또
+  // 만들어내면 안 된다.
+  test(`${field}: 참여기관이 여러 곳이라 연차 번호가 중복돼 들어와도 연차당 항목은 하나만 생긴다`, () => {
+    const after = persisted(initial(), buildAssignmentDateUpdate(initial(), field, 2, "2026-09-30", [1, 1, 1, 2, 2, 2, 3, 3, 3]));
+    assert.deepEqual(after[historyField].filter((h) => h.termNumber === 1), [{ termNumber: 1, [field]: "2025-03-01" }]);
+    assert.deepEqual(after[historyField].filter((h) => h.termNumber === 3), [{ termNumber: 3, [field]: "2026-03-01" }]);
+  });
 }
 
 function projectRow(extra = {}) {

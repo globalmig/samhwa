@@ -154,7 +154,11 @@ export function backfillExistingTermOverrides<O extends { termNumber: number }>(
   const withoutTarget = (existingOverrides ?? []).filter((o) => o.termNumber !== targetTerm);
   const covered = new Set(withoutTarget.map((o) => o.termNumber));
   const backfilled: O[] = [];
-  for (const t of existingTermNumbers) {
+  // existingTermNumbers는 TermFee 기준으로 만들어지는 경우가 많은데, TermFee는 연차당 한 행이
+  // 아니라 참여기관마다 한 행이라(project_term_institution 기준) 참여기관이 여러 곳인 과제는 같은
+  // 연차 번호가 여러 번 들어온다 — 호출부에서 매번 Set으로 정리해 넘기길 기대하는 대신 여기서
+  // 한 번에 중복을 제거한다(안 그러면 같은 연차에 동일한 백필 항목이 참여기관 수만큼 중복 저장된다).
+  for (const t of new Set(existingTermNumbers)) {
     if (t === targetTerm) continue;
     if (!covered.has(t)) backfilled.push(makeOverride(t));
   }
