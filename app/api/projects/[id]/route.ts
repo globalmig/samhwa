@@ -51,6 +51,7 @@ export async function PATCH(request: Request, { params }: Params) {
   }
 
   const extraKeys = [
+    "registeredAt",
     "firstStartDate", "finalEndDate", "stageStartDate", "stageEndDate", "annualFinancials", "usageReportDeadline",
     "agencyAssignedAt", "agencyAssignedAtHistory", "internalAssignedAt", "internalAssignedAtHistory", "projectCategory", "researchLead", "researchLeadEmail",
     "researchLeadOverrides", "projectCode", "termCodes", "projectDivision", "billingType", "agreementType",

@@ -10,6 +10,7 @@ import {
   addReceivable,
   updateReceivable,
   updateProject,
+  saveFeeInfo,
   updateProjectMember,
   getProjectMembers,
   updateTermFee,
@@ -34,7 +35,6 @@ import {
   type FeePolicy,
   type TaxInvoice,
   type Project,
-  type ProjectMember,
   type ProjectIssue,
   type AgencyNoticeTemplateEntry,
   type SystemUser,
@@ -55,8 +55,9 @@ import { buildNoticeEmailHtml } from "@/lib/notice-email-html";
 import { applyManagerContactRows } from "@/lib/notice-contacts";
 import { useCanWrite } from "@/lib/permissions";
 import { getCurrentUser } from "@/lib/auth";
+import type { FeeInfoChanges } from "@/lib/fee-info-edit";
 import { isOverdueByRule } from "@/lib/notifications";
-import { agencyHasIctFundPolicy, supportsAutonomyTrack, sanitizeProjectProgramFields, resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveMemberLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveAgencyAssignedAtForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, backfillExistingTermOverrides, MEMBER_ROLE_LABEL } from "@/lib/fee-calculator";
+import { agencyHasIctFundPolicy, supportsAutonomyTrack, sanitizeProjectProgramFields, resolveAutoDetectedAgencyId, isSettlementTerm, resolveMemberRecipientForTerm, resolveResearchLeadForTerm, resolveMemberLeadForTerm, resolveAssignedManagerForTerm, resolveAssignedManagerPrimaryForTerm, resolveAgencyAssignedAtForTerm, resolveProjectDivision, resolveProjectCodeForTerm, hasStageTermDateMismatch, buildNoticeFeeRows, MEMBER_ROLE_LABEL } from "@/lib/fee-calculator";
 
 // 여러 이메일 문자열(각각 콤마 구분일 수 있음)을 하나로 합치고 중복을 제거한다 — 정산절차 안내
 // 공문은 책임자(researchLeadEmail)+실무자(recipientEmail) 두 필드를 합쳐서 기본 수신자로 쓴다.
@@ -206,6 +207,7 @@ type InfoEditTarget = {
   assignedManager: string;
   assignedManagerPrimary: string;
   registeredAt:   string;
+  agencyAssignedAt: string;
   auditFirm:      string;
   // 분리행(RDA2 등 발송대상=주관+참여기관 모두)이면 책임자이메일을 과제 전체 스칼라가 아니라
   // leadMemberId 참여기관의 leadOverrides로 저장한다 — handleSave 참고.
@@ -766,8 +768,8 @@ function CollectionModal({ target, onClose }: { target: CollectionTarget; onClos
 }
 
 // ── InfoEditModal (서류요청·서류회신·실무자·과제담당자 수정) ────
-function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: () => void }) {
-  const { projectMembers, projects, termFees, users } = useStore();
+function InfoEditModal({ target, onClose, onSavingChange }: { target: InfoEditTarget; onClose: () => void; onSavingChange: (saving: boolean) => void }) {
+  const { projects, users } = useStore();
   const selectableUsers = users.filter((u) => u.status === "ACTIVE");
   const currentProject = projects.find((p) => p.id === target.projectId);
   const [docRequestDate, setDocRequestDate]   = useState(target.docRequestDate);
@@ -779,160 +781,55 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
   const [assignedManagerPrimary, setAssignedManagerPrimary] = useState(target.assignedManagerPrimary);
   // 다른 화면(새 과제 등록, 과제 상세)과 동일하게 [권한관리]에 등록된 계정만 골라 지정할 수
   // 있게 한다 — 자유 텍스트 입력은 오탈자로 공문 발송 시 연락처·이메일 자동 연동이 깨지기 쉬웠다.
-  const [assignedManagerUserId, setAssignedManagerUserId] = useState(currentProject?.assignedManagerUserId ?? "");
-  const [assignedManagerPrimaryUserId, setAssignedManagerPrimaryUserId] = useState(currentProject?.assignedManagerPrimaryUserId ?? "");
+  const [assignedManagerUserId, setAssignedManagerUserId] = useState(
+    currentProject?.assignedManagerHistory?.find((h) => h.termNumber === target.termNumber)?.assignedManagerUserId
+      ?? (target.assignedManager === currentProject?.assignedManager ? currentProject?.assignedManagerUserId ?? "" : ""));
+  const [assignedManagerPrimaryUserId, setAssignedManagerPrimaryUserId] = useState(
+    currentProject?.assignedManagerPrimaryHistory?.find((h) => h.termNumber === target.termNumber)?.assignedManagerPrimaryUserId
+      ?? (target.assignedManagerPrimary === currentProject?.assignedManagerPrimary ? currentProject?.assignedManagerPrimaryUserId ?? "" : ""));
   const [managerPicker, setManagerPicker] = useState<"primary" | "deputy" | null>(null);
+  const managerSelection = useRef<{ primary?: string; deputy?: string }>({});
   const [registeredAt, setRegisteredAt]       = useState(target.registeredAt);
+  const [agencyAssignedAt, setAgencyAssignedAt] = useState(target.agencyAssignedAt);
   const [auditFirm, setAuditFirm]             = useState(target.auditFirm);
 
-  // 연차별로 값이 다를 수 있는(연차별 이력이 있는) 필드는 그 연차 하나만의 값으로 upsert한다 —
-  // 값이 비어있으면(기본값과 같아졌으면) 그 연차의 기록 자체를 지운다.
-  function upsertTermHistory<T extends { termNumber: number }>(
-    history: T[] | undefined,
-    value: string,
-    makeEntry: (termNumber: number) => T,
-  ): T[] | undefined {
-    const others = (history ?? []).filter((h) => h.termNumber !== target.termNumber);
-    const next = value ? [...others, makeEntry(target.termNumber)] : others;
-    return next.length > 0 ? next.sort((a, b) => a.termNumber - b.termNumber) : undefined;
-  }
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const savingRef = useRef(false);
 
-  function handleSave() {
-    const project = projects.find((p) => p.id === target.projectId);
-    // 분리행(RDA2 등 발송대상=주관+참여기관 모두)이면 책임자이메일을 과제 전체 스칼라가 아니라 그
-    // 참여기관의 leadOverrides에 저장한다 — 그래야 기관마다 독립적으로 값을 가진다(안 그러면 한
-    // 기관 수정이 같은 연차의 다른 기관 값을 덮어써 "수정이 안 되는" 것처럼 보인다). 아래쪽 실무자
-    // (recipientOverrides) 저장과 같은 member를 가리키므로 미리 한 번만 찾아 재사용한다.
-    const leadMember = target.leadMemberId ? projectMembers.find((m) => m.id === target.leadMemberId) : undefined;
-    let leadMemberUpdates: Partial<ProjectMember> | null = null;
-    if (project) {
-      const isCurrentTerm = target.termNumber === project.currentTerm;
-
-      // 책임자이메일 — 과제 상세 페이지의 동일 필드 편집과 같은 규칙을 따른다: 진행 연차 행에서
-      // 고치면 기본값 자체가 바뀌고(이미 청구서가 나간 다른 연차는 그 전 값으로 자동 고정된다),
-      // 과거/다른 연차 행에서 고치면 그 연차만의 오버라이드로 저장되고 기본값은 그대로 둔다. 예전엔
-      // 이 모달에서 고치면 어느 연차 행에서 열었든 무조건 기본값(진행 연차 값)을 덮어써서, 과거 연차
-      // 행에서 고쳤는데 정작 진행 연차 값이 바뀌어버리는(그리고 정작 그 과거 연차엔 반영 안 되는) 문제가 있었다.
-      let nextResearchLeadEmail = project.researchLeadEmail;
-      let researchLeadOverrides = project.researchLeadOverrides;
-      // isSplitRow인데 leadMember를 못 찾은 경우(참여기관 레코드가 없거나 stale한 경우)는 과제 전체
-      // 공유 필드(project.researchLead(Email)Overrides)에 잘못 써버리면 안 된다 — 그러면 leadName/
-      // leadEmail이 없는 다른 참여기관들의 책임자 값(resolveMemberLeadForTerm의 폴백)까지 함께
-      // 바뀌어버린다. 실무자(recipientOverrides) 저장과 동일하게, 그냥 이 필드는 저장하지 않고
-      // 건너뛴다(아래 "!target.leadMemberId" 안내 문구가 이미 이 경우를 알려준다).
-      if (target.isSplitRow && !leadMember) {
-        // no-op: nextResearchLeadEmail/researchLeadOverrides는 기존 값 그대로 유지
-      } else if (target.isSplitRow && leadMember) {
-        // baseName/baseEmail은 "이 필드가 지금 아무 오버라이드도 없다면 보여줄 기본값"이어야 한다 —
-        // resolveMemberLeadForTerm과 동일하게 기관 자신의 값이 없으면 과제 기본값(researchLead(Email))
-        // 으로 폴백한다. 이 폴백 없이 leadMember.leadEmail만 보면(예: 한 번도 기관별 값을 넣은 적
-        // 없는 기관), researchLeadEmail 입력창엔 이미 과제 기본값이 채워져 열리는데 baseEmail은 ""라서
-        // 아무것도 안 고치고 저장만 눌러도 "바뀐 값"으로 오인해 기관에 불필요한 leadEmail을 새로 박아버린다.
-        const projectDefaultLead = resolveResearchLeadForTerm(project, target.termNumber);
-        const baseName = leadMember.leadName ?? projectDefaultLead.name;
-        const baseEmail = leadMember.leadEmail ?? projectDefaultLead.email;
-        const newEmail = researchLeadEmail || "";
-        let nextLeadEmail = leadMember.leadEmail;
-        let leadOverrides = leadMember.leadOverrides;
-        if (isCurrentTerm) {
-          if (newEmail !== baseEmail) {
-            leadOverrides = backfillExistingTermOverrides(
-              leadMember.leadOverrides,
-              termFees.filter((f) => f.projectNumber === project.projectNumber).map((f) => f.termNumber),
-              target.termNumber,
-              (termNumber) => ({ termNumber, name: baseName, email: baseEmail }),
-            );
-            nextLeadEmail = newEmail || undefined;
-          }
-        } else {
-          const nameForTerm = resolveMemberLeadForTerm(leadMember, project, target.termNumber, true).name;
-          const isDefault = newEmail === baseEmail && nameForTerm === baseName;
-          const others = (leadMember.leadOverrides ?? []).filter((o) => o.termNumber !== target.termNumber);
-          const next = isDefault
-            ? others
-            : [...others, { termNumber: target.termNumber, name: nameForTerm, email: newEmail }].sort((a, b) => a.termNumber - b.termNumber);
-          leadOverrides = next.length > 0 ? next : undefined;
-        }
-        leadMemberUpdates = { leadEmail: nextLeadEmail, leadOverrides };
-      } else {
-        const baseName = project.researchLead ?? "";
-        const baseEmail = project.researchLeadEmail ?? "";
-        const newEmail = researchLeadEmail || "";
-        if (isCurrentTerm) {
-          if (newEmail !== baseEmail) {
-            researchLeadOverrides = backfillExistingTermOverrides(
-              project.researchLeadOverrides,
-              termFees.filter((f) => f.projectNumber === project.projectNumber).map((f) => f.termNumber),
-              target.termNumber,
-              (termNumber) => ({ termNumber, name: baseName, email: baseEmail }),
-            );
-            nextResearchLeadEmail = newEmail || undefined;
-          }
-        } else {
-          const nameForTerm = resolveResearchLeadForTerm(project, target.termNumber).name;
-          const isDefault = newEmail === baseEmail && nameForTerm === baseName;
-          const others = (project.researchLeadOverrides ?? []).filter((o) => o.termNumber !== target.termNumber);
-          const next = isDefault
-            ? others
-            : [...others, { termNumber: target.termNumber, name: nameForTerm, email: newEmail }].sort((a, b) => a.termNumber - b.termNumber);
-          researchLeadOverrides = next.length > 0 ? next : undefined;
-        }
-      }
-      // 과제담당자(부)/(정)도 동일한 문제였다 — 연차별 이력(History)에 이 연차 값만 기록하고,
-      // 진행 연차 행에서 고친 경우에만 기본값(현재 진행 연차 값)도 함께 갱신한다.
-      const assignedManagerHistory = upsertTermHistory(project.assignedManagerHistory, assignedManager, (termNumber) => ({ termNumber, assignedManager }));
-      const assignedManagerPrimaryHistory = upsertTermHistory(project.assignedManagerPrimaryHistory, assignedManagerPrimary, (termNumber) => ({ termNumber, assignedManagerPrimary }));
-
-      updateProject(target.projectId, {
-        researchLeadEmail: nextResearchLeadEmail,
-        researchLeadOverrides,
-        assignedManagerHistory,
-        assignedManagerPrimaryHistory,
-        ...(isCurrentTerm ? {
-          assignedManager: assignedManager || undefined, assignedManagerPrimary: assignedManagerPrimary || undefined,
-          assignedManagerUserId: assignedManagerUserId || undefined, assignedManagerPrimaryUserId: assignedManagerPrimaryUserId || undefined,
-        } : {}),
-        registeredAt: registeredAt || undefined,
+  async function handleSave() {
+    if (savingRef.current) return;
+    const values = { docRequestDate, docReplyDate, recipientName, recipientEmail, researchLeadEmail,
+      assignedManager, assignedManagerPrimary, registeredAt, agencyAssignedAt, auditFirm };
+    const changes: FeeInfoChanges = {};
+    for (const key of Object.keys(values) as (keyof typeof values)[]) {
+      if (values[key] !== target[key]) changes[key] = values[key];
+    }
+    // 이름이 같아도 선택한 계정은 다를 수 있다.
+    if (managerSelection.current.deputy !== undefined) changes.assignedManager = assignedManager;
+    if (managerSelection.current.primary !== undefined) changes.assignedManagerPrimary = assignedManagerPrimary;
+    if (changes.assignedManager !== undefined) changes.assignedManagerUserId = assignedManagerUserId;
+    if (changes.assignedManagerPrimary !== undefined) changes.assignedManagerPrimaryUserId = assignedManagerPrimaryUserId;
+    savingRef.current = true;
+    setSaving(true);
+    onSavingChange(true);
+    setSaveError("");
+    try {
+      await saveFeeInfo(target.projectId, {
+        termNumber: target.termNumber, memberId: target.leadMemberId, feeId: target.docFeeId, changes,
       });
+      onClose();
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "정보를 저장하지 못했습니다. 다시 시도해주세요.");
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+      onSavingChange(false);
     }
-    if (target.docFeeId) {
-      // "" || undefined 로 비웠던 예전 코드는 JSON.stringify가 undefined 키를 통째로
-      // 빼버려 PATCH 바디에 그 필드가 아예 안 실리는 문제가 있었다 — 서버는 `key in body`로
-      // "값이 왔는지"를 판단하므로(app/api/term-fees/[id]/route.ts) 필드가 빠지면 기존 값이
-      // 그대로 남아 "삭제가 안 되는" 것처럼 보였다. 빈 문자열 그대로 보내야 삭제가 반영된다.
-      updateTermFee(target.docFeeId, {
-        docRequestDate,
-        docReplyDate,
-        auditFirm,
-      });
-    }
-    // 실무자는 과제 단위 기본값(contactName/contactEmail)이 아니라 이 연차(termNumber)에만 적용되는
-    // recipientOverrides로 저장한다 — 기본값을 직접 덮어쓰면 연차별로 다른 실무자를 쓰는 다른 연차들의
-    // 화면(연차별로 override가 없으면 기본값을 그대로 보여줌)까지 함께 바뀌어버린다.
-    const member = target.leadMemberId ? (leadMember ?? projectMembers.find((m) => m.id === target.leadMemberId)) : undefined;
-    if (member) {
-      const existing = member.recipientOverrides?.find((r) => r.termNumber === target.termNumber);
-      const others = (member.recipientOverrides ?? []).filter((r) => r.termNumber !== target.termNumber);
-      const isDefault =
-        recipientName === (member.contactName ?? "") &&
-        recipientEmail === (member.contactEmail ?? "") &&
-        !existing?.recipientPhone;
-      const next = isDefault
-        ? others
-        : [...others, {
-            termNumber: target.termNumber,
-            recipientName: recipientName || undefined,
-            recipientEmail: recipientEmail || undefined,
-            recipientPhone: existing?.recipientPhone,
-          }];
-      // leadMemberUpdates(책임자이메일 변경분, 분리행일 때만 채워짐)가 있으면 한 번의 호출로 같이 저장한다.
-      updateProjectMember(target.leadMemberId, { recipientOverrides: next.length > 0 ? next : undefined, ...leadMemberUpdates });
-    }
-    onClose();
   }
 
   return (
-    <div className="p-6 space-y-4">
+    <fieldset disabled={saving} className="p-6 space-y-4 min-w-0">
       <p className="text-xs text-slate-500 -mt-1">{target.projectName}</p>
 
       <div className="grid grid-cols-2 gap-4">
@@ -1025,15 +922,19 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
           title={managerPicker === "primary" ? "과제담당자(정) 선택" : "과제담당자(부) 선택"}
           users={selectableUsers}
           onSelect={(user) => {
-            if (managerPicker === "primary") { setAssignedManagerPrimary(user.name); setAssignedManagerPrimaryUserId(user.id); }
-            else { setAssignedManager(user.name); setAssignedManagerUserId(user.id); }
+            if (managerPicker === "primary") { managerSelection.current.primary = user.id; setAssignedManagerPrimary(user.name); setAssignedManagerPrimaryUserId(user.id); }
+            else { managerSelection.current.deputy = user.id; setAssignedManager(user.name); setAssignedManagerUserId(user.id); }
           }}
           onClose={() => setManagerPicker(null)}
         />
       )}
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-xs font-medium text-slate-600 mb-1">등록일 (배정일)</label>
+          <label className="block text-xs font-medium text-slate-600 mb-1">전담기관 배정일 · {target.termNumber}연차</label>
+          <DateInput value={agencyAssignedAt} onChange={setAgencyAssignedAt} className="w-full" />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">등록일</label>
           <DateInput value={registeredAt} onChange={setRegisteredAt} className="w-full" />
         </div>
         <div>
@@ -1060,11 +961,12 @@ function InfoEditModal({ target, onClose }: { target: InfoEditTarget; onClose: (
         </p>
       )}
 
+      {saveError && <p role="alert" className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{saveError}</p>}
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
         <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
-        <button onClick={handleSave} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors">저장</button>
+        <button onClick={handleSave} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50">{saving ? "저장 중..." : "저장"}</button>
       </div>
-    </div>
+    </fieldset>
   );
 }
 
@@ -1739,7 +1641,7 @@ function useFeeRows(): FeeRow[] {
         const appliedFeeTotal = unitFees.reduce((s, f) => s + (f.otherFirmHandled ? 0 : f.appliedFee), 0);
         const otherFirmHandled = unitFees.some((f) => f.otherFirmHandled);
         const otherFirmUnclaimedTotal = unitFees.reduce((s, f) => s + (f.otherFirmHandled ? (f.unclaimedFee ?? 0) : 0), 0);
-        const auditFirm = unitFees.find((f) => f.auditFirm)?.auditFirm ?? "";
+        const auditFirm = docOwner.auditFirm ?? unitFees.find((f) => f.auditFirm)?.auditFirm ?? "";
 
         return {
           key: isSplit ? `${key}|${primary.institutionId}` : key,
@@ -2742,6 +2644,7 @@ export default function FeesPage() {
   const setAgencyAssignedTo   = (v: string) => updateFeesFilters({ agencyAssignedTo: v });
   const setSortBy = (v: FeesFilters["sortBy"]) => updateFeesFilters({ sortBy: v });
   const [expandedKey, setExpandedKey]     = useState<string | null>(null);
+  const [infoSaving, setInfoSaving] = useState(false);
   const [modal, setModal]                 = useState<ModalState | null>(null);
   const [selectedKeys, setSelectedKeys]   = useState<Set<string>>(new Set());
   const [showBulkNotice, setShowBulkNotice] = useState(false);
@@ -4062,6 +3965,7 @@ export default function FeesPage() {
                                   projectName:     row.projectName,
                                   leadMemberId:    row.leadMemberId,
                                   termNumber:      row.termNumber,
+                                  agencyAssignedAt: row.agencyAssignedAt,
                                   docFeeId:        row.docFeeId,
                                   docRequestDate:  row.docRequestDate,
                                   docReplyDate:    row.docReplyDate,
@@ -4272,8 +4176,8 @@ export default function FeesPage() {
         <SimpleNoticeModal target={modal.target} onClose={() => setModal(null)} />
       )}
       {modal?.mode === "info-edit" && (
-        <Modal title="과제 정보 수정" onClose={() => setModal(null)} size="md">
-          <InfoEditModal target={modal.target} onClose={() => setModal(null)} />
+        <Modal title="과제 정보 수정" onClose={() => setModal(null)} size="md" preventClose={infoSaving}>
+          <InfoEditModal target={modal.target} onClose={() => setModal(null)} onSavingChange={setInfoSaving} />
         </Modal>
       )}
     </div>

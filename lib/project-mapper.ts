@@ -50,7 +50,7 @@ export function toProject(p: PrismaProject): Project {
     assignedManager: (extra.assignedManager as string) ?? undefined,
     assignedManagerHistory: (extra.assignedManagerHistory as Project["assignedManagerHistory"]) ?? undefined,
     assignedManagerUserId: (extra.assignedManagerUserId as string) ?? undefined,
-    registeredAt: toKSTDateStr(p.createdAt),
+    registeredAt: (extra.registeredAt as string) ?? toKSTDateStr(p.createdAt),
     createdAt: p.createdAt.toISOString(),
   };
 }

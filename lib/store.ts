@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import type { FeeInfoEditRequest, FeeInfoPatches } from "./fee-info-edit";
 import { getCurrentUser } from "./auth";
 import { nowKST, todayKST, resolveTermDateRange, findRepresentativeTermStartDate } from "./utils";
 import { diffForAudit } from "./audit-diff";
@@ -1403,6 +1404,45 @@ export function addProject(data: Omit<Project, "id">): Project {
 // 연차상시 청구비율·산정방식(calcMode)이 모두 달라지므로 여기 빠지면 값을 바꿔도 기존 연차수수료가
 // 옛 정책 그대로 남는다.
 const PROJECT_FEE_AFFECTING_FIELDS = ["agencyId", "startDate", "totalTerms", "agreementType", "stages", "projectType", "autonomySettlementType", "programType"] as const;
+
+// 정보수정은 서버가 전체 저장을 확정한 뒤에만 반영한다. 반환된 변경 필드만 합쳐 연차·사업비를 보존한다.
+export async function saveFeeInfo(projectId: string, request: FeeInfoEditRequest): Promise<void> {
+  if (Object.keys(request.changes).length === 0) return;
+  const originalMember = _state.projectMembers.find((m) => m.id === request.memberId);
+  await waitForSyncIdle();
+  const realId = resolveProjectId(projectId);
+  const project = _state.projects.find((p) => p.id === realId);
+  if (!project) throw new Error("과제를 찾을 수 없습니다. 새로고침 후 다시 시도해주세요.");
+  const memberId = originalMember
+    ? _state.projectMembers.find((m) => m.projectId === realId && m.institutionId === originalMember.institutionId)?.id ?? request.memberId
+    : request.memberId;
+  const feeId = resolveTermFeeId(request.feeId);
+  await trackSync(chainFeeWrite(project.projectNumber, async () => {
+    const { status, body } = await throttledFetchJson<{ ok: boolean; patches?: FeeInfoPatches; error?: string }>(
+      `/api/projects/${realId}/fee-info`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...request, memberId, feeId }),
+      }, FEE_WRITE_TIMEOUT_MS,
+    );
+    if (status >= 400 || !body?.ok || !body.patches) {
+      throw new Error(body?.error || "정보를 저장하지 못했습니다. 잠시 후 다시 시도해주세요.");
+    }
+    const patches = body.patches;
+    _state = {
+      ..._state,
+      projects: _state.projects.map((p) => p.id === realId ? { ...p, ...patches.project } : p),
+      projectMembers: _state.projectMembers.map((m) => {
+        const next = m.id === memberId ? { ...m, ...patches.member } : m;
+        const firm = patches.annualAuditFirm;
+        if (!firm || m.projectId !== realId || m.institutionId !== firm.institutionId) return next;
+        return { ...next, annualBudgets: next.annualBudgets?.map((ab) =>
+          ab.termNumber === firm.termNumber ? { ...ab, auditFirm: firm.auditFirm } : ab) };
+      }),
+      termFees: _state.termFees.map((f) => f.id === feeId ? { ...f, ...patches.fee } : f),
+    };
+    notify();
+  }));
+}
 
 export function updateProject(id: string, data: Partial<Project>): void {
   const before = _state.projects.find((p) => p.id === id);

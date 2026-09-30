@@ -122,6 +122,64 @@ function seed(store, { existingFee } = {}) {
 const feeOf = (store, id) => store.inspectForTest().state.termFees.find((f) => f.id === id);
 const sentSyncBodies = (requests) => requests.filter((r) => r.url.endsWith("/sync-fees")).map((r) => r.body);
 
+test("info edit failure leaves every term and the displayed values unchanged", async (t) => {
+  const requests = controlledNetwork(t);
+  const store = withRetryCleanup(t, loadStore());
+  const { project, member } = seed(store, { existingFee: { docReplyDate: "2026-01-01" } });
+  const before = store.inspectForTest().state;
+  const save = store.saveFeeInfo(project.id, { termNumber: 1, memberId: member.id, feeId: "real-fee", changes: { docReplyDate: "2026-09-30" } });
+  const failure = assert.rejects(save, /failed/);
+  await until(() => requests.length === 1);
+  assert.equal(store.inspectForTest().state, before);
+  requests[0].respond({ ok: false, error: "failed" });
+  await failure;
+  assert.equal(store.inspectForTest().state, before);
+});
+
+test("info edit success merges only saved fields without recalculating or dropping terms", async (t) => {
+  const requests = controlledNetwork(t);
+  const store = withRetryCleanup(t, loadStore());
+  const { project, member } = seed(store, { existingFee: { docReplyDate: "2026-01-01" } });
+  const firstFee = feeOf(store, "real-fee");
+  store.inspectForTest({ termFees: [firstFee, { ...firstFee, id: "term-2", termNumber: 2 }, { ...firstFee, id: "term-3", termNumber: 3 }] });
+  const before = structuredClone(store.inspectForTest().state);
+  const save = store.saveFeeInfo(project.id, { termNumber: 1, memberId: member.id, feeId: "real-fee", changes: { docReplyDate: "2026-09-30" } });
+  await until(() => requests.length === 1);
+  assert.ok(requests[0].url.endsWith("/fee-info"));
+  requests[0].respond({ ok: true, patches: { project: {}, member: {}, fee: { docReplyDate: "2026-09-30" } } });
+  await save;
+  const after = store.inspectForTest().state;
+  assert.deepEqual(after.termFees.map((f) => f.id), before.termFees.map((f) => f.id));
+  assert.equal(after.termFees[0].docReplyDate, "2026-09-30");
+  assert.deepEqual(after.termFees.slice(1), before.termFees.slice(1));
+  assert.deepEqual(after.projects, before.projects);
+  assert.deepEqual(after.projectMembers, before.projectMembers);
+  assert.equal(requests.length, 1);
+});
+
+for (const auditFirm of ["New firm", ""]) {
+  test(`info edit keeps audit firm ${JSON.stringify(auditFirm)} after the next recalculation`, async (t) => {
+    const requests = controlledNetwork(t);
+    const store = withRetryCleanup(t, loadStore());
+    const { project, member } = seed(store, { existingFee: { auditFirm: "Other firm" } });
+    const originalBudget = member.annualBudgets[0].cashBudget;
+    const save = store.saveFeeInfo(project.id, { termNumber: 1, memberId: member.id, feeId: "real-fee", changes: { auditFirm } });
+    await until(() => requests.length === 1);
+    requests[0].respond({ ok: true, patches: { project: {}, member: {}, fee: { auditFirm },
+      annualAuditFirm: { institutionId: member.institutionId, termNumber: 1, auditFirm } } });
+    await save;
+    const savedMember = store.inspectForTest().state.projectMembers[0];
+    assert.equal(savedMember.annualBudgets[0].auditFirm, auditFirm);
+    assert.equal(savedMember.annualBudgets[0].cashBudget, originalBudget);
+    store.autoGenerateTermFees(project.id);
+    await until(() => requests.length === 2);
+    assert.equal(requests[1].body.termFees[0].auditFirm, auditFirm);
+    requests[1].respond({ ok: true, termFees: requests[1].body.termFees });
+    await store.waitForSyncIdle();
+    assert.equal(feeOf(store, "real-fee").auditFirm, auditFirm);
+  });
+}
+
 test("an edit to a row created by a pending recalculation is saved with the real id after the sync", async (t) => {
   const requests = controlledNetwork(t);
   const store = withRetryCleanup(t, loadStore());

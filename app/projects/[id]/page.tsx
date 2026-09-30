@@ -1,5 +1,7 @@
 "use client";
 
+import { buildAssignmentDateUpdate } from "@/lib/project-assignment-dates";
+
 import { use, useState, useMemo, useEffect, useRef, Fragment, type ReactNode, type MouseEvent as ReactMouseEvent } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
@@ -583,46 +585,12 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
     // 그 연차의 값으로 쓴다). researchLeadOverrides와 동일한 원칙 — 진행 연차 탭에서 고치면 "지금부터"
     // 적용되도록 기본값 자체를 바꾸고 이미 만들어진 다른 연차는 옛 값으로 고정하며(backfillExistingTermOverrides),
     // 그 외 연차 탭에서 고치면 기본값은 건드리지 않고 그 연차만의 오버라이드로 직접 저장한다.
-    const trueBaseAgencyAssignedAt = project!.agencyAssignedAt ?? "";
-    const draftAgencyAssignedAt = draft.agencyAssignedAt ?? "";
-    let nextAgencyAssignedAt = project!.agencyAssignedAt;
-    let agencyAssignedAtHistory = project!.agencyAssignedAtHistory;
-    if (viewTerm === currentTerm) {
-      if (draftAgencyAssignedAt !== trueBaseAgencyAssignedAt) {
-        agencyAssignedAtHistory = backfillExistingTermOverrides(
-          project!.agencyAssignedAtHistory,
-          termFees.filter((f) => f.projectNumber === project!.projectNumber).map((f) => f.termNumber),
-          viewTerm,
-          (termNumber: number) => ({ termNumber, agencyAssignedAt: trueBaseAgencyAssignedAt }),
-        );
-        nextAgencyAssignedAt = draftAgencyAssignedAt || undefined;
-      }
-    } else {
-      const isDefault = draftAgencyAssignedAt === trueBaseAgencyAssignedAt;
-      const others = (project!.agencyAssignedAtHistory ?? []).filter((h) => h.termNumber !== viewTerm);
-      const next = isDefault ? others : [...others, { termNumber: viewTerm, agencyAssignedAt: draftAgencyAssignedAt }].sort((a, b) => a.termNumber - b.termNumber);
-      agencyAssignedAtHistory = next.length > 0 ? next : undefined;
-    }
-    const trueBaseInternalAssignedAt = project!.internalAssignedAt ?? "";
-    const draftInternalAssignedAt = draft.internalAssignedAt ?? "";
-    let nextInternalAssignedAt = project!.internalAssignedAt;
-    let internalAssignedAtHistory = project!.internalAssignedAtHistory;
-    if (viewTerm === currentTerm) {
-      if (draftInternalAssignedAt !== trueBaseInternalAssignedAt) {
-        internalAssignedAtHistory = backfillExistingTermOverrides(
-          project!.internalAssignedAtHistory,
-          termFees.filter((f) => f.projectNumber === project!.projectNumber).map((f) => f.termNumber),
-          viewTerm,
-          (termNumber: number) => ({ termNumber, internalAssignedAt: trueBaseInternalAssignedAt }),
-        );
-        nextInternalAssignedAt = draftInternalAssignedAt || undefined;
-      }
-    } else {
-      const isDefault = draftInternalAssignedAt === trueBaseInternalAssignedAt;
-      const others = (project!.internalAssignedAtHistory ?? []).filter((h) => h.termNumber !== viewTerm);
-      const next = isDefault ? others : [...others, { termNumber: viewTerm, internalAssignedAt: draftInternalAssignedAt }].sort((a, b) => a.termNumber - b.termNumber);
-      internalAssignedAtHistory = next.length > 0 ? next : undefined;
-    }
+    const existingTermNumbers = termFees.filter((f) => f.projectNumber === project!.projectNumber).map((f) => f.termNumber);
+    const assignmentDates = {
+      ...project!,
+      ...buildAssignmentDateUpdate(project!, "agencyAssignedAt", viewTerm, draft.agencyAssignedAt ?? "", existingTermNumbers),
+      ...buildAssignmentDateUpdate(project!, "internalAssignedAt", viewTerm, draft.internalAssignedAt ?? "", existingTermNumbers),
+    };
     // 책임자(연구책임자) 이름·이메일은 지금 보고 있는 연차 탭(viewTerm) 기준으로 저장한다(위 useEffect가
     // 탭을 바꿀 때마다 draft를 그 연차 값으로 다시 채워두므로, 여기서 그대로 그 연차의 값으로 쓴다).
     // ??로 undefined일 때만 ""로 채운다 — 그대로 두면 resolveResearchLeadForTerm의 override?.email ??
@@ -671,10 +639,10 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
       assignedManagerPrimary: nextAssignedManagerPrimary,
       assignedManagerPrimaryUserId: nextAssignedManagerPrimaryUserId,
       assignedManagerPrimaryHistory,
-      agencyAssignedAt: nextAgencyAssignedAt,
-      agencyAssignedAtHistory,
-      internalAssignedAt: nextInternalAssignedAt,
-      internalAssignedAtHistory,
+      agencyAssignedAt: assignmentDates.agencyAssignedAt,
+      agencyAssignedAtHistory: assignmentDates.agencyAssignedAtHistory,
+      internalAssignedAt: assignmentDates.internalAssignedAt,
+      internalAssignedAtHistory: assignmentDates.internalAssignedAtHistory,
       researchLead: nextResearchLead,
       researchLeadEmail: nextResearchLeadEmail,
       researchLeadOverrides,

@@ -594,7 +594,7 @@ export interface Project {
   // 찾아 그 사용자의 phone/email을 그대로 쓴다(lib/notice-contacts.ts). 과제 건별로 반복 입력할
   // 필요 없이 권한관리에 한 번만 등록해두면 모든 과제에 그대로 적용된다.
   assignedManagerPrimary?: string;
-  assignedManagerPrimaryHistory?: { termNumber: number; assignedManagerPrimary: string }[];
+  assignedManagerPrimaryHistory?: { termNumber: number; assignedManagerPrimary: string; assignedManagerPrimaryUserId?: string }[];
   // [권한관리]에 동명이인이 등록돼 있으면 이름만으로는 어느 계정인지 구분할 수 없다 — 과제상세의
   // 담당자 선택 모달이나 엑셀 업로드 시 동명이인 해소 모달에서 특정 계정을 골랐을 때만 채워지며,
   // 있으면 이름 대신 이 id로 [권한관리] 계정을 찾는다(lib/notice-contacts.ts). 이름이 유일하면
@@ -604,7 +604,7 @@ export interface Project {
   // 등으로 연차마다 바뀔 수 있어 연차별 이력은 assignedManagerHistory에 따로 쌓는다. 연락처·이메일은
   // (정)과 동일하게 여기 저장하지 않고 공문 발송 시 [권한관리]에서 이름으로 찾아 쓴다.
   assignedManager?: string;
-  assignedManagerHistory?: { termNumber: number; assignedManager: string }[];
+  assignedManagerHistory?: { termNumber: number; assignedManager: string; assignedManagerUserId?: string }[];
   assignedManagerUserId?: string; // 동명이인 해소용 — assignedManagerPrimaryUserId와 동일한 용도(부담당자)
   registeredAt?: string;    // 과제 등록일 — 연도별 대시보드 집계 기준(배정일). 사용자가 직접 고칠 수 있는
                              // "날짜만" 값이라 실제 업로드/생성 순서를 보장하지 않는다 — 그 용도는 createdAt 참고.
