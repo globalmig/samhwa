@@ -313,6 +313,18 @@ function ProjectInfoTab({ projectId }: { projectId: string }) {
     const termParam = Number(searchParams.get("term"));
     return Number.isInteger(termParam) && termParam >= 1 ? termParam : project?.currentTerm ?? 1;
   });
+  // 위 useState 초기화 함수는 이 컴포넌트가 "처음" 마운트될 때 딱 한 번만 실행된다 — 그런데 수수료
+  // 관리 목록에서 같은 과제의 다른 연차 행을 클릭해 들어오면 경로(/projects/[id]) 자체는 그대로고
+  // ?term= 값만 바뀌므로, Next.js가 이 페이지 컴포넌트를 새로 마운트하지 않고 재사용해 초기화
+  // 함수가 다시 실행되지 않는다 — 그러면 viewTerm이 예전 값에 그대로 머무는데 화면 URL만 새 연차를
+  // 가리켜서, 사용자는 새 연차를 보고 있다고 믿지만 실제로는 예전 연차를 보고 저장하게 된다(연차
+  // 탭 배지가 실제 클릭한 연차와 다르게 보이던 버그, 그 상태로 저장하면 "다른 연차에 저장했는데
+  // 엉뚱한 연차가 바뀐 것처럼" 보였던 원인). URL의 term 값이 바뀔 때마다 다시 맞춰준다.
+  useEffect(() => {
+    const termParam = Number(searchParams.get("term"));
+    if (Number.isInteger(termParam) && termParam >= 1) setViewTerm(termParam);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams.get("term")]);
   // 과거(진행 연차가 아닌) 연차의 "사업비 구분" 카드를 건당 수정하는 상태 — 연차 탭을 바꾸면 자동으로 닫는다.
   const [editingPastFinancials, setEditingPastFinancials] = useState(false);
   const [pastFinancialsDraft, setPastFinancialsDraft] = useState({ govGrant: 0, privateCash: 0, privateInKind: 0 });
