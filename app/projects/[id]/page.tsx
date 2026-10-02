@@ -13,7 +13,7 @@ import {
 } from "react-icons/fi";
 import {
   useStore, updateProject, addProjectIssue, updateProjectIssue, deleteProjectIssue, addTaxInvoice, updateTaxInvoice,
-  addReceivable, updateReceivable, addEmailDispatch, updateEmailDispatch, updateTermFee, updateUnclaimedFee,
+  addReceivable, updateReceivable, addReceivablePayment, deleteReceivablePayment, isReceivablePaymentPending, addEmailDispatch, updateEmailDispatch, updateTermFee, updateUnclaimedFee,
   updateProjectMember, autoGenerateTermFees, addProjectMember, deleteProjectMember, deleteProject, deleteProjectTerms,
   setTermOtherFirmHandled, setTermBillingType, setTermDates, resolveProjectId, ensureAgencyNoticeTemplateDetail,
   isFeeRecalcDataFresh, startPollingProjectFees,
@@ -3180,9 +3180,9 @@ function BillingBlock({
     totalAmount: unit.amount,
   });
   const [editingRv, setEditingRv] = useState(false);
-  const [rvForm, setRvForm] = useState({
-    paidAmount: unit.receivable?.paidAmount ?? 0,
-  });
+  // 수금은 여러 번 나눠 들어올 수 있어, 폼에는 누적 납부액이 아니라 "이번에 들어온 입금액"과 그 입금일을
+  // 받아 차수별 입금 내역(Receivable.payments)으로 한 건씩 쌓는다(app/fees/page.tsx의 CollectionModal과 동일).
+  const [rvForm, setRvForm] = useState({ amount: 0, paidAt: todayKST() });
 
   // 발행구분 — 연차(TermFee)마다 다르게 발행될 수 있어 TermFee.billingType을 우선 쓰고, 이 연차에
   // 아직 값이 없으면 과제 단위 기본값(project.billingType, 엑셀 업로드 등으로 들어온 값)으로 대체한다.
@@ -3450,28 +3450,28 @@ function BillingBlock({
     });
   }
 
+  // 청구액은 채권(서버가 초과 입금을 막는 기준)을 우선 쓰고, 채권이 아직 없으면 계산서 합계로 대신한다.
+  const rvBilled = unit.receivable?.billedAmount ?? unit.invoice?.totalAmount ?? 0;
+  const rvPaid = unit.receivable?.paidAmount ?? 0;
+  const rvRemaining = Math.max(0, rvBilled - rvPaid);
+  // 청구액을 넘는 입금은 등록을 막는다(초과분은 수금이 아니라 별도 협의로 처리 — CollectionModal과 동일).
+  const rvOverpaying = rvForm.amount > rvRemaining;
+  const rvPayments = unit.receivable?.payments ?? [];
+  // 입금 내역 없이 들어와 있던 예전 수금액(엑셀 업로드·분할 수금 도입 전 상세화면 입력 등)
+  const rvUntrackedPaid = Math.max(0, rvPaid - rvPayments.reduce((s, p) => s + p.amount, 0));
+
   function openRvForm() {
-    setRvForm({ paidAmount: unit.receivable?.paidAmount ?? 0 });
+    setRvForm({ amount: 0, paidAt: todayKST() });
     setEditingRv(true);
   }
 
   function saveReceivable() {
     const inv = unit.invoice;
-    if (!inv) return;
-    const remaining = Math.max(0, inv.totalAmount - rvForm.paidAmount);
-    // 미입금 상태의 기본값은 "미수"(OVERDUE) — 만기일(청구일+3개월)이 지나기 전까진 isOverdueByRule이
-    // 화면에 "미수"로만 보여주고, 만기일이 지나면 자동으로 "연체"로 승격된다.
-    const status: Receivable["status"] = rvForm.paidAmount >= inv.totalAmount
-      ? "PAID" : rvForm.paidAmount > 0 ? "PARTIAL" : "OVERDUE";
-    const dueDate = addMonths(inv.issuedAt, 3);
+    if (!inv || rvForm.amount <= 0 || rvOverpaying || !rvForm.paidAt) return;
     if (unit.receivable) {
-      updateReceivable(unit.receivable.id, {
-        paidAmount: rvForm.paidAmount,
-        receivableAmount: remaining,
-        dueDate: unit.receivable.dueDate || dueDate,
-        status,
-      });
+      addReceivablePayment(unit.receivable.id, { paidAt: rvForm.paidAt, amount: rvForm.amount });
     } else {
+      // 채권이 없는 예전 데이터 — 첫 입금과 함께 채권을 만든다(서버가 이 입금을 1차 내역으로 남긴다).
       addReceivable({
         invoiceNumber: inv.invoiceNumber,
         projectNumber,
@@ -3483,13 +3483,20 @@ function BillingBlock({
         institutionId: unit.institutionId ?? undefined,
         billedAt: inv.issuedAt,
         billedAmount: inv.totalAmount,
-        paidAmount: rvForm.paidAmount,
-        receivableAmount: remaining,
-        dueDate,
-        status,
+        paidAmount: rvForm.amount,
+        paidAt: rvForm.paidAt,
+        receivableAmount: Math.max(0, inv.totalAmount - rvForm.amount),
+        dueDate: addMonths(inv.issuedAt, 3),
+        status: rvForm.amount >= inv.totalAmount ? "PAID" : "PARTIAL",
       });
     }
     setEditingRv(false);
+  }
+
+  function removePayment(paymentId: string, label: string) {
+    if (!unit.receivable) return;
+    if (!window.confirm(`${label} 입금 내역을 삭제할까요? 그 금액만큼 납부액이 줄어듭니다.`)) return;
+    deleteReceivablePayment(unit.receivable.id, paymentId);
   }
 
   // 공문 발송 — 기관별 개별 청구 단위는 그 기관 앞으로 간 발송 이력만(recipientEmail 기준) "마지막 발송"으로 잡는다.
@@ -3770,27 +3777,57 @@ function BillingBlock({
       <div className="flex items-start gap-3">
         <span className="text-xs font-semibold text-slate-600 w-24 shrink-0 pt-1">수금 정보</span>
         {unit.receivable && unit.invoice?.status !== "CANCELED" ? (
-          <div className="flex-1 flex flex-wrap items-center gap-4">
-            <span className="text-xs text-slate-500">청구 {fmtWonFull(unit.receivable.billedAmount)}</span>
-            <span className="text-xs text-green-700 font-medium">납부 {fmtWonFull(unit.receivable.paidAmount)}</span>
-            <span className={`text-sm font-bold ${unit.receivable.receivableAmount > 0 ? "text-red-600" : "text-slate-400"}`}>
-              미수금 {fmtWonFull(unit.receivable.receivableAmount)}
-            </span>
-            <StatusBadge label={RECEIVABLE_STATUS[unit.receivable.status].label} color={RECEIVABLE_STATUS[unit.receivable.status].color} />
-            <div className="ml-auto flex items-center gap-2">
-              {canEditEmails && unit.receivable.receivableAmount > 0 && (
-                <button onClick={() => openSimpleNotice("PAYMENT_REMINDER")}
-                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-red-700 border border-red-200 rounded-lg hover:bg-red-50 transition-colors">
-                  <FiSend size={12} /> 입금 확인 요청
-                </button>
-              )}
-              {canEditReceivables && (
-                <button onClick={openRvForm}
-                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
-                  <FiEdit2 size={12} /> 수금 입력
-                </button>
-              )}
+          <div className="flex-1 space-y-2">
+            <div className="flex flex-wrap items-center gap-4">
+              <span className="text-xs text-slate-500">청구 {fmtWonFull(unit.receivable.billedAmount)}</span>
+              <span className="text-xs text-green-700 font-medium">납부 {fmtWonFull(unit.receivable.paidAmount)}</span>
+              <span className={`text-sm font-bold ${unit.receivable.receivableAmount > 0 ? "text-red-600" : "text-slate-400"}`}>
+                미수금 {fmtWonFull(unit.receivable.receivableAmount)}
+              </span>
+              <StatusBadge label={RECEIVABLE_STATUS[unit.receivable.status].label} color={RECEIVABLE_STATUS[unit.receivable.status].color} />
+              <div className="ml-auto flex items-center gap-2">
+                {canEditEmails && unit.receivable.receivableAmount > 0 && (
+                  <button onClick={() => openSimpleNotice("PAYMENT_REMINDER")}
+                    className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-red-700 border border-red-200 rounded-lg hover:bg-red-50 transition-colors">
+                    <FiSend size={12} /> 입금 확인 요청
+                  </button>
+                )}
+                {canEditReceivables && rvRemaining > 0 && (
+                  <button onClick={openRvForm}
+                    className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                    <FiPlus size={12} /> {rvPaid > 0 ? "추가 수금 입력" : "수금 입력"}
+                  </button>
+                )}
+              </div>
             </div>
+            {/* 차수별 입금 내역 — 수금을 나눠 받은 경우 입금마다 한 줄씩 보여주고, 잘못 넣은 건만 골라 지울 수 있다. */}
+            {rvPayments.length > 0 && (
+              <ul className="rounded-lg border border-slate-100 bg-slate-50/60 px-3 py-2 space-y-1">
+                {rvUntrackedPaid > 0 && (
+                  <li className="flex items-center gap-3 text-xs text-slate-500">
+                    <span className="w-10 text-slate-400">이전</span>
+                    <span className="w-24 text-slate-400">수금일 미기록</span>
+                    <span className="font-medium text-green-700">{fmtWonFull(rvUntrackedPaid)}</span>
+                  </li>
+                )}
+                {rvPayments.map((p, i) => (
+                  <li key={p.id} className="flex items-center gap-3 text-xs text-slate-600">
+                    <span className="w-10 text-slate-400">{i + 1}차</span>
+                    <span className="w-24">{fmtDate(p.paidAt)}</span>
+                    <span className="font-medium text-green-700">{fmtWonFull(p.amount)}</span>
+                    {canEditReceivables && (isReceivablePaymentPending(p.id) ? (
+                      <span className="text-[11px] text-slate-400">저장 중…</span>
+                    ) : (
+                      <button type="button" onClick={() => removePayment(p.id, `${i + 1}차(${fmtDate(p.paidAt)})`)}
+                        title="이 입금 내역 삭제"
+                        className="text-slate-300 hover:text-red-500 transition-colors">
+                        <FiX size={12} />
+                      </button>
+                    ))}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         ) : unit.invoice && unit.invoice.status !== "CANCELED" ? (
           <div className="flex items-center gap-3">
@@ -3815,29 +3852,51 @@ function BillingBlock({
 
       {/* 수금 인라인 폼 */}
       {editingRv && (
-        <div className="rounded-xl border border-green-200 bg-green-50/30 px-4 py-4">
-          <div className="flex items-end gap-4">
-            <div className="w-52">
-              <label className="block text-xs font-medium text-slate-600 mb-1">입금액 (원)</label>
-              <MoneyInput className={`${inp} w-full`} value={rvForm.paidAmount}
-                autoFocus
-                onChange={(v) => setRvForm({ paidAmount: v })} />
+        <div className="rounded-xl border border-green-200 bg-green-50/30 px-4 py-4 space-y-2">
+          <div className="flex flex-wrap items-end gap-4">
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">
+                이번 입금액 (원) <span className="font-normal text-slate-400">잔여 미수액 {fmtWonFull(rvRemaining)}</span>
+              </label>
+              <div className="flex items-center gap-2">
+                <MoneyInput className={`${inp} w-52`} value={rvForm.amount}
+                  autoFocus
+                  onChange={(v) => setRvForm((p) => ({ ...p, amount: v }))} />
+                <button
+                  type="button"
+                  onClick={() => setRvForm((p) => ({ ...p, amount: rvRemaining }))}
+                  disabled={rvRemaining <= 0 || rvForm.amount === rvRemaining}
+                  className="px-3 py-1.5 text-xs font-medium text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+                >
+                  완납처리
+                </button>
+              </div>
+            </div>
+            <div className="w-40">
+              <label className="block text-xs font-medium text-slate-600 mb-1">수금일</label>
+              <DateInput className="w-full" value={rvForm.paidAt}
+                onChange={(v) => setRvForm((p) => ({ ...p, paidAt: v }))} />
             </div>
             <div className="pb-0.5">
-              <p className="text-xs text-slate-400 mb-1">미수금 (자동)</p>
-              <p className={`text-sm font-bold ${Math.max(0, (unit.invoice?.totalAmount ?? 0) - rvForm.paidAmount) > 0 ? "text-red-600" : "text-slate-400"}`}>
-                {fmtWonFull(Math.max(0, (unit.invoice?.totalAmount ?? 0) - rvForm.paidAmount))}
+              <p className="text-xs text-slate-400 mb-1">입금 후 미수금 (자동)</p>
+              <p className={`text-sm font-bold ${Math.max(0, rvRemaining - rvForm.amount) > 0 ? "text-red-600" : "text-slate-400"}`}>
+                {Math.max(0, rvRemaining - rvForm.amount) > 0 ? fmtWonFull(Math.max(0, rvRemaining - rvForm.amount)) : "완납"}
               </p>
             </div>
             <div className="flex gap-2 ml-auto">
               <button onClick={() => setEditingRv(false)}
                 className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">취소</button>
               <button onClick={saveReceivable}
-                className="flex items-center gap-1 px-4 py-1.5 text-xs font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors">
+                disabled={rvForm.amount <= 0 || rvOverpaying || !rvForm.paidAt}
+                className="flex items-center gap-1 px-4 py-1.5 text-xs font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
                 <FiCheck size={12} /> 저장
               </button>
             </div>
           </div>
+          {rvOverpaying && (
+            <p className="text-[11px] text-red-500">잔여 미수액({fmtWonFull(rvRemaining)})보다 큰 금액은 등록할 수 없습니다.</p>
+          )}
+          <p className="text-[11px] text-slate-400">수금을 나눠 받는 경우 입금이 들어올 때마다 그 금액과 날짜로 한 건씩 저장하면 차수별로 쌓입니다.</p>
         </div>
       )}
 

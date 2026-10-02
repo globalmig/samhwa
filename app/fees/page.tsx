@@ -9,6 +9,10 @@ import {
   useStore,
   addReceivable,
   updateReceivable,
+  addReceivablePayment,
+  deleteReceivablePayment,
+  isReceivablePaymentPending,
+  resetReceivablePayments,
   updateProject,
   saveFeeInfo,
   updateProjectMember,
@@ -615,55 +619,43 @@ function SalesCancelModal({ target, onClose }: { target: SalesTarget; onClose: (
 
 // ── CollectionModal ───────────────────────────────────────────
 function CollectionModal({ target, onClose }: { target: CollectionTarget; onClose: () => void }) {
+  // 입금 내역을 지우면 모달을 연 채로 금액이 바뀌므로, 열 때 받은 target 대신 store의 최신 채권 값을 쓴다.
+  const { receivables } = useStore();
+  const rv = receivables.find((r) => r.id === target.receivableId);
+  const billedAmount     = rv?.billedAmount ?? target.billedAmount;
+  const paidAmount       = rv?.paidAmount ?? target.paidAmount;
+  const receivableAmount = rv?.receivableAmount ?? target.receivableAmount;
+  const payments         = rv?.payments ?? [];
+  // 입금 내역 없이 들어와 있던 예전 수금액(엑셀 업로드·분할 수금 도입 전 입력 등)
+  const untrackedPaid    = Math.max(0, paidAmount - payments.reduce((s, p) => s + p.amount, 0));
+
   const [inputAmount, setInputAmount] = useState(0);
-  const [paidAtInput, setPaidAtInput] = useState(target.paidAt ?? todayKST());
-  const remaining = target.billedAmount - target.paidAmount;
+  // 수금을 나눠 받는 경우 이번 입금의 날짜를 받는 칸이라, 이전 입금일이 아니라 오늘을 기본값으로 둔다.
+  const [paidAtInput, setPaidAtInput] = useState(todayKST());
+  const remaining = Math.max(0, billedAmount - paidAmount);
   // 잔여 미수액을 넘는 금액을 실수로 입력해도 그대로 저장되던 문제 — 청구액을 초과하는
   // 입금은 등록을 막고, 초과분은 수금 등록이 아니라 별도로(협의 후) 처리하도록 안내한다.
   const overpaying = inputAmount > remaining;
 
-  function calcStatus(paid: number): "PENDING" | "PARTIAL" | "PAID" | "OVERDUE" {
-    if (paid <= 0)                         return "PENDING";
-    if (paid >= target.billedAmount)       return "PAID";
-    return "PARTIAL";
-  }
-
+  // 입금 한 건(차수)으로 쌓는다 — 납부액·미수액·상태는 서버가 입금 내역 기준으로 다시 계산한다.
   function handleSave() {
-    if (inputAmount <= 0 || overpaying) return;
-    const newPaid       = target.paidAmount + inputAmount;
-    const newReceivable = Math.max(0, target.billedAmount - newPaid);
-    updateReceivable(target.receivableId, {
-      paidAmount:       newPaid,
-      paidAt:           paidAtInput || undefined,
-      receivableAmount: newReceivable,
-      status:           calcStatus(newPaid),
-    });
+    if (inputAmount <= 0 || overpaying || !paidAtInput) return;
+    addReceivablePayment(target.receivableId, { paidAt: paidAtInput, amount: inputAmount });
     onClose();
   }
 
-  function handleFullPay() {
-    if (remaining <= 0) return;
-    updateReceivable(target.receivableId, {
-      paidAmount:       target.billedAmount,
-      paidAt:           paidAtInput || undefined,
-      receivableAmount: 0,
-      status:           "PAID",
-    });
-    onClose();
+  function handleDeletePayment(paymentId: string, label: string) {
+    if (!window.confirm(`${label} 입금 내역을 삭제할까요? 그 금액만큼 납부액이 줄어듭니다.`)) return;
+    deleteReceivablePayment(target.receivableId, paymentId);
   }
 
   function handleCancel() {
-    updateReceivable(target.receivableId, {
-      paidAmount:       0,
-      paidAt:           null,
-      receivableAmount: target.billedAmount,
-      status:           "PENDING",
-    });
+    resetReceivablePayments(target.receivableId);
     onClose();
   }
 
-  const previewPaid       = target.paidAmount + inputAmount;
-  const previewReceivable = Math.max(0, target.billedAmount - previewPaid);
+  const previewPaid       = paidAmount + inputAmount;
+  const previewReceivable = Math.max(0, billedAmount - previewPaid);
 
   return (
     <div className="p-6 space-y-5">
@@ -673,25 +665,56 @@ function CollectionModal({ target, onClose }: { target: CollectionTarget; onClos
         <div className="grid grid-cols-3 gap-4">
           <div>
             <p className="text-slate-400 mb-0.5">청구액</p>
-            <p className="font-bold text-slate-800 text-sm">{fmtWon(target.billedAmount)}</p>
+            <p className="font-bold text-slate-800 text-sm">{fmtWon(billedAmount)}</p>
           </div>
           <div>
             <p className="text-slate-400 mb-0.5">기수금액</p>
-            <p className="font-bold text-green-700 text-sm">{fmtWon(target.paidAmount)}</p>
+            <p className="font-bold text-green-700 text-sm">{fmtWon(paidAmount)}</p>
           </div>
           <div>
             <p className="text-slate-400 mb-0.5">미수액</p>
-            <p className={`font-bold text-sm ${target.receivableAmount > 0 ? "text-red-600" : "text-slate-300"}`}>
-              {fmtWon(target.receivableAmount)}
+            <p className={`font-bold text-sm ${receivableAmount > 0 ? "text-red-600" : "text-slate-300"}`}>
+              {fmtWon(receivableAmount)}
             </p>
           </div>
         </div>
+        {/* 차수별 입금 내역 — 수금을 나눠 받은 경우 입금마다 한 줄씩, 잘못 넣은 건만 골라 지울 수 있다. */}
+        {payments.length > 0 && (
+          <ul className="pt-2 border-t border-slate-200/70 space-y-1">
+            {untrackedPaid > 0 && (
+              <li className="flex items-center gap-3 text-slate-500">
+                <span className="w-8 text-slate-400">이전</span>
+                <span className="w-20 text-slate-400">수금일 미기록</span>
+                <span className="font-medium text-green-700">{fmtWon(untrackedPaid)}</span>
+              </li>
+            )}
+            {payments.map((p, i) => (
+              <li key={p.id} className="flex items-center gap-3 text-slate-600">
+                <span className="w-8 text-slate-400">{i + 1}차</span>
+                <span className="w-20">{fmtDate(p.paidAt)}</span>
+                <span className="font-medium text-green-700">{fmtWon(p.amount)}</span>
+                {isReceivablePaymentPending(p.id) ? (
+                  <span className="ml-auto text-[11px] text-slate-400">저장 중…</span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => handleDeletePayment(p.id, `${i + 1}차(${fmtDate(p.paidAt)})`)}
+                    title="이 입금 내역 삭제"
+                    className="ml-auto text-slate-300 hover:text-red-500 transition-colors"
+                  >
+                    <FiTrash2 size={12} />
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
       {/* 입금액 입력 */}
       <div className="space-y-2">
         <label className="text-xs font-medium text-slate-600">
-          입금액 <span className="text-slate-400 font-normal">(잔여 미수액: {fmtWon(remaining)})</span>
+          {paidAmount > 0 ? "추가 입금액" : "입금액"} <span className="text-slate-400 font-normal">(잔여 미수액: {fmtWon(remaining)})</span>
         </label>
         <div className="flex items-center gap-2">
           <MoneyInput
@@ -741,7 +764,7 @@ function CollectionModal({ target, onClose }: { target: CollectionTarget; onClos
 
       {/* 버튼 */}
       <div className="flex items-center justify-between pt-2 border-t border-slate-100">
-        {target.paidAmount > 0 ? (
+        {paidAmount > 0 ? (
           <button
             onClick={handleCancel}
             className="px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 rounded-lg transition-colors"
@@ -757,7 +780,7 @@ function CollectionModal({ target, onClose }: { target: CollectionTarget; onClos
           </button>
           <button
             onClick={handleSave}
-            disabled={inputAmount <= 0 || overpaying}
+            disabled={inputAmount <= 0 || overpaying || !paidAtInput}
             className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             수금 등록
