@@ -36,6 +36,12 @@ function effectiveDisplayStatus(r: Pick<Receivable, "status" | "dueDate">): Disp
 
 type ModalState = { mode: "add" } | { mode: "edit"; target: Receivable };
 
+// 수정 폼에서 고칠 수 있는 필드 — 수정 시 이 중 바뀐 것만 서버로 보낸다.
+const EDITABLE_KEYS = [
+  "invoiceNumber", "projectNumber", "projectName", "termYear", "termNumber", "leadInstitutionId", "leadInstitutionName",
+  "billedAt", "billedAmount", "paidAmount", "receivableAmount", "dueDate", "status",
+] as const satisfies readonly (keyof Receivable)[];
+
 function makeEmpty(): Omit<Receivable, "id"> {
   const billedAt = todayKST();
   return {
@@ -73,9 +79,18 @@ function ReceivableForm({ initial, onSubmit, onClose }: { initial: Omit<Receivab
   const [error, setError] = useState("");
   const s = (k: keyof typeof form, v: unknown) => setForm((p) => ({ ...p, [k]: v }));
 
+  // 차수별 입금 내역 합계 — 누적 수금액을 이보다 작게(0 포함) 고치면 내역과 납부액이 어긋난다(서버도 같은
+  // 기준으로 막는다). 줄여야 하면 수금 내역에서 해당 입금을 삭제하거나 수수료청구관리의 수금 취소(초기화)를 쓴다.
+  const trackedPaid = (initial.payments ?? []).reduce((sum, p) => sum + p.amount, 0);
+  const paidBelowTracked = form.paidAmount !== initial.paidAmount && form.paidAmount < trackedPaid;
+
   function handleSubmit() {
     if (!form.invoiceNumber.trim() || !form.projectNumber.trim() || !form.projectName.trim() || !form.leadInstitutionId) {
       setError("계산서번호·과제번호·과제명·주관기관은 필수입니다.");
+      return;
+    }
+    if (paidBelowTracked) {
+      setError(`수금액은 차수별 입금 내역 합계(${trackedPaid.toLocaleString("ko-KR")}원)보다 작게 고칠 수 없습니다. 줄이려면 수금 내역에서 해당 입금을 삭제하거나 수금 취소(초기화)를 해 주세요.`);
       return;
     }
     onSubmit(form);
@@ -132,7 +147,14 @@ function ReceivableForm({ initial, onSubmit, onClose }: { initial: Omit<Receivab
       </div>
       <div className="grid grid-cols-3 gap-4">
         <Field label="청구액(원)"><MoneyInput className={inputCls} value={form.billedAmount} onChange={(v) => s("billedAmount", v)} /></Field>
-        <Field label="수금액(원)"><MoneyInput className={inputCls} value={form.paidAmount} onChange={(v) => s("paidAmount", v)} /></Field>
+        <Field label="수금액(원)">
+          <MoneyInput className={inputCls} value={form.paidAmount} onChange={(v) => s("paidAmount", v)} />
+          {trackedPaid > 0 && (
+            <p className={`mt-1 text-[11px] ${paidBelowTracked ? "text-red-500" : "text-slate-400"}`}>
+              차수별 입금 내역 {(initial.payments ?? []).length}건 · 합계 {trackedPaid.toLocaleString("ko-KR")}원
+            </p>
+          )}
+        </Field>
         <Field label="미수금(원)"><MoneyInput className={inputCls} value={form.receivableAmount} onChange={(v) => s("receivableAmount", v)} /></Field>
       </div>
       <div className="grid grid-cols-2 gap-4">
@@ -198,7 +220,18 @@ export default function ReceivablesPage() {
 
   function handleSubmit(data: Omit<Receivable, "id">) {
     if (modal?.mode === "add") addReceivable(data);
-    else if (modal?.mode === "edit") updateReceivable(modal.target.id, data);
+    else if (modal?.mode === "edit") {
+      // 실제로 바꾼 필드만 보낸다 — 창을 연 뒤 다른 곳에서 입금이 들어왔는데 손대지 않은 수금액·미수금까지
+      // 옛 값으로 보내면 그 입금을 덮어쓴다. 수금일·입금 내역은 수금 입력(과제 상세·수수료청구관리)에서
+      // 차수별로 관리하므로 이 화면에선 보내지 않는다. 서버가 창을 열 때의 금액(base)과 지금 값을 비교해
+      // 그 사이 바뀐 납부액을 덮어쓰지 않게 한다.
+      const initial = modal.target;
+      const patch: Record<string, unknown> = {};
+      for (const key of EDITABLE_KEYS) if (data[key] !== initial[key]) patch[key] = data[key];
+      if (Object.keys(patch).length > 0) {
+        updateReceivable(initial.id, patch as Partial<Receivable>, { billedAmount: initial.billedAmount, paidAmount: initial.paidAmount });
+      }
+    }
     setModal(null);
   }
 
