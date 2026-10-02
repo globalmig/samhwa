@@ -18,7 +18,6 @@ const DB_TO_MOCK_STATUS: Record<string, Receivable["status"]> = {
 export const MOCK_TO_DB_STATUS: Record<string, string> = {
   PENDING: "OUTSTANDING", OVERDUE: "OUTSTANDING", PARTIAL: "PARTIAL", PAID: "SETTLED",
 };
-
 function toDateStr(d: Date | null): string {
   return d ? d.toISOString().slice(0, 10) : "";
 }
@@ -42,6 +41,9 @@ export function toReceivable(r: ReceivableWithRelations, invoiceNumberByPti: Map
     billedAmount: Number(r.billedAmount),
     paidAmount: Number(r.collectedAmount),
     paidAt: latestPayment ? toDateStr(latestPayment) : null,
+    payments: [...r.paymentHistories]
+      .sort((a, b) => a.paymentDate.getTime() - b.paymentDate.getTime() || a.createdAt.getTime() - b.createdAt.getTime())
+      .map((p) => ({ id: p.id, paidAt: toDateStr(p.paymentDate), amount: Number(p.paymentAmount) })),
     receivableAmount: Number(r.outstandingAmount),
     dueDate: toDateStr(r.dueDate),
     status: r.isLongOverdue ? "OVERDUE" : DB_TO_MOCK_STATUS[r.status] ?? "PENDING",

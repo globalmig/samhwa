@@ -22,6 +22,8 @@ export const FIELD_LABELS: Record<string, string> = {
   calculatedFee:       "산정수수료",
   appliedFee:          "적용수수료",
   paidAmount:          "납부금액",
+  paidAt:              "수금일",
+  payments:            "수금 내역",
   receivableAmount:    "미수금",
   carriedOver:         "이월처리",
   institutionGrade:    "기관등급",
@@ -198,6 +200,10 @@ function summarizeItem(item: unknown): string {
   if (typeof obj.startTermNumber === "number" && typeof obj.endTermNumber === "number") {
     const label = typeof obj.stageNumber === "number" ? `${obj.stageNumber}단계` : "구간";
     return `${label}(${obj.startTermNumber}~${obj.endTermNumber}연차)`;
+  }
+  // 채권의 차수별 입금 내역(Receivable.payments) — id는 빼고 "입금일 금액원"으로만 보여준다.
+  if (typeof obj.paidAt === "string" && typeof obj.amount === "number") {
+    return `${obj.paidAt} ${obj.amount.toLocaleString("ko-KR")}원`;
   }
   const entries = Object.entries(obj)
     .filter(([, v]) => v !== undefined && v !== null && v !== "")

@@ -97,6 +97,11 @@ export async function POST(request: Request) {
         dueDate: body.dueDate ? new Date(body.dueDate) : null,
         status: MOCK_TO_DB_STATUS[body.status] ?? "OUTSTANDING",
         isLongOverdue: body.status === "OVERDUE",
+        // 생성과 동시에 입금액이 들어오면(과제 상세의 수금 등록) PATCH와 동일하게 수금일로 입금 이력을
+        // 남긴다 — 수금일(paidAt)은 별도 컬럼이 아니라 이 이력의 최근 입금일에서 계산된다.
+        paymentHistories: (body.paidAmount ?? 0) > 0 && body.paidAt
+          ? { create: { paymentDate: new Date(body.paidAt), paymentAmount: BigInt(Math.round(body.paidAmount)) } }
+          : undefined,
       },
       include: INCLUDE,
     });

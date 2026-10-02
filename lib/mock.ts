@@ -2004,9 +2004,18 @@ export interface Receivable {
   billedAmount: number;
   paidAmount: number;
   paidAt?: string | null; // 수금일 — 실제로 입금된 날짜(부분입금 시 최근 입금일)
+  // 차수별 입금 내역(입금일 오름차순) — 수금을 여러 번 나눠 받는 경우 각 입금을 따로 남긴다.
+  // paidAmount는 이 합계와 같거나, 이력 없이 들어온 예전 수금액(엑셀 업로드 등)만큼 더 클 수 있다.
+  payments?: ReceivablePayment[];
   receivableAmount: number;
   dueDate: string;
   status: "PENDING" | "OVERDUE" | "PAID" | "PARTIAL";
+}
+
+export interface ReceivablePayment {
+  id: string;
+  paidAt: string;
+  amount: number;
 }
 
 export const receivables: Receivable[] = [
