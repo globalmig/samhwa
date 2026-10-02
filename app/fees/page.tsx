@@ -45,6 +45,7 @@ import { fmtWon, fmtDate, splitVatInclusive, addMonths, resolveTermDateRange, no
 import Modal from "@/components/common/Modal";
 import DateInput from "@/components/common/DateInput";
 import InstitutionQuickAdd from "@/components/common/InstitutionQuickAdd";
+import InstitutionNameInlineEdit from "@/components/common/InstitutionNameInlineEdit";
 import MoneyInput from "@/components/common/MoneyInput";
 import AgreementStructureEditor, { type Stage } from "@/components/common/AgreementStructureEditor";
 import NoticeLetterPreview, { type NoticeStatusRow } from "@/components/common/NoticeLetterPreview";
@@ -2589,6 +2590,9 @@ export default function FeesPage() {
   const canEditEmails = useCanWrite("emails");
   const canSendSimpleNotice = useCanWrite("simple-notices");
   const canDeleteProjects = useCanWrite("projects-delete");
+  // 청구기관명 직접 수정은 기관 원본 이름을 바꾸는 것이라 서버(app/api/institutions/[id])와 같은
+  // "수행기관 관리" 권한이 있을 때만 보여준다 — 수수료 권한만으로 보여주면 저장 시 거절된다.
+  const canEditInstitutions = useCanWrite("institutions");
   // 행 선택(체크박스) 열 자체는 "과제 완료 처리"(canEdit) 목적뿐 아니라, 조회전용·전담기관담당자도
   // 쓸 수 있는 계산서발행 서류 요청/입금 확인 요청 일괄발송에도 필요해서 둘 중 하나만 있어도 보여준다.
   const canSelectRows = canEdit || canSendSimpleNotice || canDeleteProjects;
@@ -3065,7 +3069,11 @@ export default function FeesPage() {
 
       case "billedInstitutionName":
         return row.billedInstitutionName ? (
-          <Link href={`/institutions/${row.billedInstitutionId}`} className="block truncate text-xs text-slate-700 hover:text-blue-600 hover:underline transition-colors" title={row.billedInstitutionName}>{row.billedInstitutionName}</Link>
+          <InstitutionNameInlineEdit
+            institutionId={row.billedInstitutionId}
+            displayName={row.billedInstitutionName}
+            canEdit={canEditInstitutions}
+          />
         ) : <span className="text-slate-300">—</span>;
 
       case "term":

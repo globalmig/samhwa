@@ -3,6 +3,7 @@ import type { FeeInfoEditRequest, FeeInfoPatches } from "./fee-info-edit";
 import { getCurrentUser } from "./auth";
 import { nowKST, todayKST, resolveTermDateRange, findRepresentativeTermStartDate } from "./utils";
 import { diffForAudit } from "./audit-diff";
+import { validateInstitutionName, renameInAffiliatedNames } from "./institution-name";
 import { ADMIN_ONLY_LOCKED_PAGES } from "./permission-constants";
 import { calcTermFee, resolvePolicy, sanitizeProjectProgramFields, normalizeGrade, getMemberAmount, isSettlementTerm, resolveMemberGradeForTerm, resolveMemberSettlementTypeForTerm, resolveProjectCodeForTerm, type CalcMember } from "./fee-calculator";
 import {
@@ -1157,55 +1158,188 @@ export async function addInstitutionsBulk(items: Omit<Institution, "id">[]): Pro
   }
 }
 
+// 기관명/유형은 과제·참여기관·연차수수료·미청구·미수금·세금계산서·정산·면제기관내역에 institutionId와
+// 별개로 그대로 복사돼 있으므로, 함께 갱신하지 않으면 이 레코드들이 옛 이름/유형을 보여준 채로 남는다
+// (updateProject의 projectNumber 전파와 동일한 이유). 저장 실패 후 서버 값으로 되돌릴 때도 같은 함수를 쓴다.
+function applyInstitutionNameCopies(id: string, name: string): void {
+  _state = {
+    ..._state,
+    projects: _state.projects.map((p) => p.leadInstitutionId === id ? { ...p, leadInstitutionName: name } : p),
+    projectMembers: _state.projectMembers.map((m) => m.institutionId === id ? { ...m, institutionName: name } : m),
+    termFees: _state.termFees.map((f) => f.institutionId === id ? { ...f, institutionName: name } : f),
+    unclaimedFees: _state.unclaimedFees.map((u) => u.leadInstitutionId === id ? { ...u, leadInstitutionName: name } : u),
+    receivables: _state.receivables.map((r) => r.leadInstitutionId === id ? { ...r, leadInstitutionName: name } : r),
+    taxInvoices: _state.taxInvoices.map((t) => t.leadInstitutionId === id ? { ...t, leadInstitutionName: name } : t),
+    settlements: _state.settlements.map((s) => s.institutionId === id ? { ...s, institutionName: name } : s),
+    termFeeCalcs: _state.termFeeCalcs.map((c) =>
+      c.exemptBreakdown.some((e) => e.institutionId === id)
+        ? { ...c, exemptBreakdown: c.exemptBreakdown.map((e) => e.institutionId === id ? { ...e, institutionName: name } : e) }
+        : c
+    ),
+  };
+}
+
+function applyInstitutionTypeCopies(id: string, type: Institution["type"]): void {
+  _state = {
+    ..._state,
+    projectMembers: _state.projectMembers.map((m) => m.institutionId === id ? { ...m, institutionType: type } : m),
+    termFees: _state.termFees.map((f) => f.institutionId === id ? { ...f, institutionType: type } : f),
+  };
+}
+
+type AffiliatedNamesChange = { before: string[]; after: string[] };
+
+// 전담기관 소속기관 자동판별은 주관기관명이 목록에 정확히 일치하는지로 판정하므로, 기관명만 정정하고
+// 목록을 그대로 두면 이후 과제 정보를 저장할 때 전담기관이 바뀐다(RDA2→RDA1 등). 서버(app/api/institutions/[id])가
+// 같은 규칙으로 목록을 함께 고치므로, 화면에도 미리 반영해 응답 전에 과제를 저장해도 판정이 유지되게 한다.
+function applyAffiliatedRename(id: string, oldName: string, newName: string): Map<string, AffiliatedNamesChange> {
+  const keepOldName = _state.institutions.some((i) => i.id !== id && i.name === oldName);
+  const changes = new Map<string, AffiliatedNamesChange>();
+  const fundingAgencies = _state.fundingAgencies.map((a) => {
+    const names = a.affiliatedInstitutionNames ?? [];
+    const next = renameInAffiliatedNames(names, oldName, newName, keepOldName);
+    if (!next) return a;
+    changes.set(a.id, { before: names, after: next });
+    return { ...a, affiliatedInstitutionNames: next };
+  });
+  if (changes.size > 0) _state = { ..._state, fundingAgencies };
+  return changes;
+}
+
+// 저장 실패 시 화면에 미리 반영했던 목록을 되돌린다 — 그 사이 다른 수정으로 목록이 또 바뀌었으면 그쪽을 존중한다.
+function revertAffiliatedRename(changes: Map<string, AffiliatedNamesChange>): void {
+  if (changes.size === 0) return;
+  const sameList = (a: readonly string[] | undefined, b: readonly string[]) =>
+    !!a && a.length === b.length && a.every((n, i) => n === b[i]);
+  _state = {
+    ..._state,
+    fundingAgencies: _state.fundingAgencies.map((a) => {
+      const change = changes.get(a.id);
+      return change && sameList(a.affiliatedInstitutionNames, change.after) ? { ...a, affiliatedInstitutionNames: change.before } : a;
+    }),
+  };
+}
+
+// 같은 기관에 대한 수정은 기관별로 한 줄로 세워 사용자가 고친 순서대로 서버에 반영되게 하고, 서버 값으로
+// 화면을 맞추는 일은 그 기관에 남은 요청이 없을 때(=마지막 요청의 응답)만 한다 — 앞 요청의 응답이 뒤 요청의
+// 낙관적 반영분을 잠깐 덮어쓰지 않게 한다.
+const _institutionWriteChain = new Map<string, Promise<void>>();
+const _institutionWritesInFlight = new Map<string, number>();
+
+type InstitutionWriteResult = {
+  ok: boolean;
+  institution?: Institution;
+  fundingAgencies?: { id: string; affiliatedInstitutionNames: string[] }[];
+  error?: string;
+};
+
+async function fetchInstitutionFromServer(id: string): Promise<Institution | undefined> {
+  try {
+    const res = (await (await fetch(`/api/institutions/${id}`)).json()) as InstitutionWriteResult;
+    return res.ok ? res.institution : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function updateInstitution(id: string, data: Partial<Institution>): void {
   const before = _state.institutions.find((i) => i.id === id);
   if (!before) return;
-  const after = { ...before, ...data };
+  // 기관명은 서버와 같은 기준(lib/institution-name.ts)으로 다듬는다 — 서버가 거절할 이름은 화면에도 반영하지 않는다.
+  if (data.name !== undefined) {
+    const checked = validateInstitutionName(data.name);
+    if (!checked.ok) {
+      emitSyncNotice(`기관 정보를 저장하지 않았습니다. ${checked.error}`);
+      return;
+    }
+    data = { ...data, name: checked.name };
+  }
+  const body = data;
+  const after = { ...before, ...body };
+  const nameChanged = body.name !== undefined && body.name !== before.name;
+  const typeChanged = !!body.type && body.type !== before.type;
   _state = { ..._state, institutions: _state.institutions.map((i) => (i.id === id ? after : i)) };
-  // 기관명/유형은 과제·참여기관·연차수수료·미청구·미수금·세금계산서·정산·면제기관내역에 institutionId와
-  // 별개로 그대로 복사돼 있으므로, 함께 갱신하지 않으면 이 레코드들이 옛 이름/유형을 보여준 채로 남는다
-  // (updateProject의 projectNumber 전파와 동일한 이유).
-  if (data.name && data.name !== before.name) {
-    const newName = data.name;
-    _state = {
-      ..._state,
-      projects: _state.projects.map((p) => p.leadInstitutionId === id ? { ...p, leadInstitutionName: newName } : p),
-      projectMembers: _state.projectMembers.map((m) => m.institutionId === id ? { ...m, institutionName: newName } : m),
-      termFees: _state.termFees.map((f) => f.institutionId === id ? { ...f, institutionName: newName } : f),
-      unclaimedFees: _state.unclaimedFees.map((u) => u.leadInstitutionId === id ? { ...u, leadInstitutionName: newName } : u),
-      receivables: _state.receivables.map((r) => r.leadInstitutionId === id ? { ...r, leadInstitutionName: newName } : r),
-      taxInvoices: _state.taxInvoices.map((t) => t.leadInstitutionId === id ? { ...t, leadInstitutionName: newName } : t),
-      settlements: _state.settlements.map((s) => s.institutionId === id ? { ...s, institutionName: newName } : s),
-      termFeeCalcs: _state.termFeeCalcs.map((c) =>
-        c.exemptBreakdown.some((e) => e.institutionId === id)
-          ? { ...c, exemptBreakdown: c.exemptBreakdown.map((e) => e.institutionId === id ? { ...e, institutionName: newName } : e) }
-          : c
-      ),
-    };
-  }
-  if (data.type && data.type !== before.type) {
-    const newType = data.type;
-    _state = {
-      ..._state,
-      projectMembers: _state.projectMembers.map((m) => m.institutionId === id ? { ...m, institutionType: newType } : m),
-      termFees: _state.termFees.map((f) => f.institutionId === id ? { ...f, institutionType: newType } : f),
-    };
-  }
+  if (nameChanged) applyInstitutionNameCopies(id, after.name);
+  if (typeChanged) applyInstitutionTypeCopies(id, after.type);
+  const affiliatedChanges = nameChanged ? applyAffiliatedRename(id, before.name, after.name) : new Map<string, AffiliatedNamesChange>();
   record("institution", id, after.name, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   notify();
 
+  // 서버 값으로 화면을 맞춘다 — 기관 레코드와, 이번 수정이 건드린 이름·유형이 복사된 레코드들까지.
+  const applyServerValue = (server: Institution) => {
+    _state = { ..._state, institutions: _state.institutions.map((i) => (i.id === server.id ? server : i)) };
+    if (body.name !== undefined) applyInstitutionNameCopies(server.id, server.name);
+    if (typeChanged) applyInstitutionTypeCopies(server.id, server.type);
+  };
+
   const sendPatch = (realId: string) => {
-    fetch(`/api/institutions/${realId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
-      .then((res) => res.json())
-      .then((res: { ok: boolean; institution?: Institution; error?: string }) => {
+    _institutionWritesInFlight.set(realId, (_institutionWritesInFlight.get(realId) ?? 0) + 1);
+    const run = async () => {
+      let server: Institution | undefined;
+      let serverAgencies: InstitutionWriteResult["fundingAgencies"];
+      let failure: string | undefined;
+      try {
+        const res = (await (await throttledFetch(`/api/institutions/${realId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        })).json()) as InstitutionWriteResult;
         if (res.ok && res.institution) {
-          _state = { ..._state, institutions: _state.institutions.map((i) => (i.id === realId ? res.institution! : i)) };
-          notify();
-        } else if (!res.ok) {
-          console.error("기관 수정 실패:", res.error);
+          server = res.institution;
+          serverAgencies = res.fundingAgencies;
+        } else {
+          failure = res.error ?? "서버 오류가 발생했습니다.";
         }
-      })
-      .catch((err) => console.error("기관 수정 실패:", err));
+      } catch {
+        failure = "서버 응답을 받지 못했습니다.";
+      }
+      if (failure) {
+        console.error("기관 수정 실패:", failure);
+        revertAffiliatedRename(affiliatedChanges);
+      }
+
+      const left = (_institutionWritesInFlight.get(realId) ?? 1) - 1;
+      if (left > 0) {
+        // 뒤에 같은 기관의 요청이 남아 있으면 그 응답이 정본이 된다 — 여기선 실패만 알린다.
+        _institutionWritesInFlight.set(realId, left);
+        if (failure) {
+          emitSyncNotice(`기관 정보를 서버에 저장하지 못했습니다. ${before.name} (${failure})`);
+          notify();
+        }
+        return;
+      }
+      _institutionWritesInFlight.delete(realId);
+      if (serverAgencies && serverAgencies.length > 0) {
+        const byId = new Map(serverAgencies.map((a) => [a.id, a.affiliatedInstitutionNames]));
+        _state = {
+          ..._state,
+          fundingAgencies: _state.fundingAgencies.map((a) => {
+            const names = byId.get(a.id);
+            return names ? { ...a, affiliatedInstitutionNames: names } : a;
+          }),
+        };
+      }
+      if (!server) server = await fetchInstitutionFromServer(realId);
+      // 다시 받아오는 사이 같은 기관에 새 요청이 들어왔으면, 그 요청의 응답이 정본이 된다.
+      if (_institutionWritesInFlight.has(realId)) {
+        notify();
+        return;
+      }
+      if (server) {
+        applyServerValue(server);
+        if (failure) emitSyncNotice(`기관 정보를 서버에 저장하지 못해 저장돼 있던 값으로 되돌렸습니다. ${before.name} (${failure})`);
+      } else {
+        // 서버 값을 다시 받지 못했으면 수정 전 값으로 되돌린다 — 실패한 요청은 서버에 반영되지 않았을 가능성이 크다.
+        applyServerValue({ ...before, id: realId });
+        emitSyncNotice(`기관 정보를 서버에 저장하지 못했고 저장된 값을 다시 불러오지도 못했습니다. 화면 값이 실제와 다를 수 있으니 새로고침해 주세요. ${before.name} (${failure})`);
+      }
+      notify();
+    };
+    const next = (_institutionWriteChain.get(realId) ?? Promise.resolve()).then(run);
+    _institutionWriteChain.set(realId, next);
+    void trackSync(next).then(() => {
+      if (_institutionWriteChain.get(realId) === next) _institutionWriteChain.delete(realId);
+    });
   };
 
   // id가 아직 서버가 모르는 임시 id(방금 addInstitution으로 막 만든 직후)면, 그 생성 요청이 끝나 진짜

@@ -6,6 +6,7 @@ import { FiEdit2, FiTrash2 } from "react-icons/fi";
 import { useStore, addInstitution, updateInstitution, deleteInstitution } from "@/lib/store";
 import { type Institution } from "@/lib/mock";
 import { fmtDate, formatBizNumber, isValidBizNumber, todayKST } from "@/lib/utils";
+import { validateInstitutionName } from "@/lib/institution-name";
 import StatusBadge from "@/components/common/StatusBadge";
 import Modal from "@/components/common/Modal";
 import DateInput from "@/components/common/DateInput";
@@ -92,6 +93,12 @@ function InstitutionForm({
   const s = (k: keyof typeof form, v: unknown) => setForm((p) => ({ ...p, [k]: v }));
 
   function handleSubmit() {
+    // 서버(app/api/institutions/[id])와 같은 기준 — 앞뒤 공백을 지우고, 빈 이름·200자 초과는 막는다.
+    const checkedName = validateInstitutionName(form.name);
+    if (!checkedName.ok) {
+      setError(checkedName.error);
+      return;
+    }
     if (!isValidBizNumber(form.bizNumber)) {
       setError("사업자등록번호 형식이 올바르지 않습니다. 정확한 번호를 입력해 주세요.");
       return;
@@ -101,7 +108,7 @@ function InstitutionForm({
       return;
     }
     setError("");
-    onSubmit(form);
+    onSubmit({ ...form, name: checkedName.name });
   }
 
   return (
