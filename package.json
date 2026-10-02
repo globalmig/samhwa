@@ -11,6 +11,7 @@
     "test:date-utils": "node --test tests/date-utils.test.cjs",
     "test:project-program": "node --test tests/project-program.test.cjs",
     "test:store-cache": "node --test tests/store-cache.test.cjs",
+    "test:receivable-payments": "node --test tests/receivable-payments.test.cjs",
     "test:institution-rename": "node --test tests/institution-rename.test.cjs",
     "postinstall": "prisma generate",
     "db:seed": "tsx prisma/seed.ts"

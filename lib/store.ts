@@ -3249,7 +3249,87 @@ export function addReceivable(data: Omit<Receivable, "id">): Receivable {
   return item;
 }
 
-export function updateReceivable(id: string, data: Partial<Receivable>): void {
+// 같은 채권에 대한 쓰기(누적액 수정·입금 추가·입금 삭제)는 채권별로 한 줄로 세워, 앞 요청의 응답을 받은
+// 뒤에 다음 요청을 보낸다. 화면엔 조작마다 낙관적으로 바로 반영하고, 서버 응답은 그 채권에 남은 요청이
+// 없을 때(=마지막 요청의 응답)만 정본으로 덮어쓴다 — 응답마다 그대로 덮어쓰면 응답 순서가 뒤바뀌었을 때
+// 옛 응답이 최신 값을 덮거나(서버엔 70인데 화면엔 30), 뒤 요청의 낙관적 반영분이 잠깐 사라졌다.
+// 실패하면 알림을 띄우고, 남은 요청이 없으면 서버의 현재 값을 다시 받아와 화면을 맞춘다.
+const _receivableWriteChain = new Map<string, Promise<void>>();
+const _receivableWritesInFlight = new Map<string, number>();
+// 서버에 아직 저장되지 않은(임시 id) 입금 — 삭제 요청을 보낼 실제 id가 없으므로 저장이 끝날 때까지 삭제를 막는다.
+const _pendingPaymentIds = new Set<string>();
+
+export function isReceivablePaymentPending(paymentId: string): boolean {
+  return _pendingPaymentIds.has(paymentId);
+}
+
+type ReceivableWriteResult = { ok: boolean; receivable?: Receivable; error?: string };
+
+async function fetchReceivableFromServer(id: string): Promise<Receivable | undefined> {
+  try {
+    const res = (await (await fetch(`/api/receivables/${id}`)).json()) as ReceivableWriteResult;
+    return res.ok ? res.receivable : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function enqueueReceivableWrite(id: string, failLabel: string, send: () => Promise<Response>): void {
+  _receivableWritesInFlight.set(id, (_receivableWritesInFlight.get(id) ?? 0) + 1);
+  const run = async () => {
+    let server: Receivable | undefined;
+    let failed = false;
+    try {
+      const res = (await (await send()).json()) as ReceivableWriteResult;
+      if (res.ok && res.receivable) server = res.receivable;
+      else {
+        failed = true;
+        console.error(`${failLabel}:`, res.error);
+        emitSyncNotice(`${failLabel}. ${res.error ?? "서버 오류가 발생했습니다."}`);
+      }
+    } catch (err) {
+      failed = true;
+      console.error(`${failLabel}:`, err);
+      emitSyncNotice(`${failLabel}. 서버 응답을 받지 못했습니다.`);
+    }
+    const left = (_receivableWritesInFlight.get(id) ?? 1) - 1;
+    if (left > 0) {
+      _receivableWritesInFlight.set(id, left);
+      return;
+    }
+    _receivableWritesInFlight.delete(id);
+    if (!server) server = await fetchReceivableFromServer(id);
+    // 다시 받아오는 사이 같은 채권에 새 요청이 들어왔으면, 그 요청의 응답이 정본이 된다.
+    if (_receivableWritesInFlight.has(id)) return;
+    if (!server) {
+      if (failed) emitSyncNotice("서버에 저장된 수금 정보를 다시 불러오지 못했습니다. 화면 값이 실제와 다를 수 있으니 새로고침해 주세요.");
+      return;
+    }
+    const latest = server;
+    _state = { ..._state, receivables: _state.receivables.map((r) => (r.id === id ? latest : r)) };
+    notify();
+  };
+  const next = (_receivableWriteChain.get(id) ?? Promise.resolve()).then(run);
+  _receivableWriteChain.set(id, next);
+  void next.then(() => {
+    if (_receivableWriteChain.get(id) === next) _receivableWriteChain.delete(id);
+  });
+}
+
+// 이 채권에 대기 중인 쓰기가 모두 끝날 때까지 기다린다(테스트용).
+export function waitForReceivableWrites(id: string): Promise<void> {
+  return _receivableWriteChain.get(id) ?? Promise.resolve();
+}
+
+// data엔 바뀐 필드만 넣는다. 서버는 납부액·미수액을 보낸 값 그대로 덮어쓰지 않고 이 요청을 계산할 때 기준으로
+// 삼은 청구액·납부액(base, 기본값은 지금 화면 값)과 비교해 판단하므로 — 그 사이 들어온 입금이 있으면 납부액
+// 수정은 거절되고, 미수액은 최신 납부액 기준으로 다시 계산된다(app/api/receivables/[id]/route.ts).
+// 오래 열어 둔 수정창이라면 창을 열 때의 값을 base로 넘긴다.
+export function updateReceivable(
+  id: string,
+  data: Partial<Receivable>,
+  base?: { billedAmount: number; paidAmount: number },
+): void {
   const before = _state.receivables.find((r) => r.id === id);
   if (!before) return;
   const after = { ...before, ...data };
@@ -3257,15 +3337,81 @@ export function updateReceivable(id: string, data: Partial<Receivable>): void {
   record("receivable", id, `${after.projectNumber} · ${after.leadInstitutionName}`, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
   notify();
 
-  fetch(`/api/receivables/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) })
-    .then((res) => res.json())
-    .then((res: { ok: boolean; receivable?: Receivable; error?: string }) => {
-      if (res.ok && res.receivable) {
-        _state = { ..._state, receivables: _state.receivables.map((r) => (r.id === id ? res.receivable! : r)) };
-        notify();
-      } else if (!res.ok) console.error("미수금 수정 실패:", res.error);
-    })
-    .catch((err) => console.error("미수금 수정 실패:", err));
+  const body = {
+    ...data,
+    baseBilledAmount: base?.billedAmount ?? before.billedAmount,
+    basePaidAmount: base?.paidAmount ?? before.paidAmount,
+  };
+  enqueueReceivableWrite(id, "미수금 정보를 저장하지 못했습니다", () =>
+    fetch(`/api/receivables/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }));
+}
+
+// 분할 수금 — 입금 한 건(차수)을 추가/삭제한다. 납부액·미수금·상태는 서버가 입금 내역 기준으로 다시
+// 계산해서 돌려주고, 화면에는 그 전까지 같은 규칙(lib/receivable-write.ts의 amountsAfterPayment)으로
+// 낙관적으로 먼저 반영한다 — 미수액에서 따로 빼 둔 금액(회수불가 손실 등)은 그대로 유지한다.
+function statusForPaid(paid: number, billed: number, prev: Receivable["status"]): Receivable["status"] {
+  if (paid > 0 && paid >= billed) return "PAID";
+  if (paid > 0) return "PARTIAL";
+  return prev === "PENDING" || prev === "OVERDUE" ? prev : "OVERDUE";
+}
+
+function applyReceivablePayments(before: Receivable, payments: NonNullable<Receivable["payments"]>, paidAmount: number): Receivable {
+  const deduction = Math.max(0, before.billedAmount - before.paidAmount - before.receivableAmount);
+  return {
+    ...before,
+    payments,
+    paidAmount,
+    paidAt: payments.length > 0 ? payments.reduce((latest, p) => (p.paidAt > latest ? p.paidAt : latest), payments[0].paidAt) : null,
+    receivableAmount: Math.max(0, before.billedAmount - paidAmount - deduction),
+    status: statusForPaid(paidAmount, before.billedAmount, before.status),
+  };
+}
+
+// 수금 취소(초기화) — 입금 내역을 전부 지우고 납부액을 0으로 되돌린다. 누적액 수정(updateReceivable)의
+// paidAmount: 0과 구분되는 별도 요청이다(오래 열어 둔 화면의 옛 값 0이 새 입금을 지우지 않도록).
+export function resetReceivablePayments(id: string): void {
+  const before = _state.receivables.find((r) => r.id === id);
+  if (!before) return;
+  const after = applyReceivablePayments(before, [], 0);
+  _state = { ..._state, receivables: _state.receivables.map((r) => (r.id === id ? after : r)) };
+  record("receivable", id, `${after.projectNumber} · ${after.leadInstitutionName}`, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
+  notify();
+
+  enqueueReceivableWrite(id, "수금을 취소하지 못했습니다", () =>
+    fetch(`/api/receivables/${id}/payments`, { method: "DELETE" }));
+}
+
+export function addReceivablePayment(id: string, payment: { paidAt: string; amount: number }): void {
+  const before = _state.receivables.find((r) => r.id === id);
+  if (!before) return;
+  const tempId = genId("pay");
+  _pendingPaymentIds.add(tempId);
+  const payments = [...(before.payments ?? []), { id: tempId, ...payment }]
+    .sort((a, b) => a.paidAt.localeCompare(b.paidAt));
+  const after = applyReceivablePayments(before, payments, before.paidAmount + payment.amount);
+  _state = { ..._state, receivables: _state.receivables.map((r) => (r.id === id ? after : r)) };
+  record("receivable", id, `${after.projectNumber} · ${after.leadInstitutionName}`, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
+  notify();
+
+  enqueueReceivableWrite(id, "수금을 등록하지 못했습니다", () =>
+    fetch(`/api/receivables/${id}/payments`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payment),
+    }));
+}
+
+export function deleteReceivablePayment(id: string, paymentId: string): void {
+  if (_pendingPaymentIds.has(paymentId)) return;
+  const before = _state.receivables.find((r) => r.id === id);
+  const target = before?.payments?.find((p) => p.id === paymentId);
+  if (!before || !target) return;
+  const payments = (before.payments ?? []).filter((p) => p.id !== paymentId);
+  const after = applyReceivablePayments(before, payments, Math.max(0, before.paidAmount - target.amount));
+  _state = { ..._state, receivables: _state.receivables.map((r) => (r.id === id ? after : r)) };
+  record("receivable", id, `${after.projectNumber} · ${after.leadInstitutionName}`, "UPDATE", diff(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>));
+  notify();
+
+  enqueueReceivableWrite(id, "수금 내역을 삭제하지 못했습니다", () =>
+    fetch(`/api/receivables/${id}/payments/${paymentId}`, { method: "DELETE" }));
 }
 
 // ============================================================
