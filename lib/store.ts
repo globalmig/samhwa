@@ -333,8 +333,9 @@ function persistStoreCache(storage: Pick<Storage, "setItem" | "removeItem">, sta
   }
 }
 
-// 같은 경고를 notify마다(디바운스 500ms) 반복해서 찍지 않도록 마지막에 찍은 내용을 기억한다.
-let _lastCacheWarning = "";
+// 같은 경고를 notify마다(디바운스 500ms) 반복해서 찍지 않도록, 이번 로드에서 이미 알린 내용을 기억한다.
+// 빠지는 슬롯 조합은 데이터 크기에 따라 저장할 때마다 오락가락하므로 조합이 아니라 슬롯 단위로 한 번씩만 알린다.
+const _cacheWarned = new Set<string>();
 
 // notify()가 워낙 자주 불려서(최초 로딩 중 hydrate*()들이 연달아 끝날 때마다, 이후엔 사용자
 // 조작마다) 매번 그 자리에서 바로 저장하면 큰 배열을 가진 슬롯이 여러 번 연속으로 바뀔 때
@@ -344,19 +345,20 @@ function schedulePersist(): void {
   if (_persistTimer !== null) clearTimeout(_persistTimer);
   _persistTimer = setTimeout(() => {
     _persistTimer = null;
-    let warning = "";
-    let error: unknown;
     try {
-      const dropped = persistStoreCache(sessionStorage, _state);
-      if (dropped.length > 0) warning = `store 캐시 용량 초과 — ${dropped.join(", ")} 슬롯은 캐시에서 빼고 저장했습니다(새로고침 시 서버에서 받아옵니다).`;
+      const newlyDropped = persistStoreCache(sessionStorage, _state).filter((slot) => !_cacheWarned.has(slot));
+      if (newlyDropped.length === 0) return;
+      newlyDropped.forEach((slot) => _cacheWarned.add(slot));
+      // 실데이터 규모에선 매 세션 정상적으로 일어나는 일이라 경고가 아니라 debug(크롬 기본 숨김 — 콘솔 "Verbose"를
+      // 켜면 보인다)로 남긴다. 저장 자체가 실패한 경우만 아래에서 warn으로 알린다.
+      console.debug(`store 캐시 용량 초과 — ${newlyDropped.join(", ")} 슬롯은 캐시에서 빼고 저장합니다(새로고침 시 서버에서 받아옵니다).`);
     } catch (err) {
       // 저장소 자체를 못 쓰는 경우 등 — 캐싱만 포기한다. 다음 새로고침이 hydrate로 전부 다시 받아올 뿐
       // 화면 동작 자체엔 영향 없다.
-      warning = "store 캐시 저장 실패 — 다음 새로고침에서 서버에서 다시 받아옵니다.";
-      error = err;
+      if (_cacheWarned.has("*")) return;
+      _cacheWarned.add("*");
+      console.warn("store 캐시 저장 실패 — 다음 새로고침에서 서버에서 다시 받아옵니다.", err);
     }
-    if (warning && warning !== _lastCacheWarning) console.warn(warning, ...(error === undefined ? [] : [error]));
-    _lastCacheWarning = warning;
   }, 500);
 }
 
